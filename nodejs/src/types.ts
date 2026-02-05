@@ -89,6 +89,14 @@ export interface CopilotClientOptions {
      * @default true (but defaults to false when githubToken is provided)
      */
     useLoggedInUser?: boolean;
+
+    /**
+     * Protocol to use for communication with the CLI.
+     * - "copilot": Standard Copilot CLI protocol (JSON-RPC over LSP Content-Length framing)
+     * - "acp": Agent Client Protocol (NDJSON framing, different method names)
+     * @default "copilot"
+     */
+    protocol?: "copilot" | "acp";
 }
 
 /**

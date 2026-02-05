@@ -21,6 +21,8 @@ import {
 } from "vscode-jsonrpc/node.js";
 import { getSdkProtocolVersion } from "./sdkProtocolVersion.js";
 import { CopilotSession } from "./session.js";
+import type { ProtocolAdapter, ProtocolConnection } from "./protocols/protocol-adapter.js";
+import { AcpProtocolAdapter } from "./protocols/acp/index.js";
 import type {
     ConnectionState,
     CopilotClientOptions,
@@ -109,13 +111,15 @@ export class CopilotClient {
     private state: ConnectionState = "disconnected";
     private sessions: Map<string, CopilotSession> = new Map();
     private options: Required<
-        Omit<CopilotClientOptions, "cliUrl" | "githubToken" | "useLoggedInUser">
+        Omit<CopilotClientOptions, "cliUrl" | "githubToken" | "useLoggedInUser" | "protocol">
     > & {
         cliUrl?: string;
         githubToken?: string;
         useLoggedInUser?: boolean;
+        protocol: "copilot" | "acp";
     };
     private isExternalServer: boolean = false;
+    private protocolAdapter: ProtocolAdapter | null = null;
     private forceStopping: boolean = false;
     private modelsCache: ModelInfo[] | null = null;
     private modelsCacheLock: Promise<void> = Promise.resolve();
@@ -181,6 +185,7 @@ export class CopilotClient {
             githubToken: options.githubToken,
             // Default useLoggedInUser to false when githubToken is provided, otherwise true
             useLoggedInUser: options.useLoggedInUser ?? (options.githubToken ? false : true),
+            protocol: options.protocol ?? "copilot",
         };
     }
 
@@ -241,6 +246,25 @@ export class CopilotClient {
         this.state = "connecting";
 
         try {
+            // Use ACP protocol adapter for ACP mode
+            if (this.options.protocol === "acp") {
+                this.protocolAdapter = new AcpProtocolAdapter(this.options);
+                await this.protocolAdapter.start();
+
+                // Get the protocol connection and wrap it for MessageConnection compatibility
+                const protoConn = this.protocolAdapter.getConnection();
+                this.connection = this.wrapProtocolConnection(protoConn);
+                this.attachConnectionHandlers();
+                protoConn.listen();
+
+                // Verify protocol version
+                await this.protocolAdapter.verifyProtocolVersion();
+
+                this.state = "connected";
+                return;
+            }
+
+            // Standard Copilot protocol path
             // Only start CLI server process if not connecting to external server
             if (!this.isExternalServer) {
                 await this.startCLIServer();
@@ -312,6 +336,17 @@ export class CopilotClient {
             }
         }
         this.sessions.clear();
+
+        // For ACP mode, use the protocol adapter's stop
+        if (this.protocolAdapter) {
+            const adapterErrors = await this.protocolAdapter.stop();
+            errors.push(...adapterErrors);
+            this.protocolAdapter = null;
+            this.connection = null;
+            this.modelsCache = null;
+            this.state = "disconnected";
+            return errors;
+        }
 
         // Close connection
         if (this.connection) {
@@ -393,6 +428,16 @@ export class CopilotClient {
 
         // Clear sessions immediately without trying to destroy them
         this.sessions.clear();
+
+        // For ACP mode, use the protocol adapter's forceStop
+        if (this.protocolAdapter) {
+            await this.protocolAdapter.forceStop();
+            this.protocolAdapter = null;
+            this.connection = null;
+            this.modelsCache = null;
+            this.state = "disconnected";
+            return;
+        }
 
         // Force close connection
         if (this.connection) {
@@ -1422,6 +1467,57 @@ export class CopilotClient {
             error: `tool '${toolName}' not supported`,
             toolTelemetry: {},
         };
+    }
+
+    /**
+     * Wraps a ProtocolConnection to provide MessageConnection interface compatibility.
+     * This allows ACP connections to work with the existing session management code.
+     */
+    private wrapProtocolConnection(protoConn: ProtocolConnection): MessageConnection {
+        // Create a minimal MessageConnection-like wrapper
+        // We cast through unknown because we're implementing a subset of MessageConnection
+        const wrapper = {
+            sendRequest: async (method: string, params?: unknown) => {
+                return await protoConn.sendRequest(method, params);
+            },
+            sendNotification: (method: string, params?: unknown) => {
+                protoConn.sendNotification(method, params);
+            },
+            onNotification: (method: string, handler: (params: unknown) => void) => {
+                protoConn.onNotification(method, handler);
+                return { dispose: () => {} };
+            },
+            onRequest: (method: string, handler: (params: unknown) => Promise<unknown>) => {
+                protoConn.onRequest(method, handler);
+                return { dispose: () => {} };
+            },
+            onClose: (handler: () => void) => {
+                protoConn.onClose(handler);
+                return { dispose: () => {} };
+            },
+            onError: (handler: (error: Error) => void) => {
+                protoConn.onError(handler);
+                return { dispose: () => {} };
+            },
+            dispose: () => {
+                protoConn.dispose();
+            },
+            listen: () => {
+                protoConn.listen();
+            },
+            // Additional MessageConnection methods - stubs for interface compatibility
+            onUnhandledNotification: () => ({ dispose: () => {} }),
+            onUnhandledRequest: () => ({ dispose: () => {} }),
+            onDispose: () => ({ dispose: () => {} }),
+            hasPendingResponse: () => false,
+            onProgress: () => ({ dispose: () => {} }),
+            sendProgress: () => {},
+            onUnhandledProgress: () => ({ dispose: () => {} }),
+            trace: () => {},
+            end: () => {},
+            inspect: () => {},
+        };
+        return wrapper as unknown as MessageConnection;
     }
 
     /**
