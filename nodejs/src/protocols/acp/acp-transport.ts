@@ -350,8 +350,19 @@ export class AcpTransport {
     }
 
     private createError(acpError: AcpError): Error {
-        const error = new Error(acpError.message);
-        (error as Error & { code?: number }).code = acpError.code;
+        // Include data in error message if available for better debugging
+        let message = acpError.message;
+        if (acpError.data) {
+            const dataStr =
+                typeof acpError.data === "string"
+                    ? acpError.data
+                    : JSON.stringify(acpError.data);
+            message = `${message}: ${dataStr}`;
+        }
+
+        const error = new Error(message);
+        (error as Error & { code?: number; data?: unknown }).code = acpError.code;
+        (error as Error & { code?: number; data?: unknown }).data = acpError.data;
         return error;
     }
 }
