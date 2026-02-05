@@ -149,6 +149,34 @@ describe("CopilotClient", () => {
         });
     });
 
+    describe("Protocol options", () => {
+        it("should default to copilot protocol", () => {
+            const client = new CopilotClient({
+                logLevel: "error",
+            });
+
+            expect((client as any).options.protocol).toBe("copilot");
+        });
+
+        it("should accept acp protocol option", () => {
+            const client = new CopilotClient({
+                protocol: "acp",
+                logLevel: "error",
+            });
+
+            expect((client as any).options.protocol).toBe("acp");
+        });
+
+        it("should accept copilot protocol option explicitly", () => {
+            const client = new CopilotClient({
+                protocol: "copilot",
+                logLevel: "error",
+            });
+
+            expect((client as any).options.protocol).toBe("copilot");
+        });
+    });
+
     describe("Auth options", () => {
         it("should accept githubToken option", () => {
             const client = new CopilotClient({
