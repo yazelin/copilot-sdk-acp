@@ -86,7 +86,7 @@ class AcpConnection implements ProtocolConnection {
         const result = await this.transport.sendRequest<unknown>(id, acpMethod, acpParams);
 
         // Translate response if needed
-        return this.translateResponse(method, result) as T;
+        return this.translateResponse(method, result, params) as T;
     }
 
     sendNotification(method: string, params?: unknown): void {
@@ -186,7 +186,7 @@ class AcpConnection implements ProtocolConnection {
         }
     }
 
-    private translateResponse(method: string, result: unknown): unknown {
+    private translateResponse(method: string, result: unknown, originalParams?: unknown): unknown {
         switch (method) {
             case "ping": {
                 const acpResult = result as AcpInitializeResult;
@@ -206,6 +206,37 @@ class AcpConnection implements ProtocolConnection {
 
             case "session.send": {
                 const acpResult = result as AcpSessionPromptResult;
+
+                // Gemini returns stopReason in the response instead of sending
+                // a separate end_turn notification. Emit session.idle event.
+                if (acpResult.stopReason === "end_turn") {
+                    // Dispatch session.idle event after a microtask to ensure
+                    // it's processed after the send() promise resolves
+                    queueMicrotask(() => {
+                        const handlers = this.notificationHandlers.get("session.event");
+                        if (handlers) {
+                            const idleEvent = {
+                                sessionId: (originalParams as { sessionId?: string })?.sessionId ?? "",
+                                event: {
+                                    id: `acp-idle-${Date.now()}`,
+                                    timestamp: new Date().toISOString(),
+                                    parentId: null,
+                                    ephemeral: true,
+                                    type: "session.idle",
+                                    data: {},
+                                },
+                            };
+                            for (const handler of handlers) {
+                                try {
+                                    handler(idleEvent);
+                                } catch {
+                                    // Ignore handler errors
+                                }
+                            }
+                        }
+                    });
+                }
+
                 return {
                     messageId: acpResult.messageId,
                 };

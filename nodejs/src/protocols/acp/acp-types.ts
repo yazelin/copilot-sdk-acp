@@ -130,7 +130,12 @@ export interface AcpSessionPromptParams {
  * ACP session/prompt response
  */
 export interface AcpSessionPromptResult {
-    messageId: string;
+    messageId?: string;
+    /**
+     * Indicates why the turn ended (Gemini CLI returns this in the response
+     * instead of sending a separate end_turn notification)
+     */
+    stopReason?: "end_turn" | "max_tokens" | "stop_sequence";
 }
 
 // ============================================================================

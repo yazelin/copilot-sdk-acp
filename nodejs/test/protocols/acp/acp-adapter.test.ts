@@ -193,6 +193,45 @@ describe("AcpProtocolAdapter", () => {
             expect(result).toEqual({ messageId: "msg-456" });
         });
 
+        it("should emit session.idle when response contains stopReason end_turn", async () => {
+            adapter.start();
+            await new Promise((resolve) => setImmediate(resolve));
+
+            const connection = adapter.getConnection();
+            connection.listen();
+
+            const eventHandler = vi.fn();
+            connection.onNotification("session.event", eventHandler);
+
+            const sendPromise = connection.sendRequest("session.send", {
+                sessionId: "sess-123",
+                prompt: "Hello!",
+            });
+
+            const sentData = mockProcess.stdin.read();
+            const sentMessage = JSON.parse(sentData.toString().trim());
+
+            // Gemini returns stopReason in the response instead of a separate notification
+            const response = {
+                jsonrpc: "2.0",
+                id: sentMessage.id,
+                result: { stopReason: "end_turn" },
+            };
+            mockProcess.stdout.write(JSON.stringify(response) + "\n");
+
+            await sendPromise;
+
+            // Wait for queueMicrotask to execute
+            await new Promise((resolve) => setImmediate(resolve));
+
+            expect(eventHandler).toHaveBeenCalled();
+            const callArg = eventHandler.mock.calls[0][0];
+            expect(callArg.sessionId).toBe("sess-123");
+            expect(callArg.event.type).toBe("session.idle");
+            expect(callArg.event.data).toEqual({});
+            expect(callArg.event.ephemeral).toBe(true);
+        });
+
         it("should throw for unsupported methods", async () => {
             adapter.start();
             await new Promise((resolve) => setImmediate(resolve));
