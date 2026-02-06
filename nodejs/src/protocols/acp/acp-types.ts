@@ -87,30 +87,22 @@ export interface AcpServerCapabilities {
 // ============================================================================
 
 /**
- * ACP session/set_model request params
+ * ACP session/set_config_option request params
+ * @see https://agentclientprotocol.com/protocol/session-config-options
  */
-export interface AcpSetModelParams {
+export interface AcpSetConfigOptionParams {
     sessionId: string;
-    modelId: string;
+    configId: string;
+    value: string;
 }
 
 /**
- * ACP session/set_model response
+ * ACP session/set_config_option response
+ * Returns the complete configuration state after the change.
  */
-export interface AcpSetModelResult {}
-
-/**
- * ACP session/set_mode request params
- */
-export interface AcpSetModeParams {
-    sessionId: string;
-    modeId: string;
+export interface AcpSetConfigOptionResult {
+    [configId: string]: string;
 }
-
-/**
- * ACP session/set_mode response
- */
-export interface AcpSetModeResult {}
 
 // ============================================================================
 // ACP Session Types
