@@ -42,6 +42,13 @@ class AcpConnection implements ProtocolConnection {
     private closeHandlers: Set<() => void> = new Set();
     private errorHandlers: Set<(error: Error) => void> = new Set();
 
+    /**
+     * Accumulates message_delta content per session so we can synthesize
+     * an assistant.message event when session.idle fires.
+     * Gemini only sends agent_message_chunk (delta), not agent_message (complete).
+     */
+    private deltaAccumulator: Map<string, string> = new Map();
+
     constructor(transport: AcpTransport) {
         this.transport = transport;
 
@@ -229,34 +236,56 @@ class AcpConnection implements ProtocolConnection {
 
             case "session.send": {
                 const acpResult = result as AcpSessionPromptResult;
+                const sessionId = (originalParams as { sessionId?: string })?.sessionId ?? "";
 
                 // Gemini returns stopReason in the response instead of sending
                 // a separate end_turn notification. Emit session.idle event.
                 if (acpResult.stopReason === "end_turn") {
-                    // Dispatch session.idle event after a microtask to ensure
-                    // it's processed after the send() promise resolves
+                    // Dispatch events after a microtask to ensure
+                    // they're processed after the send() promise resolves
                     queueMicrotask(() => {
                         const handlers = this.notificationHandlers.get("session.event");
-                        if (handlers) {
-                            const idleEvent = {
-                                sessionId: (originalParams as { sessionId?: string })?.sessionId ?? "",
-                                event: {
-                                    id: `acp-idle-${Date.now()}`,
-                                    timestamp: new Date().toISOString(),
-                                    parentId: null,
-                                    ephemeral: true,
-                                    type: "session.idle",
-                                    data: {},
-                                },
-                            };
+                        if (!handlers) return;
+
+                        const dispatch = (event: unknown) => {
+                            const notification = { sessionId, event };
                             for (const handler of handlers) {
                                 try {
-                                    handler(idleEvent);
+                                    handler(notification);
                                 } catch {
                                     // Ignore handler errors
                                 }
                             }
+                        };
+
+                        // Gemini only sends message_delta, not a complete message.
+                        // Synthesize assistant.message from accumulated deltas.
+                        const accumulated = this.deltaAccumulator.get(sessionId);
+                        if (accumulated) {
+                            dispatch({
+                                id: `acp-msg-${Date.now()}`,
+                                timestamp: new Date().toISOString(),
+                                parentId: null,
+                                ephemeral: false,
+                                type: "assistant.message",
+                                data: {
+                                    messageId: acpResult.messageId ?? `acp-msg-${Date.now()}`,
+                                    content: accumulated,
+                                    toolRequests: [],
+                                },
+                            });
+                            this.deltaAccumulator.delete(sessionId);
                         }
+
+                        // Then dispatch session.idle
+                        dispatch({
+                            id: `acp-idle-${Date.now()}`,
+                            timestamp: new Date().toISOString(),
+                            parentId: null,
+                            ephemeral: true,
+                            type: "session.idle",
+                            data: {},
+                        });
                     });
                 }
 
@@ -294,6 +323,13 @@ class AcpConnection implements ProtocolConnection {
     }
 
     private dispatchSessionEvent(sessionId: string, event: unknown): void {
+        // Accumulate message_delta content for synthesizing assistant.message later
+        const typedEvent = event as { type?: string; data?: { deltaContent?: string } };
+        if (typedEvent.type === "assistant.message_delta" && typedEvent.data?.deltaContent) {
+            const existing = this.deltaAccumulator.get(sessionId) ?? "";
+            this.deltaAccumulator.set(sessionId, existing + typedEvent.data.deltaContent);
+        }
+
         const handlers = this.notificationHandlers.get("session.event");
         if (handlers) {
             const notification = {
