@@ -104,7 +104,14 @@ class AcpConnection implements ProtocolConnection {
         const result = await this.transport.sendRequest<unknown>(id, acpMethod, acpParams);
 
         // Translate response if needed
-        return this.translateResponse(method, result, params) as T;
+        const translated = this.translateResponse(method, result, params);
+
+        // After session.create, apply session config (model, mode, etc.)
+        if (method === "session.create") {
+            await this.applySessionConfig(translated, params);
+        }
+
+        return translated as T;
     }
 
     sendNotification(method: string, params?: unknown): void {
@@ -296,6 +303,20 @@ class AcpConnection implements ProtocolConnection {
 
             default:
                 return result;
+        }
+    }
+
+    private async applySessionConfig(createResult: unknown, originalParams: unknown): Promise<void> {
+        const sessionId = (createResult as { sessionId?: string })?.sessionId;
+        const config = originalParams as SessionConfig | undefined;
+        if (!sessionId || !config) return;
+
+        if (config.model) {
+            const id = ++this.requestId;
+            await this.transport.sendRequest(id, "session/set_model", {
+                sessionId,
+                modelId: config.model,
+            });
         }
     }
 

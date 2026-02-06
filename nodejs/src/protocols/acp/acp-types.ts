@@ -83,6 +83,36 @@ export interface AcpServerCapabilities {
 }
 
 // ============================================================================
+// ACP Session Configuration Types
+// ============================================================================
+
+/**
+ * ACP session/set_model request params
+ */
+export interface AcpSetModelParams {
+    sessionId: string;
+    modelId: string;
+}
+
+/**
+ * ACP session/set_model response
+ */
+export interface AcpSetModelResult {}
+
+/**
+ * ACP session/set_mode request params
+ */
+export interface AcpSetModeParams {
+    sessionId: string;
+    modeId: string;
+}
+
+/**
+ * ACP session/set_mode response
+ */
+export interface AcpSetModeResult {}
+
+// ============================================================================
 // ACP Session Types
 // ============================================================================
 
