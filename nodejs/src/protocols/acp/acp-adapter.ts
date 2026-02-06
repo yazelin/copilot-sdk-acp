@@ -313,9 +313,10 @@ class AcpConnection implements ProtocolConnection {
 
         if (config.model) {
             const id = ++this.requestId;
-            await this.transport.sendRequest(id, "session/set_model", {
+            await this.transport.sendRequest(id, "session/set_config_option", {
                 sessionId,
-                modelId: config.model,
+                configId: "model",
+                value: config.model,
             });
         }
     }
