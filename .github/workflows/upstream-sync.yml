@@ -1,0 +1,258 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    # 每天 UTC 23:00（台灣時間 07:00）
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (不建立 PR，只顯示差異)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/github/copilot-sdk.git || true
+          git fetch upstream main
+
+      - name: Check for new commits
+        id: check
+        run: |
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          LOCAL_SHA=$(git merge-base HEAD upstream/main)
+
+          if [ "$UPSTREAM_SHA" = "$LOCAL_SHA" ]; then
+            echo "already_up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Already up to date with upstream"
+          else
+            COMMIT_COUNT=$(git rev-list --count "$LOCAL_SHA".."$UPSTREAM_SHA")
+            COMMIT_LOG=$(git log --oneline "$LOCAL_SHA".."$UPSTREAM_SHA" | head -20)
+            echo "already_up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "commit_count=$COMMIT_COUNT" >> "$GITHUB_OUTPUT"
+            echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+            echo "base_sha=$LOCAL_SHA" >> "$GITHUB_OUTPUT"
+
+            # Store commit log for PR body (multiline)
+            {
+              echo "commit_log<<EOF"
+              echo "$COMMIT_LOG"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+
+            echo "📦 Found $COMMIT_COUNT new upstream commits"
+          fi
+
+      - name: Attempt merge
+        if: steps.check.outputs.already_up_to_date != 'true'
+        id: merge
+        run: |
+          BRANCH="upstream-sync/$(date +%Y%m%d-%H%M%S)"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          # Attempt merge (allow conflicts)
+          if git merge upstream/main --no-commit --no-ff 2>/dev/null; then
+            echo "merge_conflicts=false" >> "$GITHUB_OUTPUT"
+            echo "✅ Merge completed without conflicts"
+          else
+            echo "merge_conflicts=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️ Merge has conflicts, attempting auto-resolve..."
+
+            # === 自動保留我們的 ACP 檔案 ===
+            ACP_RESOLVED=false
+            for path in nodejs/src/protocols/ nodejs/test/protocols/ nodejs/test/e2e/acp.test.ts; do
+              if git diff --name-only --diff-filter=U | grep -q "^${path}"; then
+                echo "  保留 ours: $path"
+                git checkout --ours -- "$path" 2>/dev/null || true
+                git add "$path" 2>/dev/null || true
+                ACP_RESOLVED=true
+              fi
+            done
+
+            if [ "$ACP_RESOLVED" = "true" ]; then
+              echo "acp_auto_resolved=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "acp_auto_resolved=false" >> "$GITHUB_OUTPUT"
+            fi
+
+            # === 檢查核心檔案衝突（需要手動處理）===
+            MANUAL_REVIEW=false
+            CONFLICT_FILES=""
+            for path in nodejs/src/client.ts nodejs/src/types.ts; do
+              if git diff --name-only --diff-filter=U | grep -q "^${path}"; then
+                echo "  ❌ 核心檔案衝突: $path"
+                MANUAL_REVIEW=true
+                CONFLICT_FILES="$CONFLICT_FILES $path"
+              fi
+            done
+
+            echo "needs_manual_review=$MANUAL_REVIEW" >> "$GITHUB_OUTPUT"
+            echo "conflict_files=$CONFLICT_FILES" >> "$GITHUB_OUTPUT"
+
+            # 如果還有未解決的衝突，檢查是否都在可自動解決的路徑中
+            REMAINING=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
+            if [ -n "$REMAINING" ]; then
+              echo "  剩餘未解決的衝突:"
+              echo "$REMAINING"
+              if [ "$MANUAL_REVIEW" = "false" ]; then
+                # 非核心檔案的衝突，也標記為需要手動處理
+                echo "needs_manual_review=true" >> "$GITHUB_OUTPUT"
+                echo "conflict_files=$REMAINING" >> "$GITHUB_OUTPUT"
+              fi
+            fi
+          fi
+
+      - name: Commit and push
+        if: steps.check.outputs.already_up_to_date != 'true' && steps.merge.outputs.needs_manual_review != 'true'
+        run: |
+          # Check if there are changes to commit
+          if git diff --cached --quiet && git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "chore: sync upstream main (${{ steps.check.outputs.commit_count }} commits)
+
+          Upstream: github/copilot-sdk@${{ steps.check.outputs.upstream_sha }}
+          ACP auto-resolved: ${{ steps.merge.outputs.acp_auto_resolved || 'false' }}"
+
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "🏃 Dry run — skipping push"
+            git log --oneline -5
+          else
+            git push origin "${{ steps.merge.outputs.branch }}"
+          fi
+
+      - name: Commit conflict state for manual review
+        if: steps.check.outputs.already_up_to_date != 'true' && steps.merge.outputs.needs_manual_review == 'true'
+        run: |
+          # 對衝突檔案保留 ours 版本以便 push（PR 中會標示需要手動處理）
+          git checkout --ours -- . 2>/dev/null || true
+          git add -A
+
+          git commit -m "chore: sync upstream main (conflicts need manual review)
+
+          Upstream: github/copilot-sdk@${{ steps.check.outputs.upstream_sha }}
+          Conflicting files: ${{ steps.merge.outputs.conflict_files }}
+
+          ⚠️ This PR has unresolved conflicts that need manual review."
+
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "🏃 Dry run — skipping push"
+          else
+            git push origin "${{ steps.merge.outputs.branch }}"
+          fi
+
+      - name: Create PR (clean merge)
+        if: steps.check.outputs.already_up_to_date != 'true' && steps.merge.outputs.needs_manual_review != 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(cat <<'HEREDOC'
+          ## Upstream Sync
+
+          **Commits:** ${{ steps.check.outputs.commit_count }} new commits from upstream
+          **Upstream SHA:** `${{ steps.check.outputs.upstream_sha }}`
+          **Base SHA:** `${{ steps.check.outputs.base_sha }}`
+
+          ### Upstream Changes
+          ```
+          ${{ steps.check.outputs.commit_log }}
+          ```
+
+          ### Conflict Resolution
+          - ACP paths auto-resolved: ${{ steps.merge.outputs.acp_auto_resolved || 'none' }}
+          - Manual review needed: none
+
+          ### After Merge
+          ```bash
+          # Rebase feature branches
+          git fetch origin main
+          git rebase origin/main
+          ```
+
+          ---
+          Auto-generated by upstream-sync workflow
+          HEREDOC
+          )
+
+          gh pr create \
+            --base main \
+            --head "${{ steps.merge.outputs.branch }}" \
+            --title "chore: sync upstream (${{ steps.check.outputs.commit_count }} commits)" \
+            --body "$BODY"
+
+      - name: Create PR (needs manual review)
+        if: steps.check.outputs.already_up_to_date != 'true' && steps.merge.outputs.needs_manual_review == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(cat <<'HEREDOC'
+          ## Upstream Sync — Needs Manual Review
+
+          **Commits:** ${{ steps.check.outputs.commit_count }} new commits from upstream
+          **Upstream SHA:** `${{ steps.check.outputs.upstream_sha }}`
+          **Base SHA:** `${{ steps.check.outputs.base_sha }}`
+
+          ### Upstream Changes
+          ```
+          ${{ steps.check.outputs.commit_log }}
+          ```
+
+          ### Conflicting Files (need manual resolution)
+          ```
+          ${{ steps.merge.outputs.conflict_files }}
+          ```
+
+          These core files have conflicts between upstream changes and our modifications.
+          Please resolve manually:
+
+          ```bash
+          # Fetch and attempt merge locally
+          git fetch upstream main
+          git checkout main
+          git merge upstream/main
+
+          # Resolve conflicts in:
+          ${{ steps.merge.outputs.conflict_files }}
+
+          # Then commit and push
+          git add -A
+          git commit
+          git push
+          ```
+
+          ### ACP Paths
+          - ACP auto-resolved: ${{ steps.merge.outputs.acp_auto_resolved || 'false' }}
+
+          ---
+          Auto-generated by upstream-sync workflow
+          HEREDOC
+          )
+
+          gh pr create \
+            --base main \
+            --head "${{ steps.merge.outputs.branch }}" \
+            --title "chore: sync upstream (needs manual review)" \
+            --body "$BODY" \
+            --label "needs-manual-review"

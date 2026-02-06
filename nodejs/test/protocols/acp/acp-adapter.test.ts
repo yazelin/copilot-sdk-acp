@@ -17,6 +17,7 @@ describe("AcpProtocolAdapter", () => {
         stderr: PassThrough;
         on: ReturnType<typeof vi.fn>;
         kill: ReturnType<typeof vi.fn>;
+        removeAllListeners: ReturnType<typeof vi.fn>;
     };
     let adapter: AcpProtocolAdapter;
     let options: CopilotClientOptions;
@@ -28,6 +29,7 @@ describe("AcpProtocolAdapter", () => {
             stderr: new PassThrough(),
             on: vi.fn(),
             kill: vi.fn(),
+            removeAllListeners: vi.fn(),
         };
 
         (spawn as ReturnType<typeof vi.fn>).mockReturnValue(mockProcess);
@@ -148,7 +150,7 @@ describe("AcpProtocolAdapter", () => {
                 mcpServers: [],
             });
 
-            // Send response
+            // Send response for session/new
             const response = {
                 jsonrpc: "2.0",
                 id: sentMessage.id,
@@ -156,8 +158,103 @@ describe("AcpProtocolAdapter", () => {
             };
             mockProcess.stdout.write(JSON.stringify(response) + "\n");
 
+            // session.create with model triggers session/set_model
+            await new Promise((resolve) => setImmediate(resolve));
+            const sentData2 = mockProcess.stdin.read();
+            const sentMessage2 = JSON.parse(sentData2.toString().trim());
+            expect(sentMessage2.method).toBe("session/set_model");
+
+            const response2 = {
+                jsonrpc: "2.0",
+                id: sentMessage2.id,
+                result: {},
+            };
+            mockProcess.stdout.write(JSON.stringify(response2) + "\n");
+
             const result = await createPromise;
             expect(result).toEqual({ sessionId: "acp-session-123" });
+        });
+
+        it("should call session/set_model after session.create when model is provided", async () => {
+            adapter.start();
+            await new Promise((resolve) => setImmediate(resolve));
+
+            const connection = adapter.getConnection();
+            connection.listen();
+
+            const createPromise = connection.sendRequest("session.create", {
+                model: "claude-sonnet-4-5-20250929",
+                workingDirectory: "/test/project",
+            });
+
+            // Read the session/new request
+            const sentData1 = mockProcess.stdin.read();
+            const sentMessage1 = JSON.parse(sentData1.toString().trim());
+            expect(sentMessage1.method).toBe("session/new");
+
+            // Respond to session/new
+            const response1 = {
+                jsonrpc: "2.0",
+                id: sentMessage1.id,
+                result: { sessionId: "acp-session-456" },
+            };
+            mockProcess.stdout.write(JSON.stringify(response1) + "\n");
+
+            // Wait for the set_model request to be sent
+            await new Promise((resolve) => setImmediate(resolve));
+
+            // Read the session/set_model request
+            const sentData2 = mockProcess.stdin.read();
+            const sentMessage2 = JSON.parse(sentData2.toString().trim());
+            expect(sentMessage2.method).toBe("session/set_model");
+            expect(sentMessage2.params).toEqual({
+                sessionId: "acp-session-456",
+                modelId: "claude-sonnet-4-5-20250929",
+            });
+
+            // Respond to session/set_model
+            const response2 = {
+                jsonrpc: "2.0",
+                id: sentMessage2.id,
+                result: {},
+            };
+            mockProcess.stdout.write(JSON.stringify(response2) + "\n");
+
+            const result = await createPromise;
+            expect(result).toEqual({ sessionId: "acp-session-456" });
+        });
+
+        it("should not call session/set_model when model is not provided", async () => {
+            adapter.start();
+            await new Promise((resolve) => setImmediate(resolve));
+
+            const connection = adapter.getConnection();
+            connection.listen();
+
+            const createPromise = connection.sendRequest("session.create", {
+                workingDirectory: "/test/project",
+            });
+
+            // Read the session/new request
+            const sentData1 = mockProcess.stdin.read();
+            const sentMessage1 = JSON.parse(sentData1.toString().trim());
+            expect(sentMessage1.method).toBe("session/new");
+
+            // Respond to session/new
+            const response1 = {
+                jsonrpc: "2.0",
+                id: sentMessage1.id,
+                result: { sessionId: "acp-session-789" },
+            };
+            mockProcess.stdout.write(JSON.stringify(response1) + "\n");
+
+            const result = await createPromise;
+            expect(result).toEqual({ sessionId: "acp-session-789" });
+
+            // Verify no additional request was sent (no session/set_model)
+            await new Promise((resolve) => setImmediate(resolve));
+            const extraData = mockProcess.stdin.read();
+            expect(extraData).toBeNull();
         });
 
         it("should translate session.send to session/prompt with prompt array", async () => {
