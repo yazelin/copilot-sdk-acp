@@ -142,7 +142,7 @@ jobs:
           else
             git push origin "${{ steps.merge.outputs.branch }}"
             # Wait for GitHub to index the new branch
-            sleep 10
+            sleep 30
           fi
 
       - name: Commit conflict state for manual review
@@ -163,7 +163,7 @@ jobs:
             echo "🏃 Dry run — skipping push"
           else
             git push origin "${{ steps.merge.outputs.branch }}"
-            sleep 10
+            sleep 30
           fi
 
       - name: Create PR (clean merge)
