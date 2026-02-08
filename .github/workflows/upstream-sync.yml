@@ -122,13 +122,6 @@ jobs:
             fi
           fi
 
-      - name: Restore our workflows
-        if: steps.check.outputs.already_up_to_date != 'true'
-        run: |
-          # 還原上游對 workflow 檔案的變更，避免 PAT 缺少 workflow scope 導致 push 失敗
-          git checkout HEAD -- .github/workflows/ 2>/dev/null || true
-          git add .github/workflows/
-
       - name: Commit and push
         if: steps.check.outputs.already_up_to_date != 'true' && steps.merge.outputs.needs_manual_review != 'true'
         run: |
