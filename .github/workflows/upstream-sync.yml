@@ -199,11 +199,12 @@ jobs:
           HEREDOC
           )
 
-          gh pr create \
-            --base main \
-            --head "${{ steps.merge.outputs.branch }}" \
-            --title "chore: sync upstream (${{ steps.check.outputs.commit_count }} commits)" \
-            --body "$BODY"
+          # Use REST API instead of GraphQL to avoid shallow clone issues
+          gh api repos/${{ github.repository }}/pulls \
+            -f base=main \
+            -f head="${{ steps.merge.outputs.branch }}" \
+            -f title="chore: sync upstream (${{ steps.check.outputs.commit_count }} commits)" \
+            -f body="$BODY"
 
       - name: Create PR (needs manual review)
         if: steps.check.outputs.already_up_to_date != 'true' && steps.merge.outputs.needs_manual_review == 'true' && github.event.inputs.dry_run != 'true'
@@ -253,9 +254,8 @@ jobs:
           HEREDOC
           )
 
-          gh pr create \
-            --base main \
-            --head "${{ steps.merge.outputs.branch }}" \
-            --title "chore: sync upstream (needs manual review)" \
-            --body "$BODY" \
-            --label "needs-manual-review"
+          gh api repos/${{ github.repository }}/pulls \
+            -f base=main \
+            -f head="${{ steps.merge.outputs.branch }}" \
+            -f title="chore: sync upstream (needs manual review)" \
+            -f body="$BODY"
