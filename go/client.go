@@ -42,7 +42,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/github/copilot-sdk/go/internal/embeddedcli"
 	"github.com/github/copilot-sdk/go/internal/jsonrpc2"
+	"github.com/github/copilot-sdk/go/rpc"
 )
 
 // Client manages the connection to the Copilot CLI server and provides session management.
@@ -83,6 +85,10 @@ type Client struct {
 	lifecycleHandlers      []SessionLifecycleHandler
 	typedLifecycleHandlers map[SessionLifecycleEventType][]SessionLifecycleHandler
 	lifecycleHandlersMux   sync.Mutex
+
+	// RPC provides typed server-scoped RPC methods.
+	// This field is nil until the client is connected via Start().
+	RPC *rpc.ServerRpc
 }
 
 // NewClient creates a new Copilot CLI client with the given options.
@@ -102,7 +108,7 @@ type Client struct {
 //	})
 func NewClient(options *ClientOptions) *Client {
 	opts := ClientOptions{
-		CLIPath:  "copilot",
+		CLIPath:  "",
 		Cwd:      "",
 		Port:     0,
 		LogLevel: "info",
@@ -336,6 +342,7 @@ func (c *Client) Stop() error {
 		c.actualPort = 0
 	}
 
+	c.RPC = nil
 	return errors.Join(errs...)
 }
 
@@ -394,6 +401,8 @@ func (c *Client) ForceStop() {
 	if !c.isExternalServer {
 		c.actualPort = 0
 	}
+
+	c.RPC = nil
 }
 
 func (c *Client) ensureConnected() error {
@@ -609,23 +618,33 @@ func (c *Client) ResumeSessionWithOptions(ctx context.Context, sessionID string,
 // ListSessions returns metadata about all sessions known to the server.
 //
 // Returns a list of SessionMetadata for all available sessions, including their IDs,
-// timestamps, and optional summaries.
+// timestamps, optional summaries, and context information.
+//
+// An optional filter can be provided to filter sessions by cwd, git root, repository, or branch.
 //
 // Example:
 //
-//	sessions, err := client.ListSessions(context.Background())
+//	sessions, err := client.ListSessions(context.Background(), nil)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //	for _, session := range sessions {
 //	    fmt.Printf("Session: %s\n", session.SessionID)
 //	}
-func (c *Client) ListSessions(ctx context.Context) ([]SessionMetadata, error) {
+//
+// Example with filter:
+//
+//	sessions, err := client.ListSessions(context.Background(), &SessionListFilter{Repository: "owner/repo"})
+func (c *Client) ListSessions(ctx context.Context, filter *SessionListFilter) ([]SessionMetadata, error) {
 	if err := c.ensureConnected(); err != nil {
 		return nil, err
 	}
 
-	result, err := c.client.Request("session.list", listSessionsRequest{})
+	params := listSessionsRequest{}
+	if filter != nil {
+		params.Filter = filter
+	}
+	result, err := c.client.Request("session.list", params)
 	if err != nil {
 		return nil, err
 	}
@@ -994,6 +1013,15 @@ func (c *Client) verifyProtocolVersion(ctx context.Context) error {
 // This spawns the CLI server as a subprocess using the configured transport
 // mode (stdio or TCP).
 func (c *Client) startCLIServer(ctx context.Context) error {
+	cliPath := c.options.CLIPath
+	if cliPath == "" {
+		// If no CLI path is provided, attempt to use the embedded CLI if available
+		cliPath = embeddedcli.Path()
+	}
+	if cliPath == "" {
+		// Default to "copilot" in PATH if no embedded CLI is available and no custom path is set
+		cliPath = "copilot"
+	}
 	args := []string{"--headless", "--no-auto-update", "--log-level", c.options.LogLevel}
 
 	// Choose transport mode
@@ -1020,10 +1048,10 @@ func (c *Client) startCLIServer(ctx context.Context) error {
 
 	// If CLIPath is a .js file, run it with node
 	// Note we can't rely on the shebang as Windows doesn't support it
-	command := c.options.CLIPath
-	if strings.HasSuffix(c.options.CLIPath, ".js") {
+	command := cliPath
+	if strings.HasSuffix(cliPath, ".js") {
 		command = "node"
-		args = append([]string{c.options.CLIPath}, args...)
+		args = append([]string{cliPath}, args...)
 	}
 
 	c.process = exec.CommandContext(ctx, command, args...)
@@ -1071,6 +1099,7 @@ func (c *Client) startCLIServer(ctx context.Context) error {
 
 		// Create JSON-RPC client immediately
 		c.client = jsonrpc2.NewClient(stdin, stdout)
+		c.RPC = rpc.NewServerRpc(c.client)
 		c.setupNotificationHandler()
 		c.client.Start()
 
@@ -1143,6 +1172,7 @@ func (c *Client) connectViaTcp(ctx context.Context) error {
 
 	// Create JSON-RPC client with the connection
 	c.client = jsonrpc2.NewClient(conn, conn)
+	c.RPC = rpc.NewServerRpc(c.client)
 	c.setupNotificationHandler()
 	c.client.Start()
 
