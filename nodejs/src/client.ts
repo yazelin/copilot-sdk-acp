@@ -22,6 +22,7 @@ import {
     StreamMessageReader,
     StreamMessageWriter,
 } from "vscode-jsonrpc/node.js";
+import { createServerRpc } from "./generated/rpc.js";
 import { getSdkProtocolVersion } from "./sdkProtocolVersion.js";
 import { CopilotSession } from "./session.js";
 import type { ProtocolAdapter, ProtocolConnection } from "./protocols/protocol-adapter.js";
@@ -35,10 +36,12 @@ import type {
     ModelInfo,
     ResumeSessionConfig,
     SessionConfig,
+    SessionContext,
     SessionEvent,
     SessionLifecycleEvent,
     SessionLifecycleEventType,
     SessionLifecycleHandler,
+    SessionListFilter,
     SessionMetadata,
     Tool,
     ToolCallRequestPayload,
@@ -127,6 +130,7 @@ export class CopilotClient {
     private actualHost: string = "localhost";
     private state: ConnectionState = "disconnected";
     private sessions: Map<string, CopilotSession> = new Map();
+    private stderrBuffer: string = ""; // Captures CLI stderr for error messages
     private options: Required<
         Omit<CopilotClientOptions, "cliUrl" | "githubToken" | "useLoggedInUser" | "protocol">
     > & {
@@ -145,6 +149,22 @@ export class CopilotClient {
         SessionLifecycleEventType,
         Set<(event: SessionLifecycleEvent) => void>
     > = new Map();
+    private _rpc: ReturnType<typeof createServerRpc> | null = null;
+    private processExitPromise: Promise<never> | null = null; // Rejects when CLI process exits
+
+    /**
+     * Typed server-scoped RPC methods.
+     * @throws Error if the client is not connected
+     */
+    get rpc(): ReturnType<typeof createServerRpc> {
+        if (!this.connection) {
+            throw new Error("Client is not connected. Call start() first.");
+        }
+        if (!this._rpc) {
+            this._rpc = createServerRpc(this.connection);
+        }
+        return this._rpc;
+    }
 
     /**
      * Creates a new CopilotClient instance.
@@ -377,6 +397,7 @@ export class CopilotClient {
                 );
             }
             this.connection = null;
+            this._rpc = null;
         }
 
         // Clear models cache
@@ -411,6 +432,8 @@ export class CopilotClient {
 
         this.state = "disconnected";
         this.actualPort = null;
+        this.stderrBuffer = "";
+        this.processExitPromise = null;
 
         return errors;
     }
@@ -464,6 +487,7 @@ export class CopilotClient {
                 // Ignore errors during force stop
             }
             this.connection = null;
+            this._rpc = null;
         }
 
         // Clear models cache
@@ -490,6 +514,8 @@ export class CopilotClient {
 
         this.state = "disconnected";
         this.actualPort = null;
+        this.stderrBuffer = "";
+        this.processExitPromise = null;
     }
 
     /**
@@ -548,6 +574,7 @@ export class CopilotClient {
             workingDirectory: config.workingDirectory,
             streaming: config.streaming,
             mcpServers: config.mcpServers,
+            envValueMode: "direct",
             customAgents: config.customAgents,
             configDir: config.configDir,
             skillDirectories: config.skillDirectories,
@@ -630,6 +657,7 @@ export class CopilotClient {
             configDir: config.configDir,
             streaming: config.streaming,
             mcpServers: config.mcpServers,
+            envValueMode: "direct",
             customAgents: config.customAgents,
             skillDirectories: config.skillDirectories,
             disabledSkills: config.disabledSkills,
@@ -771,7 +799,15 @@ export class CopilotClient {
      */
     private async verifyProtocolVersion(): Promise<void> {
         const expectedVersion = getSdkProtocolVersion();
-        const pingResult = await this.ping();
+
+        // Race ping against process exit to detect early CLI failures
+        let pingResult: Awaited<ReturnType<typeof this.ping>>;
+        if (this.processExitPromise) {
+            pingResult = await Promise.race([this.ping(), this.processExitPromise]);
+        } else {
+            pingResult = await this.ping();
+        }
+
         const serverVersion = pingResult.protocolVersion;
 
         if (serverVersion === undefined) {
@@ -849,27 +885,24 @@ export class CopilotClient {
     }
 
     /**
-     * Lists all available sessions known to the server.
+     * List all available sessions.
      *
-     * Returns metadata about each session including ID, timestamps, and summary.
-     *
-     * @returns A promise that resolves with an array of session metadata
-     * @throws Error if the client is not connected
+     * @param filter - Optional filter to limit returned sessions by context fields
      *
      * @example
-     * ```typescript
+     * // List all sessions
      * const sessions = await client.listSessions();
-     * for (const session of sessions) {
-     *   console.log(`${session.sessionId}: ${session.summary}`);
-     * }
-     * ```
+     *
+     * @example
+     * // List sessions for a specific repository
+     * const sessions = await client.listSessions({ repository: "owner/repo" });
      */
-    async listSessions(): Promise<SessionMetadata[]> {
+    async listSessions(filter?: SessionListFilter): Promise<SessionMetadata[]> {
         if (!this.connection) {
             throw new Error("Client not connected");
         }
 
-        const response = await this.connection.sendRequest("session.list", {});
+        const response = await this.connection.sendRequest("session.list", { filter });
         const { sessions } = response as {
             sessions: Array<{
                 sessionId: string;
@@ -877,6 +910,7 @@ export class CopilotClient {
                 modifiedTime: string;
                 summary?: string;
                 isRemote: boolean;
+                context?: SessionContext;
             }>;
         };
 
@@ -886,6 +920,7 @@ export class CopilotClient {
             modifiedTime: new Date(s.modifiedTime),
             summary: s.summary,
             isRemote: s.isRemote,
+            context: s.context,
         }));
     }
 
@@ -1028,6 +1063,9 @@ export class CopilotClient {
      */
     private async startCLIServer(): Promise<void> {
         return new Promise((resolve, reject) => {
+            // Clear stderr buffer for fresh capture
+            this.stderrBuffer = "";
+
             const args = [
                 ...this.options.cliArgs,
                 "--headless",
@@ -1079,12 +1117,14 @@ export class CopilotClient {
                     stdio: stdioConfig,
                     cwd: this.options.cwd,
                     env: envWithoutNodeDebug,
+                    windowsHide: true,
                 });
             } else {
                 this.cliProcess = spawn(this.options.cliPath, args, {
                     stdio: stdioConfig,
                     cwd: this.options.cwd,
                     env: envWithoutNodeDebug,
+                    windowsHide: true,
                 });
             }
 
@@ -1109,6 +1149,8 @@ export class CopilotClient {
             }
 
             this.cliProcess.stderr?.on("data", (data: Buffer) => {
+                // Capture stderr for error messages
+                this.stderrBuffer += data.toString();
                 // Forward CLI stderr to parent's stderr so debug logs are visible
                 const lines = data.toString().split("\n");
                 for (const line of lines) {
@@ -1121,14 +1163,55 @@ export class CopilotClient {
             this.cliProcess.on("error", (error) => {
                 if (!resolved) {
                     resolved = true;
-                    reject(new Error(`Failed to start CLI server: ${error.message}`));
+                    const stderrOutput = this.stderrBuffer.trim();
+                    if (stderrOutput) {
+                        reject(
+                            new Error(
+                                `Failed to start CLI server: ${error.message}\nstderr: ${stderrOutput}`
+                            )
+                        );
+                    } else {
+                        reject(new Error(`Failed to start CLI server: ${error.message}`));
+                    }
                 }
             });
+
+            // Set up a promise that rejects when the process exits (used to race against RPC calls)
+            this.processExitPromise = new Promise<never>((_, rejectProcessExit) => {
+                this.cliProcess!.on("exit", (code) => {
+                    // Give a small delay for stderr to be fully captured
+                    setTimeout(() => {
+                        const stderrOutput = this.stderrBuffer.trim();
+                        if (stderrOutput) {
+                            rejectProcessExit(
+                                new Error(
+                                    `CLI server exited with code ${code}\nstderr: ${stderrOutput}`
+                                )
+                            );
+                        } else {
+                            rejectProcessExit(
+                                new Error(`CLI server exited unexpectedly with code ${code}`)
+                            );
+                        }
+                    }, 50);
+                });
+            });
+            // Prevent unhandled rejection when process exits normally (we only use this in Promise.race)
+            this.processExitPromise.catch(() => {});
 
             this.cliProcess.on("exit", (code) => {
                 if (!resolved) {
                     resolved = true;
-                    reject(new Error(`CLI server exited with code ${code}`));
+                    const stderrOutput = this.stderrBuffer.trim();
+                    if (stderrOutput) {
+                        reject(
+                            new Error(
+                                `CLI server exited with code ${code}\nstderr: ${stderrOutput}`
+                            )
+                        );
+                    } else {
+                        reject(new Error(`CLI server exited with code ${code}`));
+                    }
                 } else if (this.options.autoRestart && this.state === "connected") {
                     void this.reconnect();
                 }

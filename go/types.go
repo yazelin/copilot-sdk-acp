@@ -16,6 +16,8 @@ const (
 type ClientOptions struct {
 	// CLIPath is the path to the Copilot CLI executable (default: "copilot")
 	CLIPath string
+	// CLIArgs are extra arguments to pass to the CLI executable (inserted before SDK-managed args)
+	CLIArgs []string
 	// Cwd is the working directory for the CLI process (default: "" = inherit from current process)
 	Cwd string
 	// Port for TCP transport (default: 0 = random port)
@@ -57,6 +59,12 @@ type ClientOptions struct {
 // Bool returns a pointer to the given bool value.
 // Use for setting AutoStart or AutoRestart: AutoStart: Bool(false)
 func Bool(v bool) *bool {
+	return &v
+}
+
+// String returns a pointer to the given string value.
+// Use for setting optional string parameters in RPC calls.
+func String(v string) *string {
 	return &v
 }
 
@@ -541,13 +549,38 @@ type ModelInfo struct {
 	DefaultReasoningEffort    string            `json:"defaultReasoningEffort,omitempty"`
 }
 
+// SessionContext contains working directory context for a session
+type SessionContext struct {
+	// Cwd is the working directory where the session was created
+	Cwd string `json:"cwd"`
+	// GitRoot is the git repository root (if in a git repo)
+	GitRoot string `json:"gitRoot,omitempty"`
+	// Repository is the GitHub repository in "owner/repo" format
+	Repository string `json:"repository,omitempty"`
+	// Branch is the current git branch
+	Branch string `json:"branch,omitempty"`
+}
+
+// SessionListFilter contains filter options for listing sessions
+type SessionListFilter struct {
+	// Cwd filters by exact working directory match
+	Cwd string `json:"cwd,omitempty"`
+	// GitRoot filters by git root
+	GitRoot string `json:"gitRoot,omitempty"`
+	// Repository filters by repository (owner/repo format)
+	Repository string `json:"repository,omitempty"`
+	// Branch filters by branch
+	Branch string `json:"branch,omitempty"`
+}
+
 // SessionMetadata contains metadata about a session
 type SessionMetadata struct {
-	SessionID    string  `json:"sessionId"`
-	StartTime    string  `json:"startTime"`
-	ModifiedTime string  `json:"modifiedTime"`
-	Summary      *string `json:"summary,omitempty"`
-	IsRemote     bool    `json:"isRemote"`
+	SessionID    string          `json:"sessionId"`
+	StartTime    string          `json:"startTime"`
+	ModifiedTime string          `json:"modifiedTime"`
+	Summary      *string         `json:"summary,omitempty"`
+	IsRemote     bool            `json:"isRemote"`
+	Context      *SessionContext `json:"context,omitempty"`
 }
 
 // SessionLifecycleEventType represents the type of session lifecycle event
@@ -605,6 +638,7 @@ type createSessionRequest struct {
 	WorkingDirectory  string                     `json:"workingDirectory,omitempty"`
 	Streaming         *bool                      `json:"streaming,omitempty"`
 	MCPServers        map[string]MCPServerConfig `json:"mcpServers,omitempty"`
+	EnvValueMode      string                     `json:"envValueMode,omitempty"`
 	CustomAgents      []CustomAgentConfig        `json:"customAgents,omitempty"`
 	ConfigDir         string                     `json:"configDir,omitempty"`
 	SkillDirectories  []string                   `json:"skillDirectories,omitempty"`
@@ -636,6 +670,7 @@ type resumeSessionRequest struct {
 	DisableResume     *bool                      `json:"disableResume,omitempty"`
 	Streaming         *bool                      `json:"streaming,omitempty"`
 	MCPServers        map[string]MCPServerConfig `json:"mcpServers,omitempty"`
+	EnvValueMode      string                     `json:"envValueMode,omitempty"`
 	CustomAgents      []CustomAgentConfig        `json:"customAgents,omitempty"`
 	SkillDirectories  []string                   `json:"skillDirectories,omitempty"`
 	DisabledSkills    []string                   `json:"disabledSkills,omitempty"`
@@ -655,7 +690,9 @@ type hooksInvokeRequest struct {
 }
 
 // listSessionsRequest is the request for session.list
-type listSessionsRequest struct{}
+type listSessionsRequest struct {
+	Filter *SessionListFilter `json:"filter,omitempty"`
+}
 
 // listSessionsResponse is the response from session.list
 type listSessionsResponse struct {
