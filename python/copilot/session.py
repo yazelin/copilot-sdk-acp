@@ -8,12 +8,14 @@ conversation sessions with the Copilot CLI.
 import asyncio
 import inspect
 import threading
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from .generated.rpc import SessionRpc
 from .generated.session_events import SessionEvent, SessionEventType, session_event_from_dict
 from .types import (
     MessageOptions,
+    PermissionRequest,
+    PermissionRequestResult,
     SessionHooks,
     Tool,
     ToolHandler,
@@ -308,7 +310,9 @@ class CopilotSession:
         with self._permission_handler_lock:
             self._permission_handler = handler
 
-    async def _handle_permission_request(self, request: dict) -> dict:
+    async def _handle_permission_request(
+        self, request: PermissionRequest
+    ) -> PermissionRequestResult:
         """
         Handle a permission request from the Copilot CLI.
 
@@ -332,7 +336,7 @@ class CopilotSession:
             result = handler(request, {"session_id": self.session_id})
             if inspect.isawaitable(result):
                 result = await result
-            return result
+            return cast(PermissionRequestResult, result)
         except Exception:  # pylint: disable=broad-except
             # Handler failed, deny permission
             return {"kind": "denied-no-approval-rule-and-could-not-request-from-user"}
@@ -384,7 +388,7 @@ class CopilotSession:
             )
             if inspect.isawaitable(result):
                 result = await result
-            return result
+            return cast(UserInputResponse, result)
         except Exception:
             raise
 
