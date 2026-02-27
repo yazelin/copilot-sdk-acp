@@ -426,7 +426,32 @@ unsubscribeIdle();
 <details>
 <summary><strong>Python</strong></summary>
 
-<!-- docs-validate: skip -->
+<!-- docs-validate: hidden -->
+```python
+from copilot import CopilotClient
+from copilot.generated.session_events import SessionEvent, SessionEventType
+
+client = CopilotClient()
+
+session = client.create_session({"on_permission_request": lambda req, inv: {"kind": "approved"}})
+
+# Subscribe to all events
+unsubscribe = session.on(lambda event: print(f"Event: {event.type}"))
+
+# Filter by event type in your handler
+def handle_event(event: SessionEvent) -> None:
+    if event.type == SessionEventType.SESSION_IDLE:
+        print("Session is idle")
+    elif event.type == SessionEventType.ASSISTANT_MESSAGE:
+        print(f"Message: {event.data.content}")
+
+unsubscribe = session.on(handle_event)
+
+# Later, to unsubscribe:
+unsubscribe()
+```
+<!-- /docs-validate: hidden -->
+
 ```python
 # Subscribe to all events
 unsubscribe = session.on(lambda event: print(f"Event: {event.type}"))
@@ -449,7 +474,39 @@ unsubscribe()
 <details>
 <summary><strong>Go</strong></summary>
 
-<!-- docs-validate: skip -->
+<!-- docs-validate: hidden -->
+```go
+package main
+
+import (
+	"fmt"
+
+	copilot "github.com/github/copilot-sdk/go"
+)
+
+func main() {
+	session := &copilot.Session{}
+
+	// Subscribe to all events
+	unsubscribe := session.On(func(event copilot.SessionEvent) {
+		fmt.Println("Event:", event.Type)
+	})
+
+	// Filter by event type in your handler
+	session.On(func(event copilot.SessionEvent) {
+		if event.Type == "session.idle" {
+			fmt.Println("Session is idle")
+		} else if event.Type == "assistant.message" {
+			fmt.Println("Message:", *event.Data.Content)
+		}
+	})
+
+	// Later, to unsubscribe:
+	unsubscribe()
+}
+```
+<!-- /docs-validate: hidden -->
+
 ```go
 // Subscribe to all events
 unsubscribe := session.On(func(event copilot.SessionEvent) {
@@ -474,7 +531,38 @@ unsubscribe()
 <details>
 <summary><strong>.NET</strong></summary>
 
-<!-- docs-validate: skip -->
+<!-- docs-validate: hidden -->
+```csharp
+using GitHub.Copilot.SDK;
+
+public static class EventSubscriptionExample
+{
+    public static void Example(CopilotSession session)
+    {
+        // Subscribe to all events
+        var unsubscribe = session.On(ev => Console.WriteLine($"Event: {ev.Type}"));
+
+        // Filter by event type using pattern matching
+        session.On(ev =>
+        {
+            switch (ev)
+            {
+                case SessionIdleEvent:
+                    Console.WriteLine("Session is idle");
+                    break;
+                case AssistantMessageEvent msg:
+                    Console.WriteLine($"Message: {msg.Data.Content}");
+                    break;
+            }
+        });
+
+        // Later, to unsubscribe:
+        unsubscribe.Dispose();
+    }
+}
+```
+<!-- /docs-validate: hidden -->
+
 ```csharp
 // Subscribe to all events
 var unsubscribe = session.On(ev => Console.WriteLine($"Event: {ev.Type}"));
@@ -1193,14 +1281,14 @@ Once the CLI is running in server mode, configure your SDK client to connect to 
 <summary><strong>Node.js / TypeScript</strong></summary>
 
 ```typescript
-import { CopilotClient } from "@github/copilot-sdk";
+import { CopilotClient, approveAll } from "@github/copilot-sdk";
 
 const client = new CopilotClient({
     cliUrl: "localhost:4321"
 });
 
 // Use the client normally
-const session = await client.createSession();
+const session = await client.createSession({ onPermissionRequest: approveAll });
 // ...
 ```
 
@@ -1210,7 +1298,7 @@ const session = await client.createSession();
 <summary><strong>Python</strong></summary>
 
 ```python
-from copilot import CopilotClient
+from copilot import CopilotClient, PermissionHandler
 
 client = CopilotClient({
     "cli_url": "localhost:4321"
@@ -1218,7 +1306,7 @@ client = CopilotClient({
 await client.start()
 
 # Use the client normally
-session = await client.create_session()
+session = await client.create_session({"on_permission_request": PermissionHandler.approve_all})
 # ...
 ```
 
@@ -1227,7 +1315,37 @@ session = await client.create_session()
 <details>
 <summary><strong>Go</strong></summary>
 
-<!-- docs-validate: skip -->
+<!-- docs-validate: hidden -->
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	copilot "github.com/github/copilot-sdk/go"
+)
+
+func main() {
+	ctx := context.Background()
+
+	client := copilot.NewClient(&copilot.ClientOptions{
+		CLIUrl: "localhost:4321",
+	})
+
+	if err := client.Start(ctx); err != nil {
+		log.Fatal(err)
+	}
+	defer client.Stop()
+
+	// Use the client normally
+	_, _ = client.CreateSession(ctx, &copilot.SessionConfig{
+		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+	})
+}
+```
+<!-- /docs-validate: hidden -->
+
 ```go
 import copilot "github.com/github/copilot-sdk/go"
 
@@ -1241,7 +1359,9 @@ if err := client.Start(ctx); err != nil {
 defer client.Stop()
 
 // Use the client normally
-session, err := client.CreateSession(ctx, nil)
+session, err := client.CreateSession(ctx, &copilot.SessionConfig{
+    OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+})
 // ...
 ```
 
@@ -1260,7 +1380,10 @@ using var client = new CopilotClient(new CopilotClientOptions
 });
 
 // Use the client normally
-await using var session = await client.CreateSessionAsync();
+await using var session = await client.CreateSessionAsync(new()
+{
+    OnPermissionRequest = PermissionHandler.ApproveAll
+});
 // ...
 ```
 
