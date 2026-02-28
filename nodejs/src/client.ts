@@ -93,7 +93,7 @@ function toJsonSchema(parameters: Tool["parameters"]): Record<string, unknown> |
  * const client = new CopilotClient({ cliUrl: "localhost:3000" });
  *
  * // Create a session
- * const session = await client.createSession({ model: "gpt-4" });
+ * const session = await client.createSession({ onPermissionRequest: approveAll, model: "gpt-4" });
  *
  * // Send messages and handle responses
  * session.on((event) => {
@@ -539,10 +539,11 @@ export class CopilotClient {
      * @example
      * ```typescript
      * // Basic session
-     * const session = await client.createSession();
+     * const session = await client.createSession({ onPermissionRequest: approveAll });
      *
      * // Session with model and tools
      * const session = await client.createSession({
+     *   onPermissionRequest: approveAll,
      *   model: "gpt-4",
      *   tools: [{
      *     name: "get_weather",
@@ -553,7 +554,13 @@ export class CopilotClient {
      * });
      * ```
      */
-    async createSession(config: SessionConfig = {}): Promise<CopilotSession> {
+    async createSession(config: SessionConfig): Promise<CopilotSession> {
+        if (!config?.onPermissionRequest) {
+            throw new Error(
+                "An onPermissionRequest handler is required when creating a session. For example, to allow all permissions, use { onPermissionRequest: approveAll }."
+            );
+        }
+
         if (!this.connection) {
             if (this.options.autoStart) {
                 await this.start();
@@ -596,9 +603,7 @@ export class CopilotClient {
         };
         const session = new CopilotSession(sessionId, this.connection!, workspacePath);
         session.registerTools(config.tools);
-        if (config.onPermissionRequest) {
-            session.registerPermissionHandler(config.onPermissionRequest);
-        }
+        session.registerPermissionHandler(config.onPermissionRequest);
         if (config.onUserInputRequest) {
             session.registerUserInputHandler(config.onUserInputRequest);
         }
@@ -625,18 +630,22 @@ export class CopilotClient {
      * @example
      * ```typescript
      * // Resume a previous session
-     * const session = await client.resumeSession("session-123");
+     * const session = await client.resumeSession("session-123", { onPermissionRequest: approveAll });
      *
      * // Resume with new tools
      * const session = await client.resumeSession("session-123", {
+     *   onPermissionRequest: approveAll,
      *   tools: [myNewTool]
      * });
      * ```
      */
-    async resumeSession(
-        sessionId: string,
-        config: ResumeSessionConfig = {}
-    ): Promise<CopilotSession> {
+    async resumeSession(sessionId: string, config: ResumeSessionConfig): Promise<CopilotSession> {
+        if (!config?.onPermissionRequest) {
+            throw new Error(
+                "An onPermissionRequest handler is required when resuming a session. For example, to allow all permissions, use { onPermissionRequest: approveAll }."
+            );
+        }
+
         if (!this.connection) {
             if (this.options.autoStart) {
                 await this.start();
@@ -680,9 +689,7 @@ export class CopilotClient {
         };
         const session = new CopilotSession(resumedSessionId, this.connection!, workspacePath);
         session.registerTools(config.tools);
-        if (config.onPermissionRequest) {
-            session.registerPermissionHandler(config.onPermissionRequest);
-        }
+        session.registerPermissionHandler(config.onPermissionRequest);
         if (config.onUserInputRequest) {
             session.registerUserInputHandler(config.onUserInputRequest);
         }
@@ -702,7 +709,7 @@ export class CopilotClient {
      * @example
      * ```typescript
      * if (client.getState() === "connected") {
-     *   const session = await client.createSession();
+     *   const session = await client.createSession({ onPermissionRequest: approveAll });
      * }
      * ```
      */
@@ -847,7 +854,7 @@ export class CopilotClient {
      * ```typescript
      * const lastId = await client.getLastSessionId();
      * if (lastId) {
-     *   const session = await client.resumeSession(lastId);
+     *   const session = await client.resumeSession(lastId, { onPermissionRequest: approveAll });
      * }
      * ```
      */

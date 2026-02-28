@@ -281,6 +281,32 @@ export class ReplayingCapiProxy extends CapturingHttpProxy {
 
             return;
           }
+
+          // Check if this request matches a snapshot with no response (e.g., timeout tests).
+          // If so, hang forever so the client-side timeout can trigger.
+          if (
+            await isRequestOnlySnapshot(
+              state.storedData,
+              options.body,
+              state.workDir,
+              state.toolResultNormalizers,
+            )
+          ) {
+            const streamingIsRequested =
+              options.body &&
+              (JSON.parse(options.body) as { stream?: boolean }).stream ===
+                true;
+            const headers = {
+              "content-type": streamingIsRequested
+                ? "text/event-stream"
+                : "application/json",
+              ...commonResponseHeaders,
+            };
+            options.onResponseStart(200, headers);
+            // Never call onResponseEnd - hang indefinitely for timeout tests.
+            // Returning here keeps the HTTP response open without leaking a pending Promise.
+            return;
+          }
         }
 
         // Fallback to normal proxying if no cached response found
@@ -393,6 +419,35 @@ async function findSavedChatCompletionResponse(
   }
 
   return undefined;
+}
+
+// Checks if the request matches a snapshot that has no assistant response.
+// This handles timeout test scenarios where the snapshot only records the request.
+async function isRequestOnlySnapshot(
+  storedData: NormalizedData,
+  requestBody: string | undefined,
+  workDir: string,
+  toolResultNormalizers: ToolResultNormalizer[],
+): Promise<boolean> {
+  const normalized = await parseAndNormalizeRequest(
+    requestBody,
+    workDir,
+    toolResultNormalizers,
+  );
+  const requestMessages = normalized.conversations[0]?.messages ?? [];
+
+  for (const conversation of storedData.conversations) {
+    if (
+      requestMessages.length === conversation.messages.length &&
+      requestMessages.every(
+        (msg, i) =>
+          JSON.stringify(msg) === JSON.stringify(conversation.messages[i]),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function parseAndNormalizeRequest(
@@ -632,6 +687,10 @@ function normalizeUserMessage(content: string): string {
   return content
     .replace(/<current_datetime>.*?<\/current_datetime>/g, "")
     .replace(/<reminder>[\s\S]*?<\/reminder>/g, "")
+    .replace(
+      /Please create a detailed summary of the conversation so far\. The history is being compacted[\s\S]*/,
+      "${compaction_prompt}",
+    )
     .trim();
 }
 

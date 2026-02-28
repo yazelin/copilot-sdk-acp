@@ -5,51 +5,51 @@ conversations:
       - role: system
         content: ${system}
       - role: user
-        content: What is 1+1?
-      - role: assistant
-        content: 1+1 = 2
-      - role: user
-        content: Run 'node --version'
+        content: Run 'echo hello && echo world'. Tell me the exact output.
       - role: assistant
         tool_calls:
           - id: toolcall_0
             type: function
             function:
               name: report_intent
-              arguments: '{"intent":"Checking Node.js version"}'
+              arguments: '{"intent":"Running echo commands"}'
       - role: assistant
         tool_calls:
           - id: toolcall_1
             type: function
             function:
               name: ${shell}
-              arguments: '{"command":"node --version","description":"Check Node.js version"}'
+              arguments: '{"command":"echo hello && echo world","description":"Run echo hello && echo world"}'
   - messages:
       - role: system
         content: ${system}
       - role: user
-        content: What is 1+1?
-      - role: assistant
-        content: 1+1 = 2
-      - role: user
-        content: Run 'node --version'
+        content: Run 'echo hello && echo world'. Tell me the exact output.
       - role: assistant
         tool_calls:
           - id: toolcall_0
             type: function
             function:
               name: report_intent
-              arguments: '{"intent":"Checking Node.js version"}'
+              arguments: '{"intent":"Running echo commands"}'
           - id: toolcall_1
             type: function
             function:
               name: ${shell}
-              arguments: '{"command":"node --version","description":"Check Node.js version"}'
+              arguments: '{"command":"echo hello && echo world","description":"Run echo hello && echo world"}'
       - role: tool
         tool_call_id: toolcall_0
         content: Intent logged
       - role: tool
         tool_call_id: toolcall_1
-        content: Permission denied and could not request permission from user
+        content: |-
+          hello
+          world
+          <exited with exit code 0>
       - role: assistant
-        content: Permission was denied to run the command. I don't have access to execute shell commands in this environment.
+        content: |-
+          The exact output is:
+          ```
+          hello
+          world
+          ```

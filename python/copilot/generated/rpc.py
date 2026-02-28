@@ -10,7 +10,8 @@ if TYPE_CHECKING:
 
 
 from dataclasses import dataclass
-from typing import Any, Optional, List, Dict, TypeVar, Type, cast, Callable
+from typing import Any, TypeVar, cast
+from collections.abc import Callable
 from enum import Enum
 
 
@@ -52,22 +53,22 @@ def from_bool(x: Any) -> bool:
     return x
 
 
-def to_class(c: Type[T], x: Any) -> dict:
+def to_class(c: type[T], x: Any) -> dict:
     assert isinstance(x, c)
     return cast(Any, x).to_dict()
 
 
-def from_list(f: Callable[[Any], T], x: Any) -> List[T]:
+def from_list(f: Callable[[Any], T], x: Any) -> list[T]:
     assert isinstance(x, list)
     return [f(y) for y in x]
 
 
-def from_dict(f: Callable[[Any], T], x: Any) -> Dict[str, T]:
+def from_dict(f: Callable[[Any], T], x: Any) -> dict[str, T]:
     assert isinstance(x, dict)
     return { k: f(v) for (k, v) in x.items() }
 
 
-def to_enum(c: Type[EnumT], x: Any) -> EnumT:
+def to_enum(c: type[EnumT], x: Any) -> EnumT:
     assert isinstance(x, c)
     return x.value
 
@@ -101,7 +102,7 @@ class PingResult:
 
 @dataclass
 class PingParams:
-    message: Optional[str] = None
+    message: str | None = None
     """Optional message to echo back"""
 
     @staticmethod
@@ -138,8 +139,8 @@ class Billing:
 @dataclass
 class Limits:
     max_context_window_tokens: float
-    max_output_tokens: Optional[float] = None
-    max_prompt_tokens: Optional[float] = None
+    max_output_tokens: float | None = None
+    max_prompt_tokens: float | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Limits':
@@ -161,22 +162,24 @@ class Limits:
 
 @dataclass
 class Supports:
-    reasoning_effort: bool
+    reasoning_effort: bool | None = None
     """Whether this model supports reasoning effort configuration"""
 
-    vision: bool
+    vision: bool | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Supports':
         assert isinstance(obj, dict)
-        reasoning_effort = from_bool(obj.get("reasoningEffort"))
-        vision = from_bool(obj.get("vision"))
+        reasoning_effort = from_union([from_bool, from_none], obj.get("reasoningEffort"))
+        vision = from_union([from_bool, from_none], obj.get("vision"))
         return Supports(reasoning_effort, vision)
 
     def to_dict(self) -> dict:
         result: dict = {}
-        result["reasoningEffort"] = from_bool(self.reasoning_effort)
-        result["vision"] = from_bool(self.vision)
+        if self.reasoning_effort is not None:
+            result["reasoningEffort"] = from_union([from_bool, from_none], self.reasoning_effort)
+        if self.vision is not None:
+            result["vision"] = from_union([from_bool, from_none], self.vision)
         return result
 
 
@@ -233,16 +236,16 @@ class Model:
     name: str
     """Display name"""
 
-    billing: Optional[Billing] = None
+    billing: Billing | None = None
     """Billing information"""
 
-    default_reasoning_effort: Optional[str] = None
+    default_reasoning_effort: str | None = None
     """Default reasoning effort level (only present if model supports reasoning effort)"""
 
-    policy: Optional[Policy] = None
+    policy: Policy | None = None
     """Policy state (if applicable)"""
 
-    supported_reasoning_efforts: Optional[List[str]] = None
+    supported_reasoning_efforts: list[str] | None = None
     """Supported reasoning effort levels (only present if model supports reasoning effort)"""
 
     @staticmethod
@@ -275,7 +278,7 @@ class Model:
 
 @dataclass
 class ModelsListResult:
-    models: List[Model]
+    models: list[Model]
     """List of available models with full metadata"""
 
     @staticmethod
@@ -298,14 +301,14 @@ class Tool:
     name: str
     """Tool identifier (e.g., "bash", "grep", "str_replace_editor")"""
 
-    instructions: Optional[str] = None
+    instructions: str | None = None
     """Optional instructions for how to use this tool effectively"""
 
-    namespaced_name: Optional[str] = None
+    namespaced_name: str | None = None
     """Optional namespaced name for declarative filtering (e.g., "playwright/navigate" for MCP
     tools)
     """
-    parameters: Optional[Dict[str, Any]] = None
+    parameters: dict[str, Any] | None = None
     """JSON Schema for the tool's input parameters"""
 
     @staticmethod
@@ -333,7 +336,7 @@ class Tool:
 
 @dataclass
 class ToolsListResult:
-    tools: List[Tool]
+    tools: list[Tool]
     """List of available built-in tools with metadata"""
 
     @staticmethod
@@ -350,7 +353,7 @@ class ToolsListResult:
 
 @dataclass
 class ToolsListParams:
-    model: Optional[str] = None
+    model: str | None = None
     """Optional model ID — when provided, the returned tool list reflects model-specific
     overrides
     """
@@ -385,7 +388,7 @@ class QuotaSnapshot:
     used_requests: float
     """Number of requests used so far this period"""
 
-    reset_date: Optional[str] = None
+    reset_date: str | None = None
     """Date when the quota resets (ISO 8601)"""
 
     @staticmethod
@@ -413,7 +416,7 @@ class QuotaSnapshot:
 
 @dataclass
 class AccountGetQuotaResult:
-    quota_snapshots: Dict[str, QuotaSnapshot]
+    quota_snapshots: dict[str, QuotaSnapshot]
     """Quota snapshots keyed by type (e.g., chat, completions, premium_interactions)"""
 
     @staticmethod
@@ -430,7 +433,7 @@ class AccountGetQuotaResult:
 
 @dataclass
 class SessionModelGetCurrentResult:
-    model_id: Optional[str] = None
+    model_id: str | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionModelGetCurrentResult':
@@ -447,7 +450,7 @@ class SessionModelGetCurrentResult:
 
 @dataclass
 class SessionModelSwitchToResult:
-    model_id: Optional[str] = None
+    model_id: str | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionModelSwitchToResult':
@@ -546,7 +549,7 @@ class SessionPlanReadResult:
     exists: bool
     """Whether plan.md exists in the workspace"""
 
-    content: Optional[str] = None
+    content: str | None = None
     """The content of plan.md, or null if it does not exist"""
 
     @staticmethod
@@ -606,7 +609,7 @@ class SessionPlanDeleteResult:
 
 @dataclass
 class SessionWorkspaceListFilesResult:
-    files: List[str]
+    files: list[str]
     """Relative file paths in the workspace files directory"""
 
     @staticmethod
@@ -708,7 +711,7 @@ class SessionFleetStartResult:
 
 @dataclass
 class SessionFleetStartParams:
-    prompt: Optional[str] = None
+    prompt: str | None = None
     """Optional user prompt to combine with fleet instructions"""
 
     @staticmethod
@@ -721,6 +724,196 @@ class SessionFleetStartParams:
         result: dict = {}
         if self.prompt is not None:
             result["prompt"] = from_union([from_str, from_none], self.prompt)
+        return result
+
+
+@dataclass
+class AgentElement:
+    description: str
+    """Description of the agent's purpose"""
+
+    display_name: str
+    """Human-readable display name"""
+
+    name: str
+    """Unique identifier of the custom agent"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'AgentElement':
+        assert isinstance(obj, dict)
+        description = from_str(obj.get("description"))
+        display_name = from_str(obj.get("displayName"))
+        name = from_str(obj.get("name"))
+        return AgentElement(description, display_name, name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["description"] = from_str(self.description)
+        result["displayName"] = from_str(self.display_name)
+        result["name"] = from_str(self.name)
+        return result
+
+
+@dataclass
+class SessionAgentListResult:
+    agents: list[AgentElement]
+    """Available custom agents"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentListResult':
+        assert isinstance(obj, dict)
+        agents = from_list(AgentElement.from_dict, obj.get("agents"))
+        return SessionAgentListResult(agents)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["agents"] = from_list(lambda x: to_class(AgentElement, x), self.agents)
+        return result
+
+
+@dataclass
+class SessionAgentGetCurrentResultAgent:
+    description: str
+    """Description of the agent's purpose"""
+
+    display_name: str
+    """Human-readable display name"""
+
+    name: str
+    """Unique identifier of the custom agent"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentGetCurrentResultAgent':
+        assert isinstance(obj, dict)
+        description = from_str(obj.get("description"))
+        display_name = from_str(obj.get("displayName"))
+        name = from_str(obj.get("name"))
+        return SessionAgentGetCurrentResultAgent(description, display_name, name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["description"] = from_str(self.description)
+        result["displayName"] = from_str(self.display_name)
+        result["name"] = from_str(self.name)
+        return result
+
+
+@dataclass
+class SessionAgentGetCurrentResult:
+    agent: SessionAgentGetCurrentResultAgent | None = None
+    """Currently selected custom agent, or null if using the default agent"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentGetCurrentResult':
+        assert isinstance(obj, dict)
+        agent = from_union([SessionAgentGetCurrentResultAgent.from_dict, from_none], obj.get("agent"))
+        return SessionAgentGetCurrentResult(agent)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["agent"] = from_union([lambda x: to_class(SessionAgentGetCurrentResultAgent, x), from_none], self.agent)
+        return result
+
+
+@dataclass
+class SessionAgentSelectResultAgent:
+    """The newly selected custom agent"""
+
+    description: str
+    """Description of the agent's purpose"""
+
+    display_name: str
+    """Human-readable display name"""
+
+    name: str
+    """Unique identifier of the custom agent"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentSelectResultAgent':
+        assert isinstance(obj, dict)
+        description = from_str(obj.get("description"))
+        display_name = from_str(obj.get("displayName"))
+        name = from_str(obj.get("name"))
+        return SessionAgentSelectResultAgent(description, display_name, name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["description"] = from_str(self.description)
+        result["displayName"] = from_str(self.display_name)
+        result["name"] = from_str(self.name)
+        return result
+
+
+@dataclass
+class SessionAgentSelectResult:
+    agent: SessionAgentSelectResultAgent
+    """The newly selected custom agent"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentSelectResult':
+        assert isinstance(obj, dict)
+        agent = SessionAgentSelectResultAgent.from_dict(obj.get("agent"))
+        return SessionAgentSelectResult(agent)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["agent"] = to_class(SessionAgentSelectResultAgent, self.agent)
+        return result
+
+
+@dataclass
+class SessionAgentSelectParams:
+    name: str
+    """Name of the custom agent to select"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentSelectParams':
+        assert isinstance(obj, dict)
+        name = from_str(obj.get("name"))
+        return SessionAgentSelectParams(name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["name"] = from_str(self.name)
+        return result
+
+
+@dataclass
+class SessionAgentDeselectResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentDeselectResult':
+        assert isinstance(obj, dict)
+        return SessionAgentDeselectResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+@dataclass
+class SessionCompactionCompactResult:
+    messages_removed: float
+    """Number of messages removed during compaction"""
+
+    success: bool
+    """Whether compaction completed successfully"""
+
+    tokens_removed: float
+    """Number of tokens freed by compaction"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionCompactionCompactResult':
+        assert isinstance(obj, dict)
+        messages_removed = from_float(obj.get("messagesRemoved"))
+        success = from_bool(obj.get("success"))
+        tokens_removed = from_float(obj.get("tokensRemoved"))
+        return SessionCompactionCompactResult(messages_removed, success, tokens_removed)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["messagesRemoved"] = to_float(self.messages_removed)
+        result["success"] = from_bool(self.success)
+        result["tokensRemoved"] = to_float(self.tokens_removed)
         return result
 
 
@@ -908,6 +1101,54 @@ def session_fleet_start_params_to_dict(x: SessionFleetStartParams) -> Any:
     return to_class(SessionFleetStartParams, x)
 
 
+def session_agent_list_result_from_dict(s: Any) -> SessionAgentListResult:
+    return SessionAgentListResult.from_dict(s)
+
+
+def session_agent_list_result_to_dict(x: SessionAgentListResult) -> Any:
+    return to_class(SessionAgentListResult, x)
+
+
+def session_agent_get_current_result_from_dict(s: Any) -> SessionAgentGetCurrentResult:
+    return SessionAgentGetCurrentResult.from_dict(s)
+
+
+def session_agent_get_current_result_to_dict(x: SessionAgentGetCurrentResult) -> Any:
+    return to_class(SessionAgentGetCurrentResult, x)
+
+
+def session_agent_select_result_from_dict(s: Any) -> SessionAgentSelectResult:
+    return SessionAgentSelectResult.from_dict(s)
+
+
+def session_agent_select_result_to_dict(x: SessionAgentSelectResult) -> Any:
+    return to_class(SessionAgentSelectResult, x)
+
+
+def session_agent_select_params_from_dict(s: Any) -> SessionAgentSelectParams:
+    return SessionAgentSelectParams.from_dict(s)
+
+
+def session_agent_select_params_to_dict(x: SessionAgentSelectParams) -> Any:
+    return to_class(SessionAgentSelectParams, x)
+
+
+def session_agent_deselect_result_from_dict(s: Any) -> SessionAgentDeselectResult:
+    return SessionAgentDeselectResult.from_dict(s)
+
+
+def session_agent_deselect_result_to_dict(x: SessionAgentDeselectResult) -> Any:
+    return to_class(SessionAgentDeselectResult, x)
+
+
+def session_compaction_compact_result_from_dict(s: Any) -> SessionCompactionCompactResult:
+    return SessionCompactionCompactResult.from_dict(s)
+
+
+def session_compaction_compact_result_to_dict(x: SessionCompactionCompactResult) -> Any:
+    return to_class(SessionCompactionCompactResult, x)
+
+
 class ModelsApi:
     def __init__(self, client: "JsonRpcClient"):
         self._client = client
@@ -1021,6 +1262,35 @@ class FleetApi:
         return SessionFleetStartResult.from_dict(await self._client.request("session.fleet.start", params_dict))
 
 
+class AgentApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def list(self) -> SessionAgentListResult:
+        return SessionAgentListResult.from_dict(await self._client.request("session.agent.list", {"sessionId": self._session_id}))
+
+    async def get_current(self) -> SessionAgentGetCurrentResult:
+        return SessionAgentGetCurrentResult.from_dict(await self._client.request("session.agent.getCurrent", {"sessionId": self._session_id}))
+
+    async def select(self, params: SessionAgentSelectParams) -> SessionAgentSelectResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionAgentSelectResult.from_dict(await self._client.request("session.agent.select", params_dict))
+
+    async def deselect(self) -> SessionAgentDeselectResult:
+        return SessionAgentDeselectResult.from_dict(await self._client.request("session.agent.deselect", {"sessionId": self._session_id}))
+
+
+class CompactionApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def compact(self) -> SessionCompactionCompactResult:
+        return SessionCompactionCompactResult.from_dict(await self._client.request("session.compaction.compact", {"sessionId": self._session_id}))
+
+
 class SessionRpc:
     """Typed session-scoped RPC methods."""
     def __init__(self, client: "JsonRpcClient", session_id: str):
@@ -1031,4 +1301,6 @@ class SessionRpc:
         self.plan = PlanApi(client, session_id)
         self.workspace = WorkspaceApi(client, session_id)
         self.fleet = FleetApi(client, session_id)
+        self.agent = AgentApi(client, session_id)
+        self.compaction = CompactionApi(client, session_id)
 
