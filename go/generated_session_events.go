@@ -102,12 +102,14 @@ type Data struct {
 	AgentMode                       *AgentMode               `json:"agentMode,omitempty"`
 	Attachments                     []Attachment             `json:"attachments,omitempty"`
 	Content                         *string                  `json:"content,omitempty"`
+	InteractionID                   *string                  `json:"interactionId,omitempty"`
 	Source                          *string                  `json:"source,omitempty"`
 	TransformedContent              *string                  `json:"transformedContent,omitempty"`
 	TurnID                          *string                  `json:"turnId,omitempty"`
 	Intent                          *string                  `json:"intent,omitempty"`
 	ReasoningID                     *string                  `json:"reasoningId,omitempty"`
 	DeltaContent                    *string                  `json:"deltaContent,omitempty"`
+	TotalResponseSizeBytes          *float64                 `json:"totalResponseSizeBytes,omitempty"`
 	EncryptedContent                *string                  `json:"encryptedContent,omitempty"`
 	MessageID                       *string                  `json:"messageId,omitempty"`
 	ParentToolCallID                *string                  `json:"parentToolCallId,omitempty"`
@@ -115,10 +117,10 @@ type Data struct {
 	ReasoningOpaque                 *string                  `json:"reasoningOpaque,omitempty"`
 	ReasoningText                   *string                  `json:"reasoningText,omitempty"`
 	ToolRequests                    []ToolRequest            `json:"toolRequests,omitempty"`
-	TotalResponseSizeBytes          *float64                 `json:"totalResponseSizeBytes,omitempty"`
 	APICallID                       *string                  `json:"apiCallId,omitempty"`
 	CacheReadTokens                 *float64                 `json:"cacheReadTokens,omitempty"`
 	CacheWriteTokens                *float64                 `json:"cacheWriteTokens,omitempty"`
+	CopilotUsage                    *CopilotUsage            `json:"copilotUsage,omitempty"`
 	Cost                            *float64                 `json:"cost,omitempty"`
 	Duration                        *float64                 `json:"duration,omitempty"`
 	Initiator                       *string                  `json:"initiator,omitempty"`
@@ -139,6 +141,8 @@ type Data struct {
 	ToolTelemetry                   map[string]interface{}   `json:"toolTelemetry,omitempty"`
 	AllowedTools                    []string                 `json:"allowedTools,omitempty"`
 	Name                            *string                  `json:"name,omitempty"`
+	PluginName                      *string                  `json:"pluginName,omitempty"`
+	PluginVersion                   *string                  `json:"pluginVersion,omitempty"`
 	AgentDescription                *string                  `json:"agentDescription,omitempty"`
 	AgentDisplayName                *string                  `json:"agentDisplayName,omitempty"`
 	AgentName                       *string                  `json:"agentName,omitempty"`
@@ -152,13 +156,18 @@ type Data struct {
 }
 
 type Attachment struct {
-	DisplayName string          `json:"displayName"`
-	LineRange   *LineRange      `json:"lineRange,omitempty"`
-	Path        *string         `json:"path,omitempty"`
-	Type        AttachmentType  `json:"type"`
-	FilePath    *string         `json:"filePath,omitempty"`
-	Selection   *SelectionClass `json:"selection,omitempty"`
-	Text        *string         `json:"text,omitempty"`
+	DisplayName   *string         `json:"displayName,omitempty"`
+	LineRange     *LineRange      `json:"lineRange,omitempty"`
+	Path          *string         `json:"path,omitempty"`
+	Type          AttachmentType  `json:"type"`
+	FilePath      *string         `json:"filePath,omitempty"`
+	Selection     *SelectionClass `json:"selection,omitempty"`
+	Text          *string         `json:"text,omitempty"`
+	Number        *float64        `json:"number,omitempty"`
+	ReferenceType *ReferenceType  `json:"referenceType,omitempty"`
+	State         *string         `json:"state,omitempty"`
+	Title         *string         `json:"title,omitempty"`
+	URL           *string         `json:"url,omitempty"`
 }
 
 type LineRange struct {
@@ -198,6 +207,18 @@ type ContextClass struct {
 	Cwd        string  `json:"cwd"`
 	GitRoot    *string `json:"gitRoot,omitempty"`
 	Repository *string `json:"repository,omitempty"`
+}
+
+type CopilotUsage struct {
+	TokenDetails []TokenDetail `json:"tokenDetails"`
+	TotalNanoAiu float64       `json:"totalNanoAiu"`
+}
+
+type TokenDetail struct {
+	BatchSize    float64 `json:"batchSize"`
+	CostPerBatch float64 `json:"costPerBatch"`
+	TokenCount   float64 `json:"tokenCount"`
+	TokenType    string  `json:"tokenType"`
 }
 
 type ErrorClass struct {
@@ -297,12 +318,21 @@ const (
 	Shell       AgentMode = "shell"
 )
 
+type ReferenceType string
+
+const (
+	Discussion ReferenceType = "discussion"
+	Issue      ReferenceType = "issue"
+	PR         ReferenceType = "pr"
+)
+
 type AttachmentType string
 
 const (
-	Directory AttachmentType = "directory"
-	File      AttachmentType = "file"
-	Selection AttachmentType = "selection"
+	Directory       AttachmentType = "directory"
+	File            AttachmentType = "file"
+	GithubReference AttachmentType = "github_reference"
+	Selection       AttachmentType = "selection"
 )
 
 type Operation string
@@ -368,6 +398,7 @@ const (
 	AssistantMessageDelta       SessionEventType = "assistant.message_delta"
 	AssistantReasoning          SessionEventType = "assistant.reasoning"
 	AssistantReasoningDelta     SessionEventType = "assistant.reasoning_delta"
+	AssistantStreamingDelta     SessionEventType = "assistant.streaming_delta"
 	AssistantTurnEnd            SessionEventType = "assistant.turn_end"
 	AssistantTurnStart          SessionEventType = "assistant.turn_start"
 	AssistantUsage              SessionEventType = "assistant.usage"
@@ -388,6 +419,7 @@ const (
 	SessionShutdown             SessionEventType = "session.shutdown"
 	SessionSnapshotRewind       SessionEventType = "session.snapshot_rewind"
 	SessionStart                SessionEventType = "session.start"
+	SessionTaskComplete         SessionEventType = "session.task_complete"
 	SessionTitleChanged         SessionEventType = "session.title_changed"
 	SessionTruncation           SessionEventType = "session.truncation"
 	SessionUsageInfo            SessionEventType = "session.usage_info"
@@ -395,6 +427,7 @@ const (
 	SessionWorkspaceFileChanged SessionEventType = "session.workspace_file_changed"
 	SkillInvoked                SessionEventType = "skill.invoked"
 	SubagentCompleted           SessionEventType = "subagent.completed"
+	SubagentDeselected          SessionEventType = "subagent.deselected"
 	SubagentFailed              SessionEventType = "subagent.failed"
 	SubagentSelected            SessionEventType = "subagent.selected"
 	SubagentStarted             SessionEventType = "subagent.started"
