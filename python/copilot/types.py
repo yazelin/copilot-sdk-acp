@@ -4,11 +4,9 @@ Type definitions for the Copilot SDK
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, TypedDict, Union
-
-from typing_extensions import NotRequired
+from typing import Any, Literal, NotRequired, TypedDict
 
 # Import generated SessionEvent types
 from .generated.session_events import SessionEvent
@@ -65,7 +63,7 @@ class SelectionAttachment(TypedDict):
 
 
 # Attachment type - union of all attachment types
-Attachment = Union[FileAttachment, DirectoryAttachment, SelectionAttachment]
+Attachment = FileAttachment | DirectoryAttachment | SelectionAttachment
 
 
 # Options for creating a CopilotClient
@@ -127,7 +125,7 @@ class ToolInvocation(TypedDict):
     arguments: Any
 
 
-ToolHandler = Callable[[ToolInvocation], Union[ToolResult, Awaitable[ToolResult]]]
+ToolHandler = Callable[[ToolInvocation], ToolResult | Awaitable[ToolResult]]
 
 
 @dataclass
@@ -162,14 +160,14 @@ class SystemMessageReplaceConfig(TypedDict):
 
 
 # Union type - use one or the other
-SystemMessageConfig = Union[SystemMessageAppendConfig, SystemMessageReplaceConfig]
+SystemMessageConfig = SystemMessageAppendConfig | SystemMessageReplaceConfig
 
 
 # Permission request types
 class PermissionRequest(TypedDict, total=False):
     """Permission request from the server"""
 
-    kind: Literal["shell", "write", "mcp", "read", "url"]
+    kind: Literal["shell", "write", "mcp", "read", "url", "custom-tool"]
     toolCallId: str
     # Additional fields vary by kind
 
@@ -188,14 +186,16 @@ class PermissionRequestResult(TypedDict, total=False):
 
 _PermissionHandlerFn = Callable[
     [PermissionRequest, dict[str, str]],
-    Union[PermissionRequestResult, Awaitable[PermissionRequestResult]],
+    PermissionRequestResult | Awaitable[PermissionRequestResult],
 ]
 
 
 class PermissionHandler:
     @staticmethod
-    def approve_all(request: Any, invocation: Any) -> dict:
-        return {"kind": "approved"}
+    def approve_all(
+        request: PermissionRequest, invocation: dict[str, str]
+    ) -> PermissionRequestResult:
+        return PermissionRequestResult(kind="approved")
 
 
 # ============================================================================
@@ -220,7 +220,7 @@ class UserInputResponse(TypedDict):
 
 UserInputHandler = Callable[
     [UserInputRequest, dict[str, str]],
-    Union[UserInputResponse, Awaitable[UserInputResponse]],
+    UserInputResponse | Awaitable[UserInputResponse],
 ]
 
 
@@ -257,7 +257,7 @@ class PreToolUseHookOutput(TypedDict, total=False):
 
 PreToolUseHandler = Callable[
     [PreToolUseHookInput, dict[str, str]],
-    Union[PreToolUseHookOutput, None, Awaitable[Union[PreToolUseHookOutput, None]]],
+    PreToolUseHookOutput | None | Awaitable[PreToolUseHookOutput | None],
 ]
 
 
@@ -281,7 +281,7 @@ class PostToolUseHookOutput(TypedDict, total=False):
 
 PostToolUseHandler = Callable[
     [PostToolUseHookInput, dict[str, str]],
-    Union[PostToolUseHookOutput, None, Awaitable[Union[PostToolUseHookOutput, None]]],
+    PostToolUseHookOutput | None | Awaitable[PostToolUseHookOutput | None],
 ]
 
 
@@ -303,11 +303,7 @@ class UserPromptSubmittedHookOutput(TypedDict, total=False):
 
 UserPromptSubmittedHandler = Callable[
     [UserPromptSubmittedHookInput, dict[str, str]],
-    Union[
-        UserPromptSubmittedHookOutput,
-        None,
-        Awaitable[Union[UserPromptSubmittedHookOutput, None]],
-    ],
+    UserPromptSubmittedHookOutput | None | Awaitable[UserPromptSubmittedHookOutput | None],
 ]
 
 
@@ -329,7 +325,7 @@ class SessionStartHookOutput(TypedDict, total=False):
 
 SessionStartHandler = Callable[
     [SessionStartHookInput, dict[str, str]],
-    Union[SessionStartHookOutput, None, Awaitable[Union[SessionStartHookOutput, None]]],
+    SessionStartHookOutput | None | Awaitable[SessionStartHookOutput | None],
 ]
 
 
@@ -353,7 +349,7 @@ class SessionEndHookOutput(TypedDict, total=False):
 
 SessionEndHandler = Callable[
     [SessionEndHookInput, dict[str, str]],
-    Union[SessionEndHookOutput, None, Awaitable[Union[SessionEndHookOutput, None]]],
+    SessionEndHookOutput | None | Awaitable[SessionEndHookOutput | None],
 ]
 
 
@@ -378,7 +374,7 @@ class ErrorOccurredHookOutput(TypedDict, total=False):
 
 ErrorOccurredHandler = Callable[
     [ErrorOccurredHookInput, dict[str, str]],
-    Union[ErrorOccurredHookOutput, None, Awaitable[Union[ErrorOccurredHookOutput, None]]],
+    ErrorOccurredHookOutput | None | Awaitable[ErrorOccurredHookOutput | None],
 ]
 
 
@@ -420,7 +416,7 @@ class MCPRemoteServerConfig(TypedDict, total=False):
     headers: NotRequired[dict[str, str]]  # HTTP headers
 
 
-MCPServerConfig = Union[MCPLocalServerConfig, MCPRemoteServerConfig]
+MCPServerConfig = MCPLocalServerConfig | MCPRemoteServerConfig
 
 
 # ============================================================================
@@ -625,10 +621,13 @@ class PingResponse:
 
 # Error information from client stop
 @dataclass
-class StopError:
-    """Error information from client stop"""
+class StopError(Exception):
+    """Error that occurred during client stop cleanup."""
 
     message: str  # Error message describing what failed during cleanup
+
+    def __post_init__(self) -> None:
+        Exception.__init__(self, self.message)
 
     @staticmethod
     def from_dict(obj: Any) -> StopError:

@@ -286,6 +286,16 @@ export type SessionEvent =
       timestamp: string;
       parentId: string | null;
       ephemeral?: boolean;
+      type: "session.task_complete";
+      data: {
+        summary?: string;
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral?: boolean;
       type: "user.message";
       data: {
         content: string;
@@ -325,9 +335,18 @@ export type SessionEvent =
                 };
               };
             }
+          | {
+              type: "github_reference";
+              number: number;
+              title: string;
+              referenceType: "issue" | "pr" | "discussion";
+              state: string;
+              url: string;
+            }
         )[];
         source?: string;
         agentMode?: "interactive" | "plan" | "autopilot" | "shell";
+        interactionId?: string;
       };
     }
   | {
@@ -346,6 +365,7 @@ export type SessionEvent =
       type: "assistant.turn_start";
       data: {
         turnId: string;
+        interactionId?: string;
       };
     }
   | {
@@ -384,6 +404,16 @@ export type SessionEvent =
       id: string;
       timestamp: string;
       parentId: string | null;
+      ephemeral: true;
+      type: "assistant.streaming_delta";
+      data: {
+        totalResponseSizeBytes: number;
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
       ephemeral?: boolean;
       type: "assistant.message";
       data: {
@@ -399,6 +429,7 @@ export type SessionEvent =
         reasoningText?: string;
         encryptedContent?: string;
         phase?: string;
+        interactionId?: string;
         parentToolCallId?: string;
       };
     }
@@ -411,7 +442,6 @@ export type SessionEvent =
       data: {
         messageId: string;
         deltaContent: string;
-        totalResponseSizeBytes?: number;
         parentToolCallId?: string;
       };
     }
@@ -454,6 +484,15 @@ export type SessionEvent =
             remainingPercentage: number;
             resetDate?: string;
           };
+        };
+        copilotUsage?: {
+          tokenDetails: {
+            batchSize: number;
+            costPerBatch: number;
+            tokenCount: number;
+            tokenType: string;
+          }[];
+          totalNanoAiu: number;
         };
       };
     }
@@ -525,6 +564,8 @@ export type SessionEvent =
       data: {
         toolCallId: string;
         success: boolean;
+        model?: string;
+        interactionId?: string;
         isUserRequested?: boolean;
         result?: {
           content: string;
@@ -602,6 +643,8 @@ export type SessionEvent =
         path: string;
         content: string;
         allowedTools?: string[];
+        pluginName?: string;
+        pluginVersion?: string;
       };
     }
   | {
@@ -653,6 +696,14 @@ export type SessionEvent =
         agentDisplayName: string;
         tools: string[] | null;
       };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral?: boolean;
+      type: "subagent.deselected";
+      data: {};
     }
   | {
       id: string;
