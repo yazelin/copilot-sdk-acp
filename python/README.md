@@ -210,6 +210,20 @@ session = await client.create_session({
 
 The SDK automatically handles `tool.call`, executes your handler (sync or async), and responds with the final result when the tool completes.
 
+#### Overriding Built-in Tools
+
+If you register a tool with the same name as a built-in CLI tool (e.g. `edit_file`, `read_file`), the SDK will throw an error unless you explicitly opt in by setting `overrides_built_in_tool=True`. This flag signals that you intend to replace the built-in tool with your custom implementation.
+
+```python
+class EditFileParams(BaseModel):
+    path: str = Field(description="File path")
+    content: str = Field(description="New file content")
+
+@define_tool(name="edit_file", description="Custom file editor with project-specific validation", overrides_built_in_tool=True)
+async def edit_file(params: EditFileParams) -> str:
+    # your logic
+```
+
 ## Image Support
 
 The SDK supports image attachments via the `attachments` parameter. You can attach images by providing their file path:
@@ -401,11 +415,11 @@ async def handle_user_input(request, invocation):
     # request["question"] - The question to ask
     # request.get("choices") - Optional list of choices for multiple choice
     # request.get("allowFreeform", True) - Whether freeform input is allowed
-    
+
     print(f"Agent asks: {request['question']}")
     if request.get("choices"):
         print(f"Choices: {', '.join(request['choices'])}")
-    
+
     # Return the user's response
     return {
         "answer": "User's answer here",
@@ -483,5 +497,5 @@ session = await client.create_session({
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.11+
 - GitHub Copilot CLI installed and accessible

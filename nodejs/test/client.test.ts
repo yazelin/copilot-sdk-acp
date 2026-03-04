@@ -1,16 +1,37 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { CopilotClient } from "../src/index.js";
+import { approveAll, CopilotClient } from "../src/index.js";
 
 // This file is for unit tests. Where relevant, prefer to add e2e tests in e2e/*.test.ts instead
 
 describe("CopilotClient", () => {
+    it("throws when createSession is called without onPermissionRequest", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        await expect((client as any).createSession({})).rejects.toThrow(
+            /onPermissionRequest.*is required/
+        );
+    });
+
+    it("throws when resumeSession is called without onPermissionRequest", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const session = await client.createSession({ onPermissionRequest: approveAll });
+        await expect((client as any).resumeSession(session.sessionId, {})).rejects.toThrow(
+            /onPermissionRequest.*is required/
+        );
+    });
+
     it("returns a standardized failure result when a tool is not registered", async () => {
         const client = new CopilotClient();
         await client.start();
         onTestFinished(() => client.forceStop());
 
-        const session = await client.createSession();
+        const session = await client.createSession({ onPermissionRequest: approveAll });
 
         const response = await (
             client as unknown as { handleToolCallRequest: (typeof client)["handleToolCallRequest"] }
@@ -33,7 +54,7 @@ describe("CopilotClient", () => {
         onTestFinished(() => client.forceStop());
 
         const spy = vi.spyOn((client as any).connection!, "sendRequest");
-        await client.createSession({ clientName: "my-app" });
+        await client.createSession({ clientName: "my-app", onPermissionRequest: approveAll });
 
         expect(spy).toHaveBeenCalledWith(
             "session.create",
@@ -46,14 +67,43 @@ describe("CopilotClient", () => {
         await client.start();
         onTestFinished(() => client.forceStop());
 
-        const session = await client.createSession();
+        const session = await client.createSession({ onPermissionRequest: approveAll });
         const spy = vi.spyOn((client as any).connection!, "sendRequest");
-        await client.resumeSession(session.sessionId, { clientName: "my-app" });
+        await client.resumeSession(session.sessionId, {
+            clientName: "my-app",
+            onPermissionRequest: approveAll,
+        });
 
         expect(spy).toHaveBeenCalledWith(
             "session.resume",
             expect.objectContaining({ clientName: "my-app", sessionId: session.sessionId })
         );
+    });
+
+    it("sends session.model.switchTo RPC with correct params", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const session = await client.createSession({ onPermissionRequest: approveAll });
+
+        // Mock sendRequest to capture the call without hitting the runtime
+        const spy = vi
+            .spyOn((client as any).connection!, "sendRequest")
+            .mockImplementation(async (method: string, _params: any) => {
+                if (method === "session.model.switchTo") return {};
+                // Fall through for other methods (shouldn't be called)
+                throw new Error(`Unexpected method: ${method}`);
+            });
+
+        await session.setModel("gpt-4.1");
+
+        expect(spy).toHaveBeenCalledWith("session.model.switchTo", {
+            sessionId: session.sessionId,
+            modelId: "gpt-4.1",
+        });
+
+        spy.mockRestore();
     });
 
     describe("URL parsing", () => {
@@ -269,6 +319,57 @@ describe("CopilotClient", () => {
                     logLevel: "error",
                 });
             }).toThrow(/githubToken and useLoggedInUser cannot be used with cliUrl/);
+        });
+    });
+
+    describe("overridesBuiltInTool in tool definitions", () => {
+        it("sends overridesBuiltInTool in tool definition on session.create", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const spy = vi.spyOn((client as any).connection!, "sendRequest");
+            await client.createSession({
+                onPermissionRequest: approveAll,
+                tools: [
+                    {
+                        name: "grep",
+                        description: "custom grep",
+                        handler: async () => "ok",
+                        overridesBuiltInTool: true,
+                    },
+                ],
+            });
+
+            const payload = spy.mock.calls.find((c) => c[0] === "session.create")![1] as any;
+            expect(payload.tools).toEqual([
+                expect.objectContaining({ name: "grep", overridesBuiltInTool: true }),
+            ]);
+        });
+
+        it("sends overridesBuiltInTool in tool definition on session.resume", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({ onPermissionRequest: approveAll });
+            const spy = vi.spyOn((client as any).connection!, "sendRequest");
+            await client.resumeSession(session.sessionId, {
+                onPermissionRequest: approveAll,
+                tools: [
+                    {
+                        name: "grep",
+                        description: "custom grep",
+                        handler: async () => "ok",
+                        overridesBuiltInTool: true,
+                    },
+                ],
+            });
+
+            const payload = spy.mock.calls.find((c) => c[0] === "session.resume")![1] as any;
+            expect(payload.tools).toEqual([
+                expect.objectContaining({ name: "grep", overridesBuiltInTool: true }),
+            ]);
         });
     });
 });
