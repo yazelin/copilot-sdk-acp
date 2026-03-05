@@ -102,12 +102,14 @@ type Data struct {
 	AgentMode                       *AgentMode               `json:"agentMode,omitempty"`
 	Attachments                     []Attachment             `json:"attachments,omitempty"`
 	Content                         *string                  `json:"content,omitempty"`
+	InteractionID                   *string                  `json:"interactionId,omitempty"`
 	Source                          *string                  `json:"source,omitempty"`
 	TransformedContent              *string                  `json:"transformedContent,omitempty"`
 	TurnID                          *string                  `json:"turnId,omitempty"`
 	Intent                          *string                  `json:"intent,omitempty"`
 	ReasoningID                     *string                  `json:"reasoningId,omitempty"`
 	DeltaContent                    *string                  `json:"deltaContent,omitempty"`
+	TotalResponseSizeBytes          *float64                 `json:"totalResponseSizeBytes,omitempty"`
 	EncryptedContent                *string                  `json:"encryptedContent,omitempty"`
 	MessageID                       *string                  `json:"messageId,omitempty"`
 	ParentToolCallID                *string                  `json:"parentToolCallId,omitempty"`
@@ -115,10 +117,10 @@ type Data struct {
 	ReasoningOpaque                 *string                  `json:"reasoningOpaque,omitempty"`
 	ReasoningText                   *string                  `json:"reasoningText,omitempty"`
 	ToolRequests                    []ToolRequest            `json:"toolRequests,omitempty"`
-	TotalResponseSizeBytes          *float64                 `json:"totalResponseSizeBytes,omitempty"`
 	APICallID                       *string                  `json:"apiCallId,omitempty"`
 	CacheReadTokens                 *float64                 `json:"cacheReadTokens,omitempty"`
 	CacheWriteTokens                *float64                 `json:"cacheWriteTokens,omitempty"`
+	CopilotUsage                    *CopilotUsage            `json:"copilotUsage,omitempty"`
 	Cost                            *float64                 `json:"cost,omitempty"`
 	Duration                        *float64                 `json:"duration,omitempty"`
 	Initiator                       *string                  `json:"initiator,omitempty"`
@@ -139,6 +141,8 @@ type Data struct {
 	ToolTelemetry                   map[string]interface{}   `json:"toolTelemetry,omitempty"`
 	AllowedTools                    []string                 `json:"allowedTools,omitempty"`
 	Name                            *string                  `json:"name,omitempty"`
+	PluginName                      *string                  `json:"pluginName,omitempty"`
+	PluginVersion                   *string                  `json:"pluginVersion,omitempty"`
 	AgentDescription                *string                  `json:"agentDescription,omitempty"`
 	AgentDisplayName                *string                  `json:"agentDisplayName,omitempty"`
 	AgentName                       *string                  `json:"agentName,omitempty"`
@@ -149,16 +153,27 @@ type Data struct {
 	Output                          interface{}              `json:"output"`
 	Metadata                        *Metadata                `json:"metadata,omitempty"`
 	Role                            *Role                    `json:"role,omitempty"`
+	PermissionRequest               *PermissionRequest       `json:"permissionRequest,omitempty"`
+	AllowFreeform                   *bool                    `json:"allowFreeform,omitempty"`
+	Choices                         []string                 `json:"choices,omitempty"`
+	Question                        *string                  `json:"question,omitempty"`
+	Mode                            *Mode                    `json:"mode,omitempty"`
+	RequestedSchema                 *RequestedSchema         `json:"requestedSchema,omitempty"`
 }
 
 type Attachment struct {
-	DisplayName string          `json:"displayName"`
-	LineRange   *LineRange      `json:"lineRange,omitempty"`
-	Path        *string         `json:"path,omitempty"`
-	Type        AttachmentType  `json:"type"`
-	FilePath    *string         `json:"filePath,omitempty"`
-	Selection   *SelectionClass `json:"selection,omitempty"`
-	Text        *string         `json:"text,omitempty"`
+	DisplayName   *string         `json:"displayName,omitempty"`
+	LineRange     *LineRange      `json:"lineRange,omitempty"`
+	Path          *string         `json:"path,omitempty"`
+	Type          AttachmentType  `json:"type"`
+	FilePath      *string         `json:"filePath,omitempty"`
+	Selection     *SelectionClass `json:"selection,omitempty"`
+	Text          *string         `json:"text,omitempty"`
+	Number        *float64        `json:"number,omitempty"`
+	ReferenceType *ReferenceType  `json:"referenceType,omitempty"`
+	State         *string         `json:"state,omitempty"`
+	Title         *string         `json:"title,omitempty"`
+	URL           *string         `json:"url,omitempty"`
 }
 
 type LineRange struct {
@@ -200,6 +215,18 @@ type ContextClass struct {
 	Repository *string `json:"repository,omitempty"`
 }
 
+type CopilotUsage struct {
+	TokenDetails []TokenDetail `json:"tokenDetails"`
+	TotalNanoAiu float64       `json:"totalNanoAiu"`
+}
+
+type TokenDetail struct {
+	BatchSize    float64 `json:"batchSize"`
+	CostPerBatch float64 `json:"costPerBatch"`
+	TokenCount   float64 `json:"tokenCount"`
+	TokenType    string  `json:"tokenType"`
+}
+
 type ErrorClass struct {
 	Code    *string `json:"code,omitempty"`
 	Message string  `json:"message"`
@@ -228,6 +255,42 @@ type Usage struct {
 	OutputTokens     float64 `json:"outputTokens"`
 }
 
+type PermissionRequest struct {
+	CanOfferSessionApproval *bool         `json:"canOfferSessionApproval,omitempty"`
+	Commands                []Command     `json:"commands,omitempty"`
+	FullCommandText         *string       `json:"fullCommandText,omitempty"`
+	HasWriteFileRedirection *bool         `json:"hasWriteFileRedirection,omitempty"`
+	Intention               *string       `json:"intention,omitempty"`
+	Kind                    Kind          `json:"kind"`
+	PossiblePaths           []string      `json:"possiblePaths,omitempty"`
+	PossibleUrls            []PossibleURL `json:"possibleUrls,omitempty"`
+	ToolCallID              *string       `json:"toolCallId,omitempty"`
+	Warning                 *string       `json:"warning,omitempty"`
+	Diff                    *string       `json:"diff,omitempty"`
+	FileName                *string       `json:"fileName,omitempty"`
+	NewFileContents         *string       `json:"newFileContents,omitempty"`
+	Path                    *string       `json:"path,omitempty"`
+	Args                    interface{}   `json:"args"`
+	ReadOnly                *bool         `json:"readOnly,omitempty"`
+	ServerName              *string       `json:"serverName,omitempty"`
+	ToolName                *string       `json:"toolName,omitempty"`
+	ToolTitle               *string       `json:"toolTitle,omitempty"`
+	URL                     *string       `json:"url,omitempty"`
+	Citations               *string       `json:"citations,omitempty"`
+	Fact                    *string       `json:"fact,omitempty"`
+	Subject                 *string       `json:"subject,omitempty"`
+	ToolDescription         *string       `json:"toolDescription,omitempty"`
+}
+
+type Command struct {
+	Identifier string `json:"identifier"`
+	ReadOnly   bool   `json:"readOnly"`
+}
+
+type PossibleURL struct {
+	URL string `json:"url"`
+}
+
 type QuotaSnapshot struct {
 	EntitlementRequests              float64    `json:"entitlementRequests"`
 	IsUnlimitedEntitlement           bool       `json:"isUnlimitedEntitlement"`
@@ -243,6 +306,12 @@ type RepositoryClass struct {
 	Branch *string `json:"branch,omitempty"`
 	Name   string  `json:"name"`
 	Owner  string  `json:"owner"`
+}
+
+type RequestedSchema struct {
+	Properties map[string]interface{} `json:"properties"`
+	Required   []string               `json:"required,omitempty"`
+	Type       RequestedSchemaType    `json:"type"`
 }
 
 type Result struct {
@@ -291,18 +360,33 @@ type ToolRequest struct {
 type AgentMode string
 
 const (
-	Autopilot   AgentMode = "autopilot"
-	Interactive AgentMode = "interactive"
-	Plan        AgentMode = "plan"
-	Shell       AgentMode = "shell"
+	AgentModeShell AgentMode = "shell"
+	Autopilot      AgentMode = "autopilot"
+	Interactive    AgentMode = "interactive"
+	Plan           AgentMode = "plan"
+)
+
+type ReferenceType string
+
+const (
+	Discussion ReferenceType = "discussion"
+	Issue      ReferenceType = "issue"
+	PR         ReferenceType = "pr"
 )
 
 type AttachmentType string
 
 const (
-	Directory AttachmentType = "directory"
-	File      AttachmentType = "file"
-	Selection AttachmentType = "selection"
+	Directory       AttachmentType = "directory"
+	File            AttachmentType = "file"
+	GithubReference AttachmentType = "github_reference"
+	Selection       AttachmentType = "selection"
+)
+
+type Mode string
+
+const (
+	Form Mode = "form"
 )
 
 type Operation string
@@ -311,6 +395,24 @@ const (
 	Create Operation = "create"
 	Delete Operation = "delete"
 	Update Operation = "update"
+)
+
+type Kind string
+
+const (
+	CustomTool Kind = "custom-tool"
+	KindShell  Kind = "shell"
+	MCP        Kind = "mcp"
+	Memory     Kind = "memory"
+	Read       Kind = "read"
+	URL        Kind = "url"
+	Write      Kind = "write"
+)
+
+type RequestedSchemaType string
+
+const (
+	Object RequestedSchemaType = "object"
 )
 
 type Theme string
@@ -368,12 +470,17 @@ const (
 	AssistantMessageDelta       SessionEventType = "assistant.message_delta"
 	AssistantReasoning          SessionEventType = "assistant.reasoning"
 	AssistantReasoningDelta     SessionEventType = "assistant.reasoning_delta"
+	AssistantStreamingDelta     SessionEventType = "assistant.streaming_delta"
 	AssistantTurnEnd            SessionEventType = "assistant.turn_end"
 	AssistantTurnStart          SessionEventType = "assistant.turn_start"
 	AssistantUsage              SessionEventType = "assistant.usage"
+	ElicitationCompleted        SessionEventType = "elicitation.completed"
+	ElicitationRequested        SessionEventType = "elicitation.requested"
 	HookEnd                     SessionEventType = "hook.end"
 	HookStart                   SessionEventType = "hook.start"
 	PendingMessagesModified     SessionEventType = "pending_messages.modified"
+	PermissionCompleted         SessionEventType = "permission.completed"
+	PermissionRequested         SessionEventType = "permission.requested"
 	SessionCompactionComplete   SessionEventType = "session.compaction_complete"
 	SessionCompactionStart      SessionEventType = "session.compaction_start"
 	SessionContextChanged       SessionEventType = "session.context_changed"
@@ -388,6 +495,7 @@ const (
 	SessionShutdown             SessionEventType = "session.shutdown"
 	SessionSnapshotRewind       SessionEventType = "session.snapshot_rewind"
 	SessionStart                SessionEventType = "session.start"
+	SessionTaskComplete         SessionEventType = "session.task_complete"
 	SessionTitleChanged         SessionEventType = "session.title_changed"
 	SessionTruncation           SessionEventType = "session.truncation"
 	SessionUsageInfo            SessionEventType = "session.usage_info"
@@ -395,6 +503,7 @@ const (
 	SessionWorkspaceFileChanged SessionEventType = "session.workspace_file_changed"
 	SkillInvoked                SessionEventType = "skill.invoked"
 	SubagentCompleted           SessionEventType = "subagent.completed"
+	SubagentDeselected          SessionEventType = "subagent.deselected"
 	SubagentFailed              SessionEventType = "subagent.failed"
 	SubagentSelected            SessionEventType = "subagent.selected"
 	SubagentStarted             SessionEventType = "subagent.started"
@@ -404,6 +513,8 @@ const (
 	ToolExecutionProgress       SessionEventType = "tool.execution_progress"
 	ToolExecutionStart          SessionEventType = "tool.execution_start"
 	ToolUserRequested           SessionEventType = "tool.user_requested"
+	UserInputCompleted          SessionEventType = "user_input.completed"
+	UserInputRequested          SessionEventType = "user_input.requested"
 	UserMessage                 SessionEventType = "user.message"
 )
 

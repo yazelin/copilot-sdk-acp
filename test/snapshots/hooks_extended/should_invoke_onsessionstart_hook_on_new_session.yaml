@@ -5,6 +5,6 @@ conversations:
       - role: system
         content: ${system}
       - role: user
-        content: What is 1+1?
+        content: Say hi
       - role: assistant
-        content: 1 + 1 = 2
+        content: Hi! I'm ready to help you with your software engineering tasks. What would you like me to do?

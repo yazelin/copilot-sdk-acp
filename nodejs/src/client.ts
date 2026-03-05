@@ -93,7 +93,7 @@ function toJsonSchema(parameters: Tool["parameters"]): Record<string, unknown> |
  * const client = new CopilotClient({ cliUrl: "localhost:3000" });
  *
  * // Create a session
- * const session = await client.createSession({ model: "gpt-4" });
+ * const session = await client.createSession({ onPermissionRequest: approveAll, model: "gpt-4" });
  *
  * // Send messages and handle responses
  * session.on((event) => {
@@ -104,7 +104,7 @@ function toJsonSchema(parameters: Tool["parameters"]): Record<string, unknown> |
  * await session.send({ prompt: "Hello!" });
  *
  * // Clean up
- * await session.destroy();
+ * await session.disconnect();
  * await client.stop();
  * ```
  */
@@ -331,9 +331,13 @@ export class CopilotClient {
      * Stops the CLI server and closes all active sessions.
      *
      * This method performs graceful cleanup:
-     * 1. Destroys all active sessions with retry logic
+     * 1. Closes all active sessions (releases in-memory resources)
      * 2. Closes the JSON-RPC connection
      * 3. Terminates the CLI server process (if spawned by this client)
+     *
+     * Note: session data on disk is preserved, so sessions can be resumed later.
+     * To permanently remove session data before stopping, call
+     * {@link deleteSession} for each session first.
      *
      * @returns A promise that resolves with an array of errors encountered during cleanup.
      *          An empty array indicates all cleanup succeeded.
@@ -349,7 +353,7 @@ export class CopilotClient {
     async stop(): Promise<Error[]> {
         const errors: Error[] = [];
 
-        // Destroy all active sessions with retry logic
+        // Disconnect all active sessions with retry logic
         for (const session of this.sessions.values()) {
             const sessionId = session.sessionId;
             let lastError: Error | null = null;
@@ -357,7 +361,7 @@ export class CopilotClient {
             // Try up to 3 times with exponential backoff
             for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
-                    await session.destroy();
+                    await session.disconnect();
                     lastError = null;
                     break; // Success
                 } catch (error) {
@@ -374,7 +378,7 @@ export class CopilotClient {
             if (lastError) {
                 errors.push(
                     new Error(
-                        `Failed to destroy session ${sessionId} after 3 attempts: ${lastError.message}`
+                        `Failed to disconnect session ${sessionId} after 3 attempts: ${lastError.message}`
                     )
                 );
             }
@@ -539,10 +543,11 @@ export class CopilotClient {
      * @example
      * ```typescript
      * // Basic session
-     * const session = await client.createSession();
+     * const session = await client.createSession({ onPermissionRequest: approveAll });
      *
      * // Session with model and tools
      * const session = await client.createSession({
+     *   onPermissionRequest: approveAll,
      *   model: "gpt-4",
      *   tools: [{
      *     name: "get_weather",
@@ -553,7 +558,13 @@ export class CopilotClient {
      * });
      * ```
      */
-    async createSession(config: SessionConfig = {}): Promise<CopilotSession> {
+    async createSession(config: SessionConfig): Promise<CopilotSession> {
+        if (!config?.onPermissionRequest) {
+            throw new Error(
+                "An onPermissionRequest handler is required when creating a session. For example, to allow all permissions, use { onPermissionRequest: approveAll }."
+            );
+        }
+
         if (!this.connection) {
             if (this.options.autoStart) {
                 await this.start();
@@ -571,6 +582,7 @@ export class CopilotClient {
                 name: tool.name,
                 description: tool.description,
                 parameters: toJsonSchema(tool.parameters),
+                overridesBuiltInTool: tool.overridesBuiltInTool,
             })),
             systemMessage: config.systemMessage,
             availableTools: config.availableTools,
@@ -596,9 +608,7 @@ export class CopilotClient {
         };
         const session = new CopilotSession(sessionId, this.connection!, workspacePath);
         session.registerTools(config.tools);
-        if (config.onPermissionRequest) {
-            session.registerPermissionHandler(config.onPermissionRequest);
-        }
+        session.registerPermissionHandler(config.onPermissionRequest);
         if (config.onUserInputRequest) {
             session.registerUserInputHandler(config.onUserInputRequest);
         }
@@ -625,18 +635,22 @@ export class CopilotClient {
      * @example
      * ```typescript
      * // Resume a previous session
-     * const session = await client.resumeSession("session-123");
+     * const session = await client.resumeSession("session-123", { onPermissionRequest: approveAll });
      *
      * // Resume with new tools
      * const session = await client.resumeSession("session-123", {
+     *   onPermissionRequest: approveAll,
      *   tools: [myNewTool]
      * });
      * ```
      */
-    async resumeSession(
-        sessionId: string,
-        config: ResumeSessionConfig = {}
-    ): Promise<CopilotSession> {
+    async resumeSession(sessionId: string, config: ResumeSessionConfig): Promise<CopilotSession> {
+        if (!config?.onPermissionRequest) {
+            throw new Error(
+                "An onPermissionRequest handler is required when resuming a session. For example, to allow all permissions, use { onPermissionRequest: approveAll }."
+            );
+        }
+
         if (!this.connection) {
             if (this.options.autoStart) {
                 await this.start();
@@ -657,6 +671,7 @@ export class CopilotClient {
                 name: tool.name,
                 description: tool.description,
                 parameters: toJsonSchema(tool.parameters),
+                overridesBuiltInTool: tool.overridesBuiltInTool,
             })),
             provider: config.provider,
             requestPermission: true,
@@ -680,9 +695,7 @@ export class CopilotClient {
         };
         const session = new CopilotSession(resumedSessionId, this.connection!, workspacePath);
         session.registerTools(config.tools);
-        if (config.onPermissionRequest) {
-            session.registerPermissionHandler(config.onPermissionRequest);
-        }
+        session.registerPermissionHandler(config.onPermissionRequest);
         if (config.onUserInputRequest) {
             session.registerUserInputHandler(config.onUserInputRequest);
         }
@@ -702,7 +715,7 @@ export class CopilotClient {
      * @example
      * ```typescript
      * if (client.getState() === "connected") {
-     *   const session = await client.createSession();
+     *   const session = await client.createSession({ onPermissionRequest: approveAll });
      * }
      * ```
      */
@@ -847,7 +860,7 @@ export class CopilotClient {
      * ```typescript
      * const lastId = await client.getLastSessionId();
      * if (lastId) {
-     *   const session = await client.resumeSession(lastId);
+     *   const session = await client.resumeSession(lastId, { onPermissionRequest: approveAll });
      * }
      * ```
      */
@@ -861,10 +874,12 @@ export class CopilotClient {
     }
 
     /**
-     * Deletes a session and its data from disk.
+     * Permanently deletes a session and all its data from disk, including
+     * conversation history, planning state, and artifacts.
      *
-     * This permanently removes the session and all its conversation history.
-     * The session cannot be resumed after deletion.
+     * Unlike {@link CopilotSession.disconnect}, which only releases in-memory
+     * resources and preserves session data for later resumption, this method
+     * is irreversible. The session cannot be resumed after deletion.
      *
      * @param sessionId - The ID of the session to delete
      * @returns A promise that resolves when the session is deleted
