@@ -5,7 +5,8 @@ Generated from: session-events.schema.json
 
 from enum import Enum
 from dataclasses import dataclass
-from typing import Any, Optional, List, Dict, Union, TypeVar, Type, cast, Callable
+from typing import Any, TypeVar, cast
+from collections.abc import Callable
 from datetime import datetime
 from uuid import UUID
 import dateutil.parser
@@ -25,7 +26,7 @@ def to_float(x: Any) -> float:
     return x
 
 
-def to_class(c: Type[T], x: Any) -> dict:
+def to_class(c: type[T], x: Any) -> dict:
     assert isinstance(x, c)
     return cast(Any, x).to_dict()
 
@@ -49,17 +50,17 @@ def from_union(fs, x):
     assert False
 
 
-def to_enum(c: Type[EnumT], x: Any) -> EnumT:
+def to_enum(c: type[EnumT], x: Any) -> EnumT:
     assert isinstance(x, c)
     return x.value
 
 
-def from_list(f: Callable[[Any], T], x: Any) -> List[T]:
+def from_list(f: Callable[[Any], T], x: Any) -> list[T]:
     assert isinstance(x, list)
     return [f(y) for y in x]
 
 
-def from_dict(f: Callable[[Any], T], x: Any) -> Dict[str, T]:
+def from_dict(f: Callable[[Any], T], x: Any) -> dict[str, T]:
     assert isinstance(x, dict)
     return { k: f(v) for (k, v) in x.items() }
 
@@ -102,6 +103,12 @@ class LineRange:
         result["end"] = to_float(self.end)
         result["start"] = to_float(self.start)
         return result
+
+
+class ReferenceType(Enum):
+    DISCUSSION = "discussion"
+    ISSUE = "issue"
+    PR = "pr"
 
 
 @dataclass
@@ -164,35 +171,47 @@ class Selection:
 class AttachmentType(Enum):
     DIRECTORY = "directory"
     FILE = "file"
+    GITHUB_REFERENCE = "github_reference"
     SELECTION = "selection"
 
 
 @dataclass
 class Attachment:
-    display_name: str
     type: AttachmentType
-    line_range: Optional[LineRange] = None
-    path: Optional[str] = None
-    file_path: Optional[str] = None
-    selection: Optional[Selection] = None
-    text: Optional[str] = None
+    display_name: str | None = None
+    line_range: LineRange | None = None
+    path: str | None = None
+    file_path: str | None = None
+    selection: Selection | None = None
+    text: str | None = None
+    number: float | None = None
+    reference_type: ReferenceType | None = None
+    state: str | None = None
+    title: str | None = None
+    url: str | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Attachment':
         assert isinstance(obj, dict)
-        display_name = from_str(obj.get("displayName"))
         type = AttachmentType(obj.get("type"))
+        display_name = from_union([from_str, from_none], obj.get("displayName"))
         line_range = from_union([LineRange.from_dict, from_none], obj.get("lineRange"))
         path = from_union([from_str, from_none], obj.get("path"))
         file_path = from_union([from_str, from_none], obj.get("filePath"))
         selection = from_union([Selection.from_dict, from_none], obj.get("selection"))
         text = from_union([from_str, from_none], obj.get("text"))
-        return Attachment(display_name, type, line_range, path, file_path, selection, text)
+        number = from_union([from_float, from_none], obj.get("number"))
+        reference_type = from_union([ReferenceType, from_none], obj.get("referenceType"))
+        state = from_union([from_str, from_none], obj.get("state"))
+        title = from_union([from_str, from_none], obj.get("title"))
+        url = from_union([from_str, from_none], obj.get("url"))
+        return Attachment(type, display_name, line_range, path, file_path, selection, text, number, reference_type, state, title, url)
 
     def to_dict(self) -> dict:
         result: dict = {}
-        result["displayName"] = from_str(self.display_name)
         result["type"] = to_enum(AttachmentType, self.type)
+        if self.display_name is not None:
+            result["displayName"] = from_union([from_str, from_none], self.display_name)
         if self.line_range is not None:
             result["lineRange"] = from_union([lambda x: to_class(LineRange, x), from_none], self.line_range)
         if self.path is not None:
@@ -203,12 +222,22 @@ class Attachment:
             result["selection"] = from_union([lambda x: to_class(Selection, x), from_none], self.selection)
         if self.text is not None:
             result["text"] = from_union([from_str, from_none], self.text)
+        if self.number is not None:
+            result["number"] = from_union([to_float, from_none], self.number)
+        if self.reference_type is not None:
+            result["referenceType"] = from_union([lambda x: to_enum(ReferenceType, x), from_none], self.reference_type)
+        if self.state is not None:
+            result["state"] = from_union([from_str, from_none], self.state)
+        if self.title is not None:
+            result["title"] = from_union([from_str, from_none], self.title)
+        if self.url is not None:
+            result["url"] = from_union([from_str, from_none], self.url)
         return result
 
 
 @dataclass
 class CodeChanges:
-    files_modified: List[str]
+    files_modified: list[str]
     lines_added: float
     lines_removed: float
 
@@ -253,9 +282,9 @@ class CompactionTokensUsed:
 @dataclass
 class ContextClass:
     cwd: str
-    branch: Optional[str] = None
-    git_root: Optional[str] = None
-    repository: Optional[str] = None
+    branch: str | None = None
+    git_root: str | None = None
+    repository: str | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'ContextClass':
@@ -279,10 +308,54 @@ class ContextClass:
 
 
 @dataclass
+class TokenDetail:
+    batch_size: float
+    cost_per_batch: float
+    token_count: float
+    token_type: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'TokenDetail':
+        assert isinstance(obj, dict)
+        batch_size = from_float(obj.get("batchSize"))
+        cost_per_batch = from_float(obj.get("costPerBatch"))
+        token_count = from_float(obj.get("tokenCount"))
+        token_type = from_str(obj.get("tokenType"))
+        return TokenDetail(batch_size, cost_per_batch, token_count, token_type)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["batchSize"] = to_float(self.batch_size)
+        result["costPerBatch"] = to_float(self.cost_per_batch)
+        result["tokenCount"] = to_float(self.token_count)
+        result["tokenType"] = from_str(self.token_type)
+        return result
+
+
+@dataclass
+class CopilotUsage:
+    token_details: list[TokenDetail]
+    total_nano_aiu: float
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'CopilotUsage':
+        assert isinstance(obj, dict)
+        token_details = from_list(TokenDetail.from_dict, obj.get("tokenDetails"))
+        total_nano_aiu = from_float(obj.get("totalNanoAiu"))
+        return CopilotUsage(token_details, total_nano_aiu)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["tokenDetails"] = from_list(lambda x: to_class(TokenDetail, x), self.token_details)
+        result["totalNanoAiu"] = to_float(self.total_nano_aiu)
+        return result
+
+
+@dataclass
 class ErrorClass:
     message: str
-    code: Optional[str] = None
-    stack: Optional[str] = None
+    code: str | None = None
+    stack: str | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'ErrorClass':
@@ -304,8 +377,8 @@ class ErrorClass:
 
 @dataclass
 class Metadata:
-    prompt_version: Optional[str] = None
-    variables: Optional[Dict[str, Any]] = None
+    prompt_version: str | None = None
+    variables: dict[str, Any] | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Metadata':
@@ -321,6 +394,10 @@ class Metadata:
         if self.variables is not None:
             result["variables"] = from_union([lambda x: from_dict(lambda x: x, x), from_none], self.variables)
         return result
+
+
+class Mode(Enum):
+    FORM = "form"
 
 
 @dataclass
@@ -393,6 +470,159 @@ class Operation(Enum):
 
 
 @dataclass
+class Command:
+    identifier: str
+    read_only: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'Command':
+        assert isinstance(obj, dict)
+        identifier = from_str(obj.get("identifier"))
+        read_only = from_bool(obj.get("readOnly"))
+        return Command(identifier, read_only)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["identifier"] = from_str(self.identifier)
+        result["readOnly"] = from_bool(self.read_only)
+        return result
+
+
+class Kind(Enum):
+    CUSTOM_TOOL = "custom-tool"
+    MCP = "mcp"
+    MEMORY = "memory"
+    READ = "read"
+    SHELL = "shell"
+    URL = "url"
+    WRITE = "write"
+
+
+@dataclass
+class PossibleURL:
+    url: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'PossibleURL':
+        assert isinstance(obj, dict)
+        url = from_str(obj.get("url"))
+        return PossibleURL(url)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["url"] = from_str(self.url)
+        return result
+
+
+@dataclass
+class PermissionRequest:
+    kind: Kind
+    can_offer_session_approval: bool | None = None
+    commands: list[Command] | None = None
+    full_command_text: str | None = None
+    has_write_file_redirection: bool | None = None
+    intention: str | None = None
+    possible_paths: list[str] | None = None
+    possible_urls: list[PossibleURL] | None = None
+    tool_call_id: str | None = None
+    warning: str | None = None
+    diff: str | None = None
+    file_name: str | None = None
+    new_file_contents: str | None = None
+    path: str | None = None
+    args: Any = None
+    read_only: bool | None = None
+    server_name: str | None = None
+    tool_name: str | None = None
+    tool_title: str | None = None
+    url: str | None = None
+    citations: str | None = None
+    fact: str | None = None
+    subject: str | None = None
+    tool_description: str | None = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'PermissionRequest':
+        assert isinstance(obj, dict)
+        kind = Kind(obj.get("kind"))
+        can_offer_session_approval = from_union([from_bool, from_none], obj.get("canOfferSessionApproval"))
+        commands = from_union([lambda x: from_list(Command.from_dict, x), from_none], obj.get("commands"))
+        full_command_text = from_union([from_str, from_none], obj.get("fullCommandText"))
+        has_write_file_redirection = from_union([from_bool, from_none], obj.get("hasWriteFileRedirection"))
+        intention = from_union([from_str, from_none], obj.get("intention"))
+        possible_paths = from_union([lambda x: from_list(from_str, x), from_none], obj.get("possiblePaths"))
+        possible_urls = from_union([lambda x: from_list(PossibleURL.from_dict, x), from_none], obj.get("possibleUrls"))
+        tool_call_id = from_union([from_str, from_none], obj.get("toolCallId"))
+        warning = from_union([from_str, from_none], obj.get("warning"))
+        diff = from_union([from_str, from_none], obj.get("diff"))
+        file_name = from_union([from_str, from_none], obj.get("fileName"))
+        new_file_contents = from_union([from_str, from_none], obj.get("newFileContents"))
+        path = from_union([from_str, from_none], obj.get("path"))
+        args = obj.get("args")
+        read_only = from_union([from_bool, from_none], obj.get("readOnly"))
+        server_name = from_union([from_str, from_none], obj.get("serverName"))
+        tool_name = from_union([from_str, from_none], obj.get("toolName"))
+        tool_title = from_union([from_str, from_none], obj.get("toolTitle"))
+        url = from_union([from_str, from_none], obj.get("url"))
+        citations = from_union([from_str, from_none], obj.get("citations"))
+        fact = from_union([from_str, from_none], obj.get("fact"))
+        subject = from_union([from_str, from_none], obj.get("subject"))
+        tool_description = from_union([from_str, from_none], obj.get("toolDescription"))
+        return PermissionRequest(kind, can_offer_session_approval, commands, full_command_text, has_write_file_redirection, intention, possible_paths, possible_urls, tool_call_id, warning, diff, file_name, new_file_contents, path, args, read_only, server_name, tool_name, tool_title, url, citations, fact, subject, tool_description)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["kind"] = to_enum(Kind, self.kind)
+        if self.can_offer_session_approval is not None:
+            result["canOfferSessionApproval"] = from_union([from_bool, from_none], self.can_offer_session_approval)
+        if self.commands is not None:
+            result["commands"] = from_union([lambda x: from_list(lambda x: to_class(Command, x), x), from_none], self.commands)
+        if self.full_command_text is not None:
+            result["fullCommandText"] = from_union([from_str, from_none], self.full_command_text)
+        if self.has_write_file_redirection is not None:
+            result["hasWriteFileRedirection"] = from_union([from_bool, from_none], self.has_write_file_redirection)
+        if self.intention is not None:
+            result["intention"] = from_union([from_str, from_none], self.intention)
+        if self.possible_paths is not None:
+            result["possiblePaths"] = from_union([lambda x: from_list(from_str, x), from_none], self.possible_paths)
+        if self.possible_urls is not None:
+            result["possibleUrls"] = from_union([lambda x: from_list(lambda x: to_class(PossibleURL, x), x), from_none], self.possible_urls)
+        if self.tool_call_id is not None:
+            result["toolCallId"] = from_union([from_str, from_none], self.tool_call_id)
+        if self.warning is not None:
+            result["warning"] = from_union([from_str, from_none], self.warning)
+        if self.diff is not None:
+            result["diff"] = from_union([from_str, from_none], self.diff)
+        if self.file_name is not None:
+            result["fileName"] = from_union([from_str, from_none], self.file_name)
+        if self.new_file_contents is not None:
+            result["newFileContents"] = from_union([from_str, from_none], self.new_file_contents)
+        if self.path is not None:
+            result["path"] = from_union([from_str, from_none], self.path)
+        if self.args is not None:
+            result["args"] = self.args
+        if self.read_only is not None:
+            result["readOnly"] = from_union([from_bool, from_none], self.read_only)
+        if self.server_name is not None:
+            result["serverName"] = from_union([from_str, from_none], self.server_name)
+        if self.tool_name is not None:
+            result["toolName"] = from_union([from_str, from_none], self.tool_name)
+        if self.tool_title is not None:
+            result["toolTitle"] = from_union([from_str, from_none], self.tool_title)
+        if self.url is not None:
+            result["url"] = from_union([from_str, from_none], self.url)
+        if self.citations is not None:
+            result["citations"] = from_union([from_str, from_none], self.citations)
+        if self.fact is not None:
+            result["fact"] = from_union([from_str, from_none], self.fact)
+        if self.subject is not None:
+            result["subject"] = from_union([from_str, from_none], self.subject)
+        if self.tool_description is not None:
+            result["toolDescription"] = from_union([from_str, from_none], self.tool_description)
+        return result
+
+
+@dataclass
 class QuotaSnapshot:
     entitlement_requests: float
     is_unlimited_entitlement: bool
@@ -401,7 +631,7 @@ class QuotaSnapshot:
     remaining_percentage: float
     usage_allowed_with_exhausted_quota: bool
     used_requests: float
-    reset_date: Optional[datetime] = None
+    reset_date: datetime | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'QuotaSnapshot':
@@ -434,7 +664,7 @@ class QuotaSnapshot:
 class RepositoryClass:
     name: str
     owner: str
-    branch: Optional[str] = None
+    branch: str | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'RepositoryClass':
@@ -453,6 +683,33 @@ class RepositoryClass:
         return result
 
 
+class RequestedSchemaType(Enum):
+    OBJECT = "object"
+
+
+@dataclass
+class RequestedSchema:
+    properties: dict[str, Any]
+    type: RequestedSchemaType
+    required: list[str] | None = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'RequestedSchema':
+        assert isinstance(obj, dict)
+        properties = from_dict(lambda x: x, obj.get("properties"))
+        type = RequestedSchemaType(obj.get("type"))
+        required = from_union([lambda x: from_list(from_str, x), from_none], obj.get("required"))
+        return RequestedSchema(properties, type, required)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["properties"] = from_dict(lambda x: x, self.properties)
+        result["type"] = to_enum(RequestedSchemaType, self.type)
+        if self.required is not None:
+            result["required"] = from_union([lambda x: from_list(from_str, x), from_none], self.required)
+        return result
+
+
 class Theme(Enum):
     DARK = "dark"
     LIGHT = "light"
@@ -461,9 +718,9 @@ class Theme(Enum):
 @dataclass
 class Icon:
     src: str
-    mime_type: Optional[str] = None
-    sizes: Optional[List[str]] = None
-    theme: Optional[Theme] = None
+    mime_type: str | None = None
+    sizes: list[str] | None = None
+    theme: Theme | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Icon':
@@ -489,9 +746,9 @@ class Icon:
 @dataclass
 class Resource:
     uri: str
-    mime_type: Optional[str] = None
-    text: Optional[str] = None
-    blob: Optional[str] = None
+    mime_type: str | None = None
+    text: str | None = None
+    blob: str | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Resource':
@@ -526,18 +783,18 @@ class ContentType(Enum):
 @dataclass
 class Content:
     type: ContentType
-    text: Optional[str] = None
-    cwd: Optional[str] = None
-    exit_code: Optional[float] = None
-    data: Optional[str] = None
-    mime_type: Optional[str] = None
-    description: Optional[str] = None
-    icons: Optional[List[Icon]] = None
-    name: Optional[str] = None
-    size: Optional[float] = None
-    title: Optional[str] = None
-    uri: Optional[str] = None
-    resource: Optional[Resource] = None
+    text: str | None = None
+    cwd: str | None = None
+    exit_code: float | None = None
+    data: str | None = None
+    mime_type: str | None = None
+    description: str | None = None
+    icons: list[Icon] | None = None
+    name: str | None = None
+    size: float | None = None
+    title: str | None = None
+    uri: str | None = None
+    resource: Resource | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Content':
@@ -590,8 +847,8 @@ class Content:
 @dataclass
 class Result:
     content: str
-    contents: Optional[List[Content]] = None
-    detailed_content: Optional[str] = None
+    contents: list[Content] | None = None
+    detailed_content: str | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Result':
@@ -636,7 +893,7 @@ class ToolRequest:
     name: str
     tool_call_id: str
     arguments: Any = None
-    type: Optional[ToolRequestType] = None
+    type: ToolRequestType | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'ToolRequest':
@@ -660,121 +917,131 @@ class ToolRequest:
 
 @dataclass
 class Data:
-    context: Optional[Union[ContextClass, str]] = None
-    copilot_version: Optional[str] = None
-    producer: Optional[str] = None
-    selected_model: Optional[str] = None
-    session_id: Optional[str] = None
-    start_time: Optional[datetime] = None
-    version: Optional[float] = None
-    event_count: Optional[float] = None
-    resume_time: Optional[datetime] = None
-    error_type: Optional[str] = None
-    message: Optional[str] = None
-    provider_call_id: Optional[str] = None
-    stack: Optional[str] = None
-    status_code: Optional[int] = None
-    title: Optional[str] = None
-    info_type: Optional[str] = None
-    warning_type: Optional[str] = None
-    new_model: Optional[str] = None
-    previous_model: Optional[str] = None
-    new_mode: Optional[str] = None
-    previous_mode: Optional[str] = None
-    operation: Optional[Operation] = None
-    path: Optional[str] = None
+    context: ContextClass | str | None = None
+    copilot_version: str | None = None
+    producer: str | None = None
+    selected_model: str | None = None
+    session_id: str | None = None
+    start_time: datetime | None = None
+    version: float | None = None
+    event_count: float | None = None
+    resume_time: datetime | None = None
+    error_type: str | None = None
+    message: str | None = None
+    provider_call_id: str | None = None
+    stack: str | None = None
+    status_code: int | None = None
+    title: str | None = None
+    info_type: str | None = None
+    warning_type: str | None = None
+    new_model: str | None = None
+    previous_model: str | None = None
+    new_mode: str | None = None
+    previous_mode: str | None = None
+    operation: Operation | None = None
+    path: str | None = None
     """Relative path within the workspace files directory"""
 
-    handoff_time: Optional[datetime] = None
-    remote_session_id: Optional[str] = None
-    repository: Optional[Union[RepositoryClass, str]] = None
-    source_type: Optional[SourceType] = None
-    summary: Optional[str] = None
-    messages_removed_during_truncation: Optional[float] = None
-    performed_by: Optional[str] = None
-    post_truncation_messages_length: Optional[float] = None
-    post_truncation_tokens_in_messages: Optional[float] = None
-    pre_truncation_messages_length: Optional[float] = None
-    pre_truncation_tokens_in_messages: Optional[float] = None
-    token_limit: Optional[float] = None
-    tokens_removed_during_truncation: Optional[float] = None
-    events_removed: Optional[float] = None
-    up_to_event_id: Optional[str] = None
-    code_changes: Optional[CodeChanges] = None
-    current_model: Optional[str] = None
-    error_reason: Optional[str] = None
-    model_metrics: Optional[Dict[str, ModelMetric]] = None
-    session_start_time: Optional[float] = None
-    shutdown_type: Optional[ShutdownType] = None
-    total_api_duration_ms: Optional[float] = None
-    total_premium_requests: Optional[float] = None
-    branch: Optional[str] = None
-    cwd: Optional[str] = None
-    git_root: Optional[str] = None
-    current_tokens: Optional[float] = None
-    messages_length: Optional[float] = None
-    checkpoint_number: Optional[float] = None
-    checkpoint_path: Optional[str] = None
-    compaction_tokens_used: Optional[CompactionTokensUsed] = None
-    error: Optional[Union[ErrorClass, str]] = None
-    messages_removed: Optional[float] = None
-    post_compaction_tokens: Optional[float] = None
-    pre_compaction_messages_length: Optional[float] = None
-    pre_compaction_tokens: Optional[float] = None
-    request_id: Optional[str] = None
-    success: Optional[bool] = None
-    summary_content: Optional[str] = None
-    tokens_removed: Optional[float] = None
-    agent_mode: Optional[AgentMode] = None
-    attachments: Optional[List[Attachment]] = None
-    content: Optional[str] = None
-    source: Optional[str] = None
-    transformed_content: Optional[str] = None
-    turn_id: Optional[str] = None
-    intent: Optional[str] = None
-    reasoning_id: Optional[str] = None
-    delta_content: Optional[str] = None
-    encrypted_content: Optional[str] = None
-    message_id: Optional[str] = None
-    parent_tool_call_id: Optional[str] = None
-    phase: Optional[str] = None
-    reasoning_opaque: Optional[str] = None
-    reasoning_text: Optional[str] = None
-    tool_requests: Optional[List[ToolRequest]] = None
-    total_response_size_bytes: Optional[float] = None
-    api_call_id: Optional[str] = None
-    cache_read_tokens: Optional[float] = None
-    cache_write_tokens: Optional[float] = None
-    cost: Optional[float] = None
-    duration: Optional[float] = None
-    initiator: Optional[str] = None
-    input_tokens: Optional[float] = None
-    model: Optional[str] = None
-    output_tokens: Optional[float] = None
-    quota_snapshots: Optional[Dict[str, QuotaSnapshot]] = None
-    reason: Optional[str] = None
+    handoff_time: datetime | None = None
+    remote_session_id: str | None = None
+    repository: RepositoryClass | str | None = None
+    source_type: SourceType | None = None
+    summary: str | None = None
+    messages_removed_during_truncation: float | None = None
+    performed_by: str | None = None
+    post_truncation_messages_length: float | None = None
+    post_truncation_tokens_in_messages: float | None = None
+    pre_truncation_messages_length: float | None = None
+    pre_truncation_tokens_in_messages: float | None = None
+    token_limit: float | None = None
+    tokens_removed_during_truncation: float | None = None
+    events_removed: float | None = None
+    up_to_event_id: str | None = None
+    code_changes: CodeChanges | None = None
+    current_model: str | None = None
+    error_reason: str | None = None
+    model_metrics: dict[str, ModelMetric] | None = None
+    session_start_time: float | None = None
+    shutdown_type: ShutdownType | None = None
+    total_api_duration_ms: float | None = None
+    total_premium_requests: float | None = None
+    branch: str | None = None
+    cwd: str | None = None
+    git_root: str | None = None
+    current_tokens: float | None = None
+    messages_length: float | None = None
+    checkpoint_number: float | None = None
+    checkpoint_path: str | None = None
+    compaction_tokens_used: CompactionTokensUsed | None = None
+    error: ErrorClass | str | None = None
+    messages_removed: float | None = None
+    post_compaction_tokens: float | None = None
+    pre_compaction_messages_length: float | None = None
+    pre_compaction_tokens: float | None = None
+    request_id: str | None = None
+    success: bool | None = None
+    summary_content: str | None = None
+    tokens_removed: float | None = None
+    agent_mode: AgentMode | None = None
+    attachments: list[Attachment] | None = None
+    content: str | None = None
+    interaction_id: str | None = None
+    source: str | None = None
+    transformed_content: str | None = None
+    turn_id: str | None = None
+    intent: str | None = None
+    reasoning_id: str | None = None
+    delta_content: str | None = None
+    total_response_size_bytes: float | None = None
+    encrypted_content: str | None = None
+    message_id: str | None = None
+    parent_tool_call_id: str | None = None
+    phase: str | None = None
+    reasoning_opaque: str | None = None
+    reasoning_text: str | None = None
+    tool_requests: list[ToolRequest] | None = None
+    api_call_id: str | None = None
+    cache_read_tokens: float | None = None
+    cache_write_tokens: float | None = None
+    copilot_usage: CopilotUsage | None = None
+    cost: float | None = None
+    duration: float | None = None
+    initiator: str | None = None
+    input_tokens: float | None = None
+    model: str | None = None
+    output_tokens: float | None = None
+    quota_snapshots: dict[str, QuotaSnapshot] | None = None
+    reason: str | None = None
     arguments: Any = None
-    tool_call_id: Optional[str] = None
-    tool_name: Optional[str] = None
-    mcp_server_name: Optional[str] = None
-    mcp_tool_name: Optional[str] = None
-    partial_output: Optional[str] = None
-    progress_message: Optional[str] = None
-    is_user_requested: Optional[bool] = None
-    result: Optional[Result] = None
-    tool_telemetry: Optional[Dict[str, Any]] = None
-    allowed_tools: Optional[List[str]] = None
-    name: Optional[str] = None
-    agent_description: Optional[str] = None
-    agent_display_name: Optional[str] = None
-    agent_name: Optional[str] = None
-    tools: Optional[List[str]] = None
-    hook_invocation_id: Optional[str] = None
-    hook_type: Optional[str] = None
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    mcp_server_name: str | None = None
+    mcp_tool_name: str | None = None
+    partial_output: str | None = None
+    progress_message: str | None = None
+    is_user_requested: bool | None = None
+    result: Result | None = None
+    tool_telemetry: dict[str, Any] | None = None
+    allowed_tools: list[str] | None = None
+    name: str | None = None
+    plugin_name: str | None = None
+    plugin_version: str | None = None
+    agent_description: str | None = None
+    agent_display_name: str | None = None
+    agent_name: str | None = None
+    tools: list[str] | None = None
+    hook_invocation_id: str | None = None
+    hook_type: str | None = None
     input: Any = None
     output: Any = None
-    metadata: Optional[Metadata] = None
-    role: Optional[Role] = None
+    metadata: Metadata | None = None
+    role: Role | None = None
+    permission_request: PermissionRequest | None = None
+    allow_freeform: bool | None = None
+    choices: list[str] | None = None
+    question: str | None = None
+    mode: Mode | None = None
+    requested_schema: RequestedSchema | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'Data':
@@ -845,12 +1112,14 @@ class Data:
         agent_mode = from_union([AgentMode, from_none], obj.get("agentMode"))
         attachments = from_union([lambda x: from_list(Attachment.from_dict, x), from_none], obj.get("attachments"))
         content = from_union([from_str, from_none], obj.get("content"))
+        interaction_id = from_union([from_str, from_none], obj.get("interactionId"))
         source = from_union([from_str, from_none], obj.get("source"))
         transformed_content = from_union([from_str, from_none], obj.get("transformedContent"))
         turn_id = from_union([from_str, from_none], obj.get("turnId"))
         intent = from_union([from_str, from_none], obj.get("intent"))
         reasoning_id = from_union([from_str, from_none], obj.get("reasoningId"))
         delta_content = from_union([from_str, from_none], obj.get("deltaContent"))
+        total_response_size_bytes = from_union([from_float, from_none], obj.get("totalResponseSizeBytes"))
         encrypted_content = from_union([from_str, from_none], obj.get("encryptedContent"))
         message_id = from_union([from_str, from_none], obj.get("messageId"))
         parent_tool_call_id = from_union([from_str, from_none], obj.get("parentToolCallId"))
@@ -858,10 +1127,10 @@ class Data:
         reasoning_opaque = from_union([from_str, from_none], obj.get("reasoningOpaque"))
         reasoning_text = from_union([from_str, from_none], obj.get("reasoningText"))
         tool_requests = from_union([lambda x: from_list(ToolRequest.from_dict, x), from_none], obj.get("toolRequests"))
-        total_response_size_bytes = from_union([from_float, from_none], obj.get("totalResponseSizeBytes"))
         api_call_id = from_union([from_str, from_none], obj.get("apiCallId"))
         cache_read_tokens = from_union([from_float, from_none], obj.get("cacheReadTokens"))
         cache_write_tokens = from_union([from_float, from_none], obj.get("cacheWriteTokens"))
+        copilot_usage = from_union([CopilotUsage.from_dict, from_none], obj.get("copilotUsage"))
         cost = from_union([from_float, from_none], obj.get("cost"))
         duration = from_union([from_float, from_none], obj.get("duration"))
         initiator = from_union([from_str, from_none], obj.get("initiator"))
@@ -882,6 +1151,8 @@ class Data:
         tool_telemetry = from_union([lambda x: from_dict(lambda x: x, x), from_none], obj.get("toolTelemetry"))
         allowed_tools = from_union([lambda x: from_list(from_str, x), from_none], obj.get("allowedTools"))
         name = from_union([from_str, from_none], obj.get("name"))
+        plugin_name = from_union([from_str, from_none], obj.get("pluginName"))
+        plugin_version = from_union([from_str, from_none], obj.get("pluginVersion"))
         agent_description = from_union([from_str, from_none], obj.get("agentDescription"))
         agent_display_name = from_union([from_str, from_none], obj.get("agentDisplayName"))
         agent_name = from_union([from_str, from_none], obj.get("agentName"))
@@ -892,7 +1163,13 @@ class Data:
         output = obj.get("output")
         metadata = from_union([Metadata.from_dict, from_none], obj.get("metadata"))
         role = from_union([Role, from_none], obj.get("role"))
-        return Data(context, copilot_version, producer, selected_model, session_id, start_time, version, event_count, resume_time, error_type, message, provider_call_id, stack, status_code, title, info_type, warning_type, new_model, previous_model, new_mode, previous_mode, operation, path, handoff_time, remote_session_id, repository, source_type, summary, messages_removed_during_truncation, performed_by, post_truncation_messages_length, post_truncation_tokens_in_messages, pre_truncation_messages_length, pre_truncation_tokens_in_messages, token_limit, tokens_removed_during_truncation, events_removed, up_to_event_id, code_changes, current_model, error_reason, model_metrics, session_start_time, shutdown_type, total_api_duration_ms, total_premium_requests, branch, cwd, git_root, current_tokens, messages_length, checkpoint_number, checkpoint_path, compaction_tokens_used, error, messages_removed, post_compaction_tokens, pre_compaction_messages_length, pre_compaction_tokens, request_id, success, summary_content, tokens_removed, agent_mode, attachments, content, source, transformed_content, turn_id, intent, reasoning_id, delta_content, encrypted_content, message_id, parent_tool_call_id, phase, reasoning_opaque, reasoning_text, tool_requests, total_response_size_bytes, api_call_id, cache_read_tokens, cache_write_tokens, cost, duration, initiator, input_tokens, model, output_tokens, quota_snapshots, reason, arguments, tool_call_id, tool_name, mcp_server_name, mcp_tool_name, partial_output, progress_message, is_user_requested, result, tool_telemetry, allowed_tools, name, agent_description, agent_display_name, agent_name, tools, hook_invocation_id, hook_type, input, output, metadata, role)
+        permission_request = from_union([PermissionRequest.from_dict, from_none], obj.get("permissionRequest"))
+        allow_freeform = from_union([from_bool, from_none], obj.get("allowFreeform"))
+        choices = from_union([lambda x: from_list(from_str, x), from_none], obj.get("choices"))
+        question = from_union([from_str, from_none], obj.get("question"))
+        mode = from_union([Mode, from_none], obj.get("mode"))
+        requested_schema = from_union([RequestedSchema.from_dict, from_none], obj.get("requestedSchema"))
+        return Data(context, copilot_version, producer, selected_model, session_id, start_time, version, event_count, resume_time, error_type, message, provider_call_id, stack, status_code, title, info_type, warning_type, new_model, previous_model, new_mode, previous_mode, operation, path, handoff_time, remote_session_id, repository, source_type, summary, messages_removed_during_truncation, performed_by, post_truncation_messages_length, post_truncation_tokens_in_messages, pre_truncation_messages_length, pre_truncation_tokens_in_messages, token_limit, tokens_removed_during_truncation, events_removed, up_to_event_id, code_changes, current_model, error_reason, model_metrics, session_start_time, shutdown_type, total_api_duration_ms, total_premium_requests, branch, cwd, git_root, current_tokens, messages_length, checkpoint_number, checkpoint_path, compaction_tokens_used, error, messages_removed, post_compaction_tokens, pre_compaction_messages_length, pre_compaction_tokens, request_id, success, summary_content, tokens_removed, agent_mode, attachments, content, interaction_id, source, transformed_content, turn_id, intent, reasoning_id, delta_content, total_response_size_bytes, encrypted_content, message_id, parent_tool_call_id, phase, reasoning_opaque, reasoning_text, tool_requests, api_call_id, cache_read_tokens, cache_write_tokens, copilot_usage, cost, duration, initiator, input_tokens, model, output_tokens, quota_snapshots, reason, arguments, tool_call_id, tool_name, mcp_server_name, mcp_tool_name, partial_output, progress_message, is_user_requested, result, tool_telemetry, allowed_tools, name, plugin_name, plugin_version, agent_description, agent_display_name, agent_name, tools, hook_invocation_id, hook_type, input, output, metadata, role, permission_request, allow_freeform, choices, question, mode, requested_schema)
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -1028,6 +1305,8 @@ class Data:
             result["attachments"] = from_union([lambda x: from_list(lambda x: to_class(Attachment, x), x), from_none], self.attachments)
         if self.content is not None:
             result["content"] = from_union([from_str, from_none], self.content)
+        if self.interaction_id is not None:
+            result["interactionId"] = from_union([from_str, from_none], self.interaction_id)
         if self.source is not None:
             result["source"] = from_union([from_str, from_none], self.source)
         if self.transformed_content is not None:
@@ -1040,6 +1319,8 @@ class Data:
             result["reasoningId"] = from_union([from_str, from_none], self.reasoning_id)
         if self.delta_content is not None:
             result["deltaContent"] = from_union([from_str, from_none], self.delta_content)
+        if self.total_response_size_bytes is not None:
+            result["totalResponseSizeBytes"] = from_union([to_float, from_none], self.total_response_size_bytes)
         if self.encrypted_content is not None:
             result["encryptedContent"] = from_union([from_str, from_none], self.encrypted_content)
         if self.message_id is not None:
@@ -1054,14 +1335,14 @@ class Data:
             result["reasoningText"] = from_union([from_str, from_none], self.reasoning_text)
         if self.tool_requests is not None:
             result["toolRequests"] = from_union([lambda x: from_list(lambda x: to_class(ToolRequest, x), x), from_none], self.tool_requests)
-        if self.total_response_size_bytes is not None:
-            result["totalResponseSizeBytes"] = from_union([to_float, from_none], self.total_response_size_bytes)
         if self.api_call_id is not None:
             result["apiCallId"] = from_union([from_str, from_none], self.api_call_id)
         if self.cache_read_tokens is not None:
             result["cacheReadTokens"] = from_union([to_float, from_none], self.cache_read_tokens)
         if self.cache_write_tokens is not None:
             result["cacheWriteTokens"] = from_union([to_float, from_none], self.cache_write_tokens)
+        if self.copilot_usage is not None:
+            result["copilotUsage"] = from_union([lambda x: to_class(CopilotUsage, x), from_none], self.copilot_usage)
         if self.cost is not None:
             result["cost"] = from_union([to_float, from_none], self.cost)
         if self.duration is not None:
@@ -1102,6 +1383,10 @@ class Data:
             result["allowedTools"] = from_union([lambda x: from_list(from_str, x), from_none], self.allowed_tools)
         if self.name is not None:
             result["name"] = from_union([from_str, from_none], self.name)
+        if self.plugin_name is not None:
+            result["pluginName"] = from_union([from_str, from_none], self.plugin_name)
+        if self.plugin_version is not None:
+            result["pluginVersion"] = from_union([from_str, from_none], self.plugin_version)
         if self.agent_description is not None:
             result["agentDescription"] = from_union([from_str, from_none], self.agent_description)
         if self.agent_display_name is not None:
@@ -1122,6 +1407,18 @@ class Data:
             result["metadata"] = from_union([lambda x: to_class(Metadata, x), from_none], self.metadata)
         if self.role is not None:
             result["role"] = from_union([lambda x: to_enum(Role, x), from_none], self.role)
+        if self.permission_request is not None:
+            result["permissionRequest"] = from_union([lambda x: to_class(PermissionRequest, x), from_none], self.permission_request)
+        if self.allow_freeform is not None:
+            result["allowFreeform"] = from_union([from_bool, from_none], self.allow_freeform)
+        if self.choices is not None:
+            result["choices"] = from_union([lambda x: from_list(from_str, x), from_none], self.choices)
+        if self.question is not None:
+            result["question"] = from_union([from_str, from_none], self.question)
+        if self.mode is not None:
+            result["mode"] = from_union([lambda x: to_enum(Mode, x), from_none], self.mode)
+        if self.requested_schema is not None:
+            result["requestedSchema"] = from_union([lambda x: to_class(RequestedSchema, x), from_none], self.requested_schema)
         return result
 
 
@@ -1132,12 +1429,17 @@ class SessionEventType(Enum):
     ASSISTANT_MESSAGE_DELTA = "assistant.message_delta"
     ASSISTANT_REASONING = "assistant.reasoning"
     ASSISTANT_REASONING_DELTA = "assistant.reasoning_delta"
+    ASSISTANT_STREAMING_DELTA = "assistant.streaming_delta"
     ASSISTANT_TURN_END = "assistant.turn_end"
     ASSISTANT_TURN_START = "assistant.turn_start"
     ASSISTANT_USAGE = "assistant.usage"
+    ELICITATION_COMPLETED = "elicitation.completed"
+    ELICITATION_REQUESTED = "elicitation.requested"
     HOOK_END = "hook.end"
     HOOK_START = "hook.start"
     PENDING_MESSAGES_MODIFIED = "pending_messages.modified"
+    PERMISSION_COMPLETED = "permission.completed"
+    PERMISSION_REQUESTED = "permission.requested"
     SESSION_COMPACTION_COMPLETE = "session.compaction_complete"
     SESSION_COMPACTION_START = "session.compaction_start"
     SESSION_CONTEXT_CHANGED = "session.context_changed"
@@ -1152,6 +1454,7 @@ class SessionEventType(Enum):
     SESSION_SHUTDOWN = "session.shutdown"
     SESSION_SNAPSHOT_REWIND = "session.snapshot_rewind"
     SESSION_START = "session.start"
+    SESSION_TASK_COMPLETE = "session.task_complete"
     SESSION_TITLE_CHANGED = "session.title_changed"
     SESSION_TRUNCATION = "session.truncation"
     SESSION_USAGE_INFO = "session.usage_info"
@@ -1159,6 +1462,7 @@ class SessionEventType(Enum):
     SESSION_WORKSPACE_FILE_CHANGED = "session.workspace_file_changed"
     SKILL_INVOKED = "skill.invoked"
     SUBAGENT_COMPLETED = "subagent.completed"
+    SUBAGENT_DESELECTED = "subagent.deselected"
     SUBAGENT_FAILED = "subagent.failed"
     SUBAGENT_SELECTED = "subagent.selected"
     SUBAGENT_STARTED = "subagent.started"
@@ -1168,6 +1472,8 @@ class SessionEventType(Enum):
     TOOL_EXECUTION_PROGRESS = "tool.execution_progress"
     TOOL_EXECUTION_START = "tool.execution_start"
     TOOL_USER_REQUESTED = "tool.user_requested"
+    USER_INPUT_COMPLETED = "user_input.completed"
+    USER_INPUT_REQUESTED = "user_input.requested"
     USER_MESSAGE = "user.message"
     # UNKNOWN is used for forward compatibility
     UNKNOWN = "unknown"
@@ -1185,8 +1491,8 @@ class SessionEvent:
     id: UUID
     timestamp: datetime
     type: SessionEventType
-    ephemeral: Optional[bool] = None
-    parent_id: Optional[UUID] = None
+    ephemeral: bool | None = None
+    parent_id: UUID | None = None
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionEvent':

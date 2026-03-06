@@ -42,7 +42,7 @@ class TestPermissions:
         write_requests = [req for req in permission_requests if req.get("kind") == "write"]
         assert len(write_requests) > 0
 
-        await session.destroy()
+        await session.disconnect()
 
     async def test_should_deny_permission_when_handler_returns_denied(self, ctx: E2ETestContext):
         """Test denying permissions"""
@@ -66,12 +66,17 @@ class TestPermissions:
         content = read_file(ctx.work_dir, "protected.txt")
         assert content == original_content
 
-        await session.destroy()
+        await session.disconnect()
 
-    async def test_should_deny_tool_operations_by_default_when_no_handler_is_provided(
+    async def test_should_deny_tool_operations_when_handler_explicitly_denies(
         self, ctx: E2ETestContext
     ):
-        session = await ctx.client.create_session()
+        """Test that tool operations are denied when handler explicitly denies"""
+
+        def deny_all(request, invocation):
+            return {"kind": "denied-no-approval-rule-and-could-not-request-from-user"}
+
+        session = await ctx.client.create_session({"on_permission_request": deny_all})
 
         denied_events = []
         done_event = asyncio.Event()
@@ -96,18 +101,22 @@ class TestPermissions:
 
         assert len(denied_events) > 0
 
-        await session.destroy()
+        await session.disconnect()
 
-    async def test_should_deny_tool_operations_by_default_when_no_handler_is_provided_after_resume(
+    async def test_should_deny_tool_operations_when_handler_explicitly_denies_after_resume(
         self, ctx: E2ETestContext
     ):
+        """Test that tool operations are denied after resume when handler explicitly denies"""
         session1 = await ctx.client.create_session(
             {"on_permission_request": PermissionHandler.approve_all}
         )
         session_id = session1.session_id
         await session1.send_and_wait({"prompt": "What is 1+1?"})
 
-        session2 = await ctx.client.resume_session(session_id)
+        def deny_all(request, invocation):
+            return {"kind": "denied-no-approval-rule-and-could-not-request-from-user"}
+
+        session2 = await ctx.client.resume_session(session_id, {"on_permission_request": deny_all})
 
         denied_events = []
         done_event = asyncio.Event()
@@ -132,21 +141,20 @@ class TestPermissions:
 
         assert len(denied_events) > 0
 
-        await session2.destroy()
+        await session2.disconnect()
 
-    async def test_should_work_without_permission_handler__default_behavior_(
-        self, ctx: E2ETestContext
-    ):
-        """Test that sessions work without permission handler (default behavior)"""
-        # Create session without on_permission_request handler
-        session = await ctx.client.create_session()
+    async def test_should_work_with_approve_all_permission_handler(self, ctx: E2ETestContext):
+        """Test that sessions work with approve-all permission handler"""
+        session = await ctx.client.create_session(
+            {"on_permission_request": PermissionHandler.approve_all}
+        )
 
         message = await session.send_and_wait({"prompt": "What is 2+2?"})
 
         assert message is not None
         assert "4" in message.data.content
 
-        await session.destroy()
+        await session.disconnect()
 
     async def test_should_handle_async_permission_handler(self, ctx: E2ETestContext):
         """Test async permission handler"""
@@ -166,14 +174,16 @@ class TestPermissions:
 
         assert len(permission_requests) > 0
 
-        await session.destroy()
+        await session.disconnect()
 
     async def test_should_resume_session_with_permission_handler(self, ctx: E2ETestContext):
         """Test resuming session with permission handler"""
         permission_requests = []
 
-        # Create session without permission handler
-        session1 = await ctx.client.create_session()
+        # Create initial session
+        session1 = await ctx.client.create_session(
+            {"on_permission_request": PermissionHandler.approve_all}
+        )
         session_id = session1.session_id
         await session1.send_and_wait({"prompt": "What is 1+1?"})
 
@@ -193,7 +203,7 @@ class TestPermissions:
         # Should have permission requests from resumed session
         assert len(permission_requests) > 0
 
-        await session2.destroy()
+        await session2.disconnect()
 
     async def test_should_handle_permission_handler_errors_gracefully(self, ctx: E2ETestContext):
         """Test that permission handler errors are handled gracefully"""
@@ -214,7 +224,7 @@ class TestPermissions:
         content_lower = message.data.content.lower()
         assert any(word in content_lower for word in ["fail", "cannot", "unable", "permission"])
 
-        await session.destroy()
+        await session.disconnect()
 
     async def test_should_receive_toolcallid_in_permission_requests(self, ctx: E2ETestContext):
         """Test that toolCallId is included in permission requests"""
@@ -236,4 +246,4 @@ class TestPermissions:
 
         assert received_tool_call_id
 
-        await session.destroy()
+        await session.disconnect()

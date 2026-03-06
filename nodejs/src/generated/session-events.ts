@@ -286,6 +286,16 @@ export type SessionEvent =
       timestamp: string;
       parentId: string | null;
       ephemeral?: boolean;
+      type: "session.task_complete";
+      data: {
+        summary?: string;
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral?: boolean;
       type: "user.message";
       data: {
         content: string;
@@ -325,9 +335,18 @@ export type SessionEvent =
                 };
               };
             }
+          | {
+              type: "github_reference";
+              number: number;
+              title: string;
+              referenceType: "issue" | "pr" | "discussion";
+              state: string;
+              url: string;
+            }
         )[];
         source?: string;
         agentMode?: "interactive" | "plan" | "autopilot" | "shell";
+        interactionId?: string;
       };
     }
   | {
@@ -346,6 +365,7 @@ export type SessionEvent =
       type: "assistant.turn_start";
       data: {
         turnId: string;
+        interactionId?: string;
       };
     }
   | {
@@ -384,6 +404,16 @@ export type SessionEvent =
       id: string;
       timestamp: string;
       parentId: string | null;
+      ephemeral: true;
+      type: "assistant.streaming_delta";
+      data: {
+        totalResponseSizeBytes: number;
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
       ephemeral?: boolean;
       type: "assistant.message";
       data: {
@@ -399,6 +429,7 @@ export type SessionEvent =
         reasoningText?: string;
         encryptedContent?: string;
         phase?: string;
+        interactionId?: string;
         parentToolCallId?: string;
       };
     }
@@ -411,7 +442,6 @@ export type SessionEvent =
       data: {
         messageId: string;
         deltaContent: string;
-        totalResponseSizeBytes?: number;
         parentToolCallId?: string;
       };
     }
@@ -454,6 +484,15 @@ export type SessionEvent =
             remainingPercentage: number;
             resetDate?: string;
           };
+        };
+        copilotUsage?: {
+          tokenDetails: {
+            batchSize: number;
+            costPerBatch: number;
+            tokenCount: number;
+            tokenType: string;
+          }[];
+          totalNanoAiu: number;
         };
       };
     }
@@ -525,6 +564,8 @@ export type SessionEvent =
       data: {
         toolCallId: string;
         success: boolean;
+        model?: string;
+        interactionId?: string;
         isUserRequested?: boolean;
         result?: {
           content: string;
@@ -602,6 +643,8 @@ export type SessionEvent =
         path: string;
         content: string;
         allowedTools?: string[];
+        pluginName?: string;
+        pluginVersion?: string;
       };
     }
   | {
@@ -659,6 +702,14 @@ export type SessionEvent =
       timestamp: string;
       parentId: string | null;
       ephemeral?: boolean;
+      type: "subagent.deselected";
+      data: {};
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral?: boolean;
       type: "hook.start";
       data: {
         hookInvocationId: string;
@@ -699,5 +750,139 @@ export type SessionEvent =
             [k: string]: unknown;
           };
         };
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral: true;
+      type: "permission.requested";
+      data: {
+        requestId: string;
+        permissionRequest:
+          | {
+              kind: "shell";
+              toolCallId?: string;
+              fullCommandText: string;
+              intention: string;
+              commands: {
+                identifier: string;
+                readOnly: boolean;
+              }[];
+              possiblePaths: string[];
+              possibleUrls: {
+                url: string;
+              }[];
+              hasWriteFileRedirection: boolean;
+              canOfferSessionApproval: boolean;
+              warning?: string;
+            }
+          | {
+              kind: "write";
+              toolCallId?: string;
+              intention: string;
+              fileName: string;
+              diff: string;
+              newFileContents?: string;
+            }
+          | {
+              kind: "read";
+              toolCallId?: string;
+              intention: string;
+              path: string;
+            }
+          | {
+              kind: "mcp";
+              toolCallId?: string;
+              serverName: string;
+              toolName: string;
+              toolTitle: string;
+              args?: unknown;
+              readOnly: boolean;
+            }
+          | {
+              kind: "url";
+              toolCallId?: string;
+              intention: string;
+              url: string;
+            }
+          | {
+              kind: "memory";
+              toolCallId?: string;
+              subject: string;
+              fact: string;
+              citations: string;
+            }
+          | {
+              kind: "custom-tool";
+              toolCallId?: string;
+              toolName: string;
+              toolDescription: string;
+              args?: unknown;
+            };
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral: true;
+      type: "permission.completed";
+      data: {
+        requestId: string;
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral: true;
+      type: "user_input.requested";
+      data: {
+        requestId: string;
+        question: string;
+        choices?: string[];
+        allowFreeform?: boolean;
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral: true;
+      type: "user_input.completed";
+      data: {
+        requestId: string;
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral: true;
+      type: "elicitation.requested";
+      data: {
+        requestId: string;
+        message: string;
+        mode?: "form";
+        requestedSchema: {
+          type: "object";
+          properties: {
+            [k: string]: unknown;
+          };
+          required?: string[];
+        };
+        [k: string]: unknown;
+      };
+    }
+  | {
+      id: string;
+      timestamp: string;
+      parentId: string | null;
+      ephemeral: true;
+      type: "elicitation.completed";
+      data: {
+        requestId: string;
       };
     };

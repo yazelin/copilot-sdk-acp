@@ -19,9 +19,10 @@ import re
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, cast
+from typing import Any, cast
 
 from .generated.rpc import ServerRpc
 from .generated.session_events import session_event_from_dict
@@ -51,7 +52,7 @@ from .types import (
 )
 
 
-def _get_bundled_cli_path() -> Optional[str]:
+def _get_bundled_cli_path() -> str | None:
     """Get the path to the bundled CLI binary, if available."""
     # The binary is bundled in copilot/bin/ within the package
     bin_dir = Path(__file__).parent / "bin"
@@ -91,19 +92,22 @@ class CopilotClient:
         >>> await client.start()
         >>>
         >>> # Create a session and send a message
-        >>> session = await client.create_session({"model": "gpt-4"})
+        >>> session = await client.create_session({
+        ...     "on_permission_request": PermissionHandler.approve_all,
+        ...     "model": "gpt-4",
+        ... })
         >>> session.on(lambda event: print(event.type))
         >>> await session.send({"prompt": "Hello!"})
         >>>
         >>> # Clean up
-        >>> await session.destroy()
+        >>> await session.disconnect()
         >>> await client.stop()
 
         >>> # Or connect to an existing server
         >>> client = CopilotClient({"cli_url": "localhost:3000"})
     """
 
-    def __init__(self, options: Optional[CopilotClientOptions] = None):
+    def __init__(self, options: CopilotClientOptions | None = None):
         """
         Initialize a new CopilotClient.
 
@@ -148,7 +152,7 @@ class CopilotClient:
         self._is_external_server: bool = False
         if opts.get("cli_url"):
             self._actual_host, actual_port = self._parse_cli_url(opts["cli_url"])
-            self._actual_port: Optional[int] = actual_port
+            self._actual_port: int | None = actual_port
             self._is_external_server = True
         else:
             self._actual_port = None
@@ -194,19 +198,19 @@ class CopilotClient:
         if github_token:
             self.options["github_token"] = github_token
 
-        self._process: Optional[subprocess.Popen] = None
-        self._client: Optional[JsonRpcClient] = None
+        self._process: subprocess.Popen | None = None
+        self._client: JsonRpcClient | None = None
         self._state: ConnectionState = "disconnected"
         self._sessions: dict[str, CopilotSession] = {}
         self._sessions_lock = threading.Lock()
-        self._models_cache: Optional[list[ModelInfo]] = None
+        self._models_cache: list[ModelInfo] | None = None
         self._models_cache_lock = asyncio.Lock()
         self._lifecycle_handlers: list[SessionLifecycleHandler] = []
         self._typed_lifecycle_handlers: dict[
             SessionLifecycleEventType, list[SessionLifecycleHandler]
         ] = {}
         self._lifecycle_handlers_lock = threading.Lock()
-        self._rpc: Optional[ServerRpc] = None
+        self._rpc: ServerRpc | None = None
 
     @property
     def rpc(self) -> ServerRpc:
@@ -311,23 +315,27 @@ class CopilotClient:
                         ) from e
             raise
 
-    async def stop(self) -> list["StopError"]:
+    async def stop(self) -> None:
         """
         Stop the CLI server and close all active sessions.
 
         This method performs graceful cleanup:
-        1. Destroys all active sessions
+        1. Closes all active sessions (releases in-memory resources)
         2. Closes the JSON-RPC connection
         3. Terminates the CLI server process (if spawned by this client)
 
-        Returns:
-            A list of StopError objects containing error messages that occurred
-            during cleanup. An empty list indicates all cleanup succeeded.
+        Note: session data on disk is preserved, so sessions can be resumed
+        later. To permanently remove session data before stopping, call
+        :meth:`delete_session` for each session first.
+
+        Raises:
+            ExceptionGroup[StopError]: If any errors occurred during cleanup.
 
         Example:
-            >>> errors = await client.stop()
-            >>> if errors:
-            ...     for error in errors:
+            >>> try:
+            ...     await client.stop()
+            ... except* StopError as eg:
+            ...     for error in eg.exceptions:
             ...         print(f"Cleanup error: {error.message}")
         """
         errors: list[StopError] = []
@@ -340,10 +348,10 @@ class CopilotClient:
 
         for session in sessions_to_destroy:
             try:
-                await session.destroy()
+                await session.disconnect()
             except Exception as e:
                 errors.append(
-                    StopError(message=f"Failed to destroy session {session.session_id}: {e}")
+                    StopError(message=f"Failed to disconnect session {session.session_id}: {e}")
                 )
 
         # Close client
@@ -356,7 +364,6 @@ class CopilotClient:
         async with self._models_cache_lock:
             self._models_cache = None
 
-        # Kill CLI process
         # Kill CLI process (only if we spawned it)
         if self._process and not self._is_external_server:
             self._process.terminate()
@@ -370,7 +377,8 @@ class CopilotClient:
         if not self._is_external_server:
             self._actual_port = None
 
-        return errors
+        if errors:
+            raise ExceptionGroup("errors during CopilotClient.stop()", errors)
 
     async def force_stop(self) -> None:
         """
@@ -414,7 +422,7 @@ class CopilotClient:
         if not self._is_external_server:
             self._actual_port = None
 
-    async def create_session(self, config: Optional[SessionConfig] = None) -> CopilotSession:
+    async def create_session(self, config: SessionConfig) -> CopilotSession:
         """
         Create a new conversation session with the Copilot CLI.
 
@@ -434,10 +442,12 @@ class CopilotClient:
 
         Example:
             >>> # Basic session
-            >>> session = await client.create_session()
+            >>> config = {"on_permission_request": PermissionHandler.approve_all}
+            >>> session = await client.create_session(config)
             >>>
             >>> # Session with model and streaming
             >>> session = await client.create_session({
+            ...     "on_permission_request": PermissionHandler.approve_all,
             ...     "model": "gpt-4",
             ...     "streaming": True
             ... })
@@ -448,18 +458,27 @@ class CopilotClient:
             else:
                 raise RuntimeError("Client not connected. Call start() first.")
 
-        cfg = config or {}
+        cfg = config
+
+        if not cfg.get("on_permission_request"):
+            raise ValueError(
+                "An on_permission_request handler is required when creating a session. "
+                "For example, to allow all permissions, use "
+                '{"on_permission_request": PermissionHandler.approve_all}.'
+            )
 
         tool_defs = []
         tools = cfg.get("tools")
         if tools:
             for tool in tools:
-                definition = {
+                definition: dict[str, Any] = {
                     "name": tool.name,
                     "description": tool.description,
                 }
                 if tool.parameters:
                     definition["parameters"] = tool.parameters
+                if tool.overrides_built_in_tool:
+                    definition["overridesBuiltInTool"] = True
                 tool_defs.append(definition)
 
         payload: dict[str, Any] = {}
@@ -484,7 +503,7 @@ class CopilotClient:
         if available_tools is not None:
             payload["availableTools"] = available_tools
         excluded_tools = cfg.get("excluded_tools")
-        if excluded_tools:
+        if excluded_tools is not None:
             payload["excludedTools"] = excluded_tools
 
         # Always enable permission request callback (deny by default if no handler provided)
@@ -568,8 +587,7 @@ class CopilotClient:
         workspace_path = response.get("workspacePath")
         session = CopilotSession(session_id, self._client, workspace_path)
         session._register_tools(tools)
-        if on_permission_request:
-            session._register_permission_handler(on_permission_request)
+        session._register_permission_handler(on_permission_request)
         if on_user_input_request:
             session._register_user_input_handler(on_user_input_request)
         if hooks:
@@ -579,9 +597,7 @@ class CopilotClient:
 
         return session
 
-    async def resume_session(
-        self, session_id: str, config: Optional[ResumeSessionConfig] = None
-    ) -> CopilotSession:
+    async def resume_session(self, session_id: str, config: ResumeSessionConfig) -> CopilotSession:
         """
         Resume an existing conversation session by its ID.
 
@@ -601,10 +617,12 @@ class CopilotClient:
 
         Example:
             >>> # Resume a previous session
-            >>> session = await client.resume_session("session-123")
+            >>> config = {"on_permission_request": PermissionHandler.approve_all}
+            >>> session = await client.resume_session("session-123", config)
             >>>
             >>> # Resume with new tools
             >>> session = await client.resume_session("session-123", {
+            ...     "on_permission_request": PermissionHandler.approve_all,
             ...     "tools": [my_new_tool]
             ... })
         """
@@ -614,18 +632,27 @@ class CopilotClient:
             else:
                 raise RuntimeError("Client not connected. Call start() first.")
 
-        cfg = config or {}
+        cfg = config
+
+        if not cfg.get("on_permission_request"):
+            raise ValueError(
+                "An on_permission_request handler is required when resuming a session. "
+                "For example, to allow all permissions, use "
+                '{"on_permission_request": PermissionHandler.approve_all}.'
+            )
 
         tool_defs = []
         tools = cfg.get("tools")
         if tools:
             for tool in tools:
-                definition = {
+                definition: dict[str, Any] = {
                     "name": tool.name,
                     "description": tool.description,
                 }
                 if tool.parameters:
                     definition["parameters"] = tool.parameters
+                if tool.overrides_built_in_tool:
+                    definition["overridesBuiltInTool"] = True
                 tool_defs.append(definition)
 
         payload: dict[str, Any] = {"sessionId": session_id}
@@ -656,7 +683,7 @@ class CopilotClient:
             payload["availableTools"] = available_tools
 
         excluded_tools = cfg.get("excluded_tools")
-        if excluded_tools:
+        if excluded_tools is not None:
             payload["excludedTools"] = excluded_tools
 
         provider = cfg.get("provider")
@@ -744,8 +771,7 @@ class CopilotClient:
         workspace_path = response.get("workspacePath")
         session = CopilotSession(resumed_session_id, self._client, workspace_path)
         session._register_tools(cfg.get("tools"))
-        if on_permission_request:
-            session._register_permission_handler(on_permission_request)
+        session._register_permission_handler(on_permission_request)
         if on_user_input_request:
             session._register_user_input_handler(on_user_input_request)
         if hooks:
@@ -769,7 +795,7 @@ class CopilotClient:
         """
         return self._state
 
-    async def ping(self, message: Optional[str] = None) -> "PingResponse":
+    async def ping(self, message: str | None = None) -> "PingResponse":
         """
         Send a ping request to the server to verify connectivity.
 
@@ -910,10 +936,12 @@ class CopilotClient:
 
     async def delete_session(self, session_id: str) -> None:
         """
-        Delete a session permanently.
+        Permanently delete a session and all its data from disk, including
+        conversation history, planning state, and artifacts.
 
-        This permanently removes the session and all its conversation history.
-        The session cannot be resumed after deletion.
+        Unlike :meth:`CopilotSession.disconnect`, which only releases in-memory
+        resources and preserves session data for later resumption, this method
+        is irreversible. The session cannot be resumed after deletion.
 
         Args:
             session_id: The ID of the session to delete.
@@ -939,7 +967,32 @@ class CopilotClient:
             if session_id in self._sessions:
                 del self._sessions[session_id]
 
-    async def get_foreground_session_id(self) -> Optional[str]:
+    async def get_last_session_id(self) -> str | None:
+        """
+        Get the ID of the most recently updated session.
+
+        This is useful for resuming the last conversation when the session ID
+        was not stored.
+
+        Returns:
+            The session ID, or None if no sessions exist.
+
+        Raises:
+            RuntimeError: If the client is not connected.
+
+        Example:
+            >>> last_id = await client.get_last_session_id()
+            >>> if last_id:
+            ...     config = {"on_permission_request": PermissionHandler.approve_all}
+            ...     session = await client.resume_session(last_id, config)
+        """
+        if not self._client:
+            raise RuntimeError("Client not connected")
+
+        response = await self._client.request("session.getLastId", {})
+        return response.get("sessionId")
+
+    async def get_foreground_session_id(self) -> str | None:
         """
         Get the ID of the session currently displayed in the TUI.
 
@@ -992,7 +1045,7 @@ class CopilotClient:
     def on(
         self,
         event_type_or_handler: SessionLifecycleEventType | SessionLifecycleHandler,
-        handler: Optional[SessionLifecycleHandler] = None,
+        handler: SessionLifecycleHandler | None = None,
     ) -> Callable[[], None]:
         """
         Subscribe to session lifecycle events.
@@ -1250,7 +1303,7 @@ class CopilotClient:
 
         try:
             await asyncio.wait_for(read_port(), timeout=10.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise RuntimeError("Timeout waiting for CLI server to start")
 
     async def _connect_to_server(self) -> None:
@@ -1572,7 +1625,7 @@ class CopilotClient:
                 toolTelemetry={},
             )
 
-        return self._normalize_tool_result(result)
+        return self._normalize_tool_result(cast(ToolResult, result))
 
     def _normalize_tool_result(self, result: ToolResult) -> ToolResult:
         """

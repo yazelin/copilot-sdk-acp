@@ -154,6 +154,12 @@ export interface Tool<TArgs = unknown> {
     description?: string;
     parameters?: ZodSchema<TArgs> | Record<string, unknown>;
     handler: ToolHandler<TArgs>;
+    /**
+     * When true, explicitly indicates this tool is intended to override a built-in tool
+     * of the same name. If not set and the name clashes with a built-in tool, the runtime
+     * will return an error.
+     */
+    overridesBuiltInTool?: boolean;
 }
 
 /**
@@ -166,6 +172,7 @@ export function defineTool<T = unknown>(
         description?: string;
         parameters?: ZodSchema<T> | Record<string, unknown>;
         handler: ToolHandler<T>;
+        overridesBuiltInTool?: boolean;
     }
 ): Tool<T> {
     return { name, ...config };
@@ -219,7 +226,7 @@ export type SystemMessageConfig = SystemMessageAppendConfig | SystemMessageRepla
  * Permission request types from the server
  */
 export interface PermissionRequest {
-    kind: "shell" | "write" | "mcp" | "read" | "url";
+    kind: "shell" | "write" | "mcp" | "read" | "url" | "custom-tool";
     toolCallId?: string;
     [key: string]: unknown;
 }
@@ -683,7 +690,7 @@ export interface SessionConfig {
      * Handler for permission requests from the server.
      * When provided, the server will call this handler to request permission for operations.
      */
-    onPermissionRequest?: PermissionHandler;
+    onPermissionRequest: PermissionHandler;
 
     /**
      * Handler for user input requests from the agent.
