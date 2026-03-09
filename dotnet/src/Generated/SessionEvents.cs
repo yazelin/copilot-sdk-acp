@@ -69,6 +69,7 @@ namespace GitHub.Copilot.SDK;
 [JsonDerivedType(typeof(SubagentSelectedEvent), "subagent.selected")]
 [JsonDerivedType(typeof(SubagentStartedEvent), "subagent.started")]
 [JsonDerivedType(typeof(SystemMessageEvent), "system.message")]
+[JsonDerivedType(typeof(SystemNotificationEvent), "system.notification")]
 [JsonDerivedType(typeof(ToolExecutionCompleteEvent), "tool.execution_complete")]
 [JsonDerivedType(typeof(ToolExecutionPartialResultEvent), "tool.execution_partial_result")]
 [JsonDerivedType(typeof(ToolExecutionProgressEvent), "tool.execution_progress")]
@@ -658,6 +659,18 @@ public partial class SystemMessageEvent : SessionEvent
 }
 
 /// <summary>
+/// Event: system.notification
+/// </summary>
+public partial class SystemNotificationEvent : SessionEvent
+{
+    [JsonIgnore]
+    public override string Type => "system.notification";
+
+    [JsonPropertyName("data")]
+    public required SystemNotificationData Data { get; set; }
+}
+
+/// <summary>
 /// Event: permission.requested
 /// </summary>
 public partial class PermissionRequestedEvent : SessionEvent
@@ -825,6 +838,10 @@ public partial class SessionStartData
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("context")]
     public SessionStartDataContext? Context { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("alreadyInUse")]
+    public bool? AlreadyInUse { get; set; }
 }
 
 public partial class SessionResumeData
@@ -838,6 +855,10 @@ public partial class SessionResumeData
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("context")]
     public SessionResumeDataContext? Context { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("alreadyInUse")]
+    public bool? AlreadyInUse { get; set; }
 }
 
 public partial class SessionErrorData
@@ -1522,13 +1543,22 @@ public partial class SystemMessageData
     public SystemMessageDataMetadata? Metadata { get; set; }
 }
 
+public partial class SystemNotificationData
+{
+    [JsonPropertyName("content")]
+    public required string Content { get; set; }
+
+    [JsonPropertyName("kind")]
+    public required SystemNotificationDataKind Kind { get; set; }
+}
+
 public partial class PermissionRequestedData
 {
     [JsonPropertyName("requestId")]
     public required string RequestId { get; set; }
 
     [JsonPropertyName("permissionRequest")]
-    public required object PermissionRequest { get; set; }
+    public required PermissionRequest PermissionRequest { get; set; }
 }
 
 public partial class PermissionCompletedData
@@ -2095,6 +2125,259 @@ public partial class SystemMessageDataMetadata
     public Dictionary<string, object>? Variables { get; set; }
 }
 
+public partial class SystemNotificationDataKindAgentCompleted : SystemNotificationDataKind
+{
+    [JsonIgnore]
+    public override string Type => "agent_completed";
+
+    [JsonPropertyName("agentId")]
+    public required string AgentId { get; set; }
+
+    [JsonPropertyName("agentType")]
+    public required string AgentType { get; set; }
+
+    [JsonPropertyName("status")]
+    public required SystemNotificationDataKindAgentCompletedStatus Status { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("prompt")]
+    public string? Prompt { get; set; }
+}
+
+public partial class SystemNotificationDataKindShellCompleted : SystemNotificationDataKind
+{
+    [JsonIgnore]
+    public override string Type => "shell_completed";
+
+    [JsonPropertyName("shellId")]
+    public required string ShellId { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("exitCode")]
+    public double? ExitCode { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+}
+
+public partial class SystemNotificationDataKindShellDetachedCompleted : SystemNotificationDataKind
+{
+    [JsonIgnore]
+    public override string Type => "shell_detached_completed";
+
+    [JsonPropertyName("shellId")]
+    public required string ShellId { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+}
+
+[JsonPolymorphic(
+    TypeDiscriminatorPropertyName = "type",
+    UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FallBackToBaseType)]
+[JsonDerivedType(typeof(SystemNotificationDataKindAgentCompleted), "agent_completed")]
+[JsonDerivedType(typeof(SystemNotificationDataKindShellCompleted), "shell_completed")]
+[JsonDerivedType(typeof(SystemNotificationDataKindShellDetachedCompleted), "shell_detached_completed")]
+public partial class SystemNotificationDataKind
+{
+    [JsonPropertyName("type")]
+    public virtual string Type { get; set; } = string.Empty;
+}
+
+
+public partial class PermissionRequestShellCommandsItem
+{
+    [JsonPropertyName("identifier")]
+    public required string Identifier { get; set; }
+
+    [JsonPropertyName("readOnly")]
+    public required bool ReadOnly { get; set; }
+}
+
+public partial class PermissionRequestShellPossibleUrlsItem
+{
+    [JsonPropertyName("url")]
+    public required string Url { get; set; }
+}
+
+public partial class PermissionRequestShell : PermissionRequest
+{
+    [JsonIgnore]
+    public override string Kind => "shell";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("toolCallId")]
+    public string? ToolCallId { get; set; }
+
+    [JsonPropertyName("fullCommandText")]
+    public required string FullCommandText { get; set; }
+
+    [JsonPropertyName("intention")]
+    public required string Intention { get; set; }
+
+    [JsonPropertyName("commands")]
+    public required PermissionRequestShellCommandsItem[] Commands { get; set; }
+
+    [JsonPropertyName("possiblePaths")]
+    public required string[] PossiblePaths { get; set; }
+
+    [JsonPropertyName("possibleUrls")]
+    public required PermissionRequestShellPossibleUrlsItem[] PossibleUrls { get; set; }
+
+    [JsonPropertyName("hasWriteFileRedirection")]
+    public required bool HasWriteFileRedirection { get; set; }
+
+    [JsonPropertyName("canOfferSessionApproval")]
+    public required bool CanOfferSessionApproval { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("warning")]
+    public string? Warning { get; set; }
+}
+
+public partial class PermissionRequestWrite : PermissionRequest
+{
+    [JsonIgnore]
+    public override string Kind => "write";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("toolCallId")]
+    public string? ToolCallId { get; set; }
+
+    [JsonPropertyName("intention")]
+    public required string Intention { get; set; }
+
+    [JsonPropertyName("fileName")]
+    public required string FileName { get; set; }
+
+    [JsonPropertyName("diff")]
+    public required string Diff { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("newFileContents")]
+    public string? NewFileContents { get; set; }
+}
+
+public partial class PermissionRequestRead : PermissionRequest
+{
+    [JsonIgnore]
+    public override string Kind => "read";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("toolCallId")]
+    public string? ToolCallId { get; set; }
+
+    [JsonPropertyName("intention")]
+    public required string Intention { get; set; }
+
+    [JsonPropertyName("path")]
+    public required string Path { get; set; }
+}
+
+public partial class PermissionRequestMcp : PermissionRequest
+{
+    [JsonIgnore]
+    public override string Kind => "mcp";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("toolCallId")]
+    public string? ToolCallId { get; set; }
+
+    [JsonPropertyName("serverName")]
+    public required string ServerName { get; set; }
+
+    [JsonPropertyName("toolName")]
+    public required string ToolName { get; set; }
+
+    [JsonPropertyName("toolTitle")]
+    public required string ToolTitle { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("args")]
+    public object? Args { get; set; }
+
+    [JsonPropertyName("readOnly")]
+    public required bool ReadOnly { get; set; }
+}
+
+public partial class PermissionRequestUrl : PermissionRequest
+{
+    [JsonIgnore]
+    public override string Kind => "url";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("toolCallId")]
+    public string? ToolCallId { get; set; }
+
+    [JsonPropertyName("intention")]
+    public required string Intention { get; set; }
+
+    [JsonPropertyName("url")]
+    public required string Url { get; set; }
+}
+
+public partial class PermissionRequestMemory : PermissionRequest
+{
+    [JsonIgnore]
+    public override string Kind => "memory";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("toolCallId")]
+    public string? ToolCallId { get; set; }
+
+    [JsonPropertyName("subject")]
+    public required string Subject { get; set; }
+
+    [JsonPropertyName("fact")]
+    public required string Fact { get; set; }
+
+    [JsonPropertyName("citations")]
+    public required string Citations { get; set; }
+}
+
+public partial class PermissionRequestCustomTool : PermissionRequest
+{
+    [JsonIgnore]
+    public override string Kind => "custom-tool";
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("toolCallId")]
+    public string? ToolCallId { get; set; }
+
+    [JsonPropertyName("toolName")]
+    public required string ToolName { get; set; }
+
+    [JsonPropertyName("toolDescription")]
+    public required string ToolDescription { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("args")]
+    public object? Args { get; set; }
+}
+
+[JsonPolymorphic(
+    TypeDiscriminatorPropertyName = "kind",
+    UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FallBackToBaseType)]
+[JsonDerivedType(typeof(PermissionRequestShell), "shell")]
+[JsonDerivedType(typeof(PermissionRequestWrite), "write")]
+[JsonDerivedType(typeof(PermissionRequestRead), "read")]
+[JsonDerivedType(typeof(PermissionRequestMcp), "mcp")]
+[JsonDerivedType(typeof(PermissionRequestUrl), "url")]
+[JsonDerivedType(typeof(PermissionRequestMemory), "memory")]
+[JsonDerivedType(typeof(PermissionRequestCustomTool), "custom-tool")]
+public partial class PermissionRequest
+{
+    [JsonPropertyName("kind")]
+    public virtual string Kind { get; set; } = string.Empty;
+}
+
+
 public partial class PermissionCompletedDataResult
 {
     [JsonPropertyName("kind")]
@@ -2203,6 +2486,15 @@ public enum SystemMessageDataRole
     Developer,
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<SystemNotificationDataKindAgentCompletedStatus>))]
+public enum SystemNotificationDataKindAgentCompletedStatus
+{
+    [JsonStringEnumMemberName("completed")]
+    Completed,
+    [JsonStringEnumMemberName("failed")]
+    Failed,
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<PermissionCompletedDataResultKind>))]
 public enum PermissionCompletedDataResultKind
 {
@@ -2273,6 +2565,16 @@ public enum PermissionCompletedDataResultKind
 [JsonSerializable(typeof(PermissionCompletedData))]
 [JsonSerializable(typeof(PermissionCompletedDataResult))]
 [JsonSerializable(typeof(PermissionCompletedEvent))]
+[JsonSerializable(typeof(PermissionRequest))]
+[JsonSerializable(typeof(PermissionRequestCustomTool))]
+[JsonSerializable(typeof(PermissionRequestMcp))]
+[JsonSerializable(typeof(PermissionRequestMemory))]
+[JsonSerializable(typeof(PermissionRequestRead))]
+[JsonSerializable(typeof(PermissionRequestShell))]
+[JsonSerializable(typeof(PermissionRequestShellCommandsItem))]
+[JsonSerializable(typeof(PermissionRequestShellPossibleUrlsItem))]
+[JsonSerializable(typeof(PermissionRequestUrl))]
+[JsonSerializable(typeof(PermissionRequestWrite))]
 [JsonSerializable(typeof(PermissionRequestedData))]
 [JsonSerializable(typeof(PermissionRequestedEvent))]
 [JsonSerializable(typeof(SessionCompactionCompleteData))]
@@ -2339,6 +2641,12 @@ public enum PermissionCompletedDataResultKind
 [JsonSerializable(typeof(SystemMessageData))]
 [JsonSerializable(typeof(SystemMessageDataMetadata))]
 [JsonSerializable(typeof(SystemMessageEvent))]
+[JsonSerializable(typeof(SystemNotificationData))]
+[JsonSerializable(typeof(SystemNotificationDataKind))]
+[JsonSerializable(typeof(SystemNotificationDataKindAgentCompleted))]
+[JsonSerializable(typeof(SystemNotificationDataKindShellCompleted))]
+[JsonSerializable(typeof(SystemNotificationDataKindShellDetachedCompleted))]
+[JsonSerializable(typeof(SystemNotificationEvent))]
 [JsonSerializable(typeof(ToolExecutionCompleteData))]
 [JsonSerializable(typeof(ToolExecutionCompleteDataError))]
 [JsonSerializable(typeof(ToolExecutionCompleteDataResult))]

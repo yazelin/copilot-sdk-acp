@@ -339,7 +339,7 @@ public sealed partial class CopilotSession : IAsyncDisposable
             };
         }
 
-        var request = JsonSerializer.Deserialize(permissionRequestData.GetRawText(), SessionJsonContext.Default.PermissionRequest)
+        var request = JsonSerializer.Deserialize(permissionRequestData.GetRawText(), SessionEventsJsonContext.Default.PermissionRequest)
             ?? throw new InvalidOperationException("Failed to deserialize permission request");
 
         var invocation = new PermissionInvocation
@@ -457,27 +457,16 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// <summary>
     /// Executes a permission handler and sends the result back via the HandlePendingPermissionRequest RPC.
     /// </summary>
-    private async Task ExecutePermissionAndRespondAsync(string requestId, object permissionRequestData, PermissionRequestHandler handler)
+    private async Task ExecutePermissionAndRespondAsync(string requestId, PermissionRequest permissionRequest, PermissionRequestHandler handler)
     {
         try
         {
-            // PermissionRequestedData.PermissionRequest is typed as `object` in generated code,
-            // but StreamJsonRpc deserializes it as a JsonElement.
-            if (permissionRequestData is not JsonElement permJsonElement)
-            {
-                throw new InvalidOperationException(
-                    $"Permission request data must be a {nameof(JsonElement)}; received {permissionRequestData.GetType().Name}");
-            }
-
-            var request = JsonSerializer.Deserialize(permJsonElement.GetRawText(), SessionJsonContext.Default.PermissionRequest)
-                ?? throw new InvalidOperationException("Failed to deserialize permission request");
-
             var invocation = new PermissionInvocation
             {
                 SessionId = SessionId
             };
 
-            var result = await handler(request, invocation);
+            var result = await handler(permissionRequest, invocation);
             await Rpc.Permissions.HandlePendingPermissionRequestAsync(requestId, result);
         }
         catch (Exception)
@@ -682,7 +671,29 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// </example>
     public async Task SetModelAsync(string model, CancellationToken cancellationToken = default)
     {
-        await Rpc.Model.SwitchToAsync(model, cancellationToken);
+        await Rpc.Model.SwitchToAsync(model, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Log a message to the session timeline.
+    /// The message appears in the session event stream and is visible to SDK consumers
+    /// and (for non-ephemeral messages) persisted to the session event log on disk.
+    /// </summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="level">Log level (default: info).</param>
+    /// <param name="ephemeral">When <c>true</c>, the message is not persisted to disk.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <example>
+    /// <code>
+    /// await session.LogAsync("Build completed successfully");
+    /// await session.LogAsync("Disk space low", level: SessionLogRequestLevel.Warning);
+    /// await session.LogAsync("Connection failed", level: SessionLogRequestLevel.Error);
+    /// await session.LogAsync("Temporary status", ephemeral: true);
+    /// </code>
+    /// </example>
+    public async Task LogAsync(string message, SessionLogRequestLevel? level = null, bool? ephemeral = null, CancellationToken cancellationToken = default)
+    {
+        await Rpc.LogAsync(message, level, ephemeral, cancellationToken);
     }
 
     /// <summary>
@@ -780,7 +791,6 @@ public sealed partial class CopilotSession : IAsyncDisposable
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonSerializable(typeof(GetMessagesRequest))]
     [JsonSerializable(typeof(GetMessagesResponse))]
-    [JsonSerializable(typeof(PermissionRequest))]
     [JsonSerializable(typeof(SendMessageRequest))]
     [JsonSerializable(typeof(SendMessageResponse))]
     [JsonSerializable(typeof(SessionAbortRequest))]
