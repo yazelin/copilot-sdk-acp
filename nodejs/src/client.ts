@@ -12,6 +12,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { Socket } from "node:net";
 import { dirname, join } from "node:path";
@@ -79,6 +80,26 @@ function toJsonSchema(parameters: Tool["parameters"]): Record<string, unknown> |
     return parameters;
 }
 
+function getNodeExecPath(): string {
+    if (process.versions.bun) {
+        return "node";
+    }
+    return process.execPath;
+}
+
+/**
+ * Gets the path to the bundled CLI from the @github/copilot package.
+ * Uses index.js directly rather than npm-loader.js (which spawns the native binary).
+ */
+function getBundledCliPath(): string {
+    // Find the actual location of the @github/copilot package by resolving its sdk export
+    const sdkUrl = import.meta.resolve("@github/copilot/sdk");
+    const sdkPath = fileURLToPath(sdkUrl);
+    // sdkPath is like .../node_modules/@github/copilot/sdk/index.js
+    // Go up two levels to get the package root, then append index.js
+    return join(dirname(dirname(sdkPath)), "index.js");
+}
+
 /**
  * Main client for interacting with the Copilot CLI.
  *
@@ -112,27 +133,6 @@ function toJsonSchema(parameters: Tool["parameters"]): Record<string, unknown> |
  * await client.stop();
  * ```
  */
-
-function getNodeExecPath(): string {
-    if (process.versions.bun) {
-        return "node";
-    }
-    return process.execPath;
-}
-
-/**
- * Gets the path to the bundled CLI from the @github/copilot package.
- * Uses index.js directly rather than npm-loader.js (which spawns the native binary).
- */
-function getBundledCliPath(): string {
-    // Find the actual location of the @github/copilot package by resolving its sdk export
-    const sdkUrl = import.meta.resolve("@github/copilot/sdk");
-    const sdkPath = fileURLToPath(sdkUrl);
-    // sdkPath is like .../node_modules/@github/copilot/sdk/index.js
-    // Go up two levels to get the package root, then append index.js
-    return join(dirname(dirname(sdkPath)), "index.js");
-}
-
 export class CopilotClient {
     private cliProcess: ChildProcess | null = null;
     private connection: MessageConnection | null = null;
@@ -592,41 +592,11 @@ export class CopilotClient {
             }
         }
 
-        const response = await this.connection!.sendRequest("session.create", {
-            model: config.model,
-            sessionId: config.sessionId,
-            clientName: config.clientName,
-            reasoningEffort: config.reasoningEffort,
-            tools: config.tools?.map((tool) => ({
-                name: tool.name,
-                description: tool.description,
-                parameters: toJsonSchema(tool.parameters),
-                overridesBuiltInTool: tool.overridesBuiltInTool,
-            })),
-            systemMessage: config.systemMessage,
-            availableTools: config.availableTools,
-            excludedTools: config.excludedTools,
-            provider: config.provider,
-            requestPermission: true,
-            requestUserInput: !!config.onUserInputRequest,
-            hooks: !!(config.hooks && Object.values(config.hooks).some(Boolean)),
-            workingDirectory: config.workingDirectory,
-            streaming: config.streaming,
-            mcpServers: config.mcpServers,
-            envValueMode: "direct",
-            customAgents: config.customAgents,
-            agent: config.agent,
-            configDir: config.configDir,
-            skillDirectories: config.skillDirectories,
-            disabledSkills: config.disabledSkills,
-            infiniteSessions: config.infiniteSessions,
-        });
+        const sessionId = config.sessionId ?? randomUUID();
 
-        const { sessionId, workspacePath } = response as {
-            sessionId: string;
-            workspacePath?: string;
-        };
-        const session = new CopilotSession(sessionId, this.connection!, workspacePath);
+        // Create and register the session before issuing the RPC so that
+        // events emitted by the CLI (e.g. session.start) are not dropped.
+        const session = new CopilotSession(sessionId, this.connection!);
         session.registerTools(config.tools);
         session.registerPermissionHandler(config.onPermissionRequest);
         if (config.onUserInputRequest) {
@@ -635,7 +605,51 @@ export class CopilotClient {
         if (config.hooks) {
             session.registerHooks(config.hooks);
         }
+        if (config.onEvent) {
+            session.on(config.onEvent);
+        }
         this.sessions.set(sessionId, session);
+
+        try {
+            const response = await this.connection!.sendRequest("session.create", {
+                model: config.model,
+                sessionId,
+                clientName: config.clientName,
+                reasoningEffort: config.reasoningEffort,
+                tools: config.tools?.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: toJsonSchema(tool.parameters),
+                    overridesBuiltInTool: tool.overridesBuiltInTool,
+                })),
+                systemMessage: config.systemMessage,
+                availableTools: config.availableTools,
+                excludedTools: config.excludedTools,
+                provider: config.provider,
+                requestPermission: true,
+                requestUserInput: !!config.onUserInputRequest,
+                hooks: !!(config.hooks && Object.values(config.hooks).some(Boolean)),
+                workingDirectory: config.workingDirectory,
+                streaming: config.streaming,
+                mcpServers: config.mcpServers,
+                envValueMode: "direct",
+                customAgents: config.customAgents,
+                agent: config.agent,
+                configDir: config.configDir,
+                skillDirectories: config.skillDirectories,
+                disabledSkills: config.disabledSkills,
+                infiniteSessions: config.infiniteSessions,
+            });
+
+            const { workspacePath } = response as {
+                sessionId: string;
+                workspacePath?: string;
+            };
+            session["_workspacePath"] = workspacePath;
+        } catch (e) {
+            this.sessions.delete(sessionId);
+            throw e;
+        }
 
         return session;
     }
@@ -679,42 +693,9 @@ export class CopilotClient {
             }
         }
 
-        const response = await this.connection!.sendRequest("session.resume", {
-            sessionId,
-            clientName: config.clientName,
-            model: config.model,
-            reasoningEffort: config.reasoningEffort,
-            systemMessage: config.systemMessage,
-            availableTools: config.availableTools,
-            excludedTools: config.excludedTools,
-            tools: config.tools?.map((tool) => ({
-                name: tool.name,
-                description: tool.description,
-                parameters: toJsonSchema(tool.parameters),
-                overridesBuiltInTool: tool.overridesBuiltInTool,
-            })),
-            provider: config.provider,
-            requestPermission: true,
-            requestUserInput: !!config.onUserInputRequest,
-            hooks: !!(config.hooks && Object.values(config.hooks).some(Boolean)),
-            workingDirectory: config.workingDirectory,
-            configDir: config.configDir,
-            streaming: config.streaming,
-            mcpServers: config.mcpServers,
-            envValueMode: "direct",
-            customAgents: config.customAgents,
-            agent: config.agent,
-            skillDirectories: config.skillDirectories,
-            disabledSkills: config.disabledSkills,
-            infiniteSessions: config.infiniteSessions,
-            disableResume: config.disableResume,
-        });
-
-        const { sessionId: resumedSessionId, workspacePath } = response as {
-            sessionId: string;
-            workspacePath?: string;
-        };
-        const session = new CopilotSession(resumedSessionId, this.connection!, workspacePath);
+        // Create and register the session before issuing the RPC so that
+        // events emitted by the CLI (e.g. session.start) are not dropped.
+        const session = new CopilotSession(sessionId, this.connection!);
         session.registerTools(config.tools);
         session.registerPermissionHandler(config.onPermissionRequest);
         if (config.onUserInputRequest) {
@@ -723,7 +704,52 @@ export class CopilotClient {
         if (config.hooks) {
             session.registerHooks(config.hooks);
         }
-        this.sessions.set(resumedSessionId, session);
+        if (config.onEvent) {
+            session.on(config.onEvent);
+        }
+        this.sessions.set(sessionId, session);
+
+        try {
+            const response = await this.connection!.sendRequest("session.resume", {
+                sessionId,
+                clientName: config.clientName,
+                model: config.model,
+                reasoningEffort: config.reasoningEffort,
+                systemMessage: config.systemMessage,
+                availableTools: config.availableTools,
+                excludedTools: config.excludedTools,
+                tools: config.tools?.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: toJsonSchema(tool.parameters),
+                    overridesBuiltInTool: tool.overridesBuiltInTool,
+                })),
+                provider: config.provider,
+                requestPermission: true,
+                requestUserInput: !!config.onUserInputRequest,
+                hooks: !!(config.hooks && Object.values(config.hooks).some(Boolean)),
+                workingDirectory: config.workingDirectory,
+                configDir: config.configDir,
+                streaming: config.streaming,
+                mcpServers: config.mcpServers,
+                envValueMode: "direct",
+                customAgents: config.customAgents,
+                agent: config.agent,
+                skillDirectories: config.skillDirectories,
+                disabledSkills: config.disabledSkills,
+                infiniteSessions: config.infiniteSessions,
+                disableResume: config.disableResume,
+            });
+
+            const { workspacePath } = response as {
+                sessionId: string;
+                workspacePath?: string;
+            };
+            session["_workspacePath"] = workspacePath;
+        } catch (e) {
+            this.sessions.delete(sessionId);
+            throw e;
+        }
 
         return session;
     }

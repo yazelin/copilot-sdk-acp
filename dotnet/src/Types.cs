@@ -266,38 +266,6 @@ public class ToolInvocation
 /// </summary>
 public delegate Task<object?> ToolHandler(ToolInvocation invocation);
 
-/// <summary>
-/// Represents a permission request from the server for a tool operation.
-/// </summary>
-public class PermissionRequest
-{
-    /// <summary>
-    /// Kind of permission being requested.
-    /// <list type="bullet">
-    /// <item><description><c>"shell"</c> — execute a shell command.</description></item>
-    /// <item><description><c>"write"</c> — write to a file.</description></item>
-    /// <item><description><c>"read"</c> — read a file.</description></item>
-    /// <item><description><c>"mcp"</c> — invoke an MCP server tool.</description></item>
-    /// <item><description><c>"url"</c> — access a URL.</description></item>
-    /// <item><description><c>"custom-tool"</c> — invoke a custom tool.</description></item>
-    /// </list>
-    /// </summary>
-    [JsonPropertyName("kind")]
-    public string Kind { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Identifier of the tool call that triggered the permission request.
-    /// </summary>
-    [JsonPropertyName("toolCallId")]
-    public string? ToolCallId { get; set; }
-
-    /// <summary>
-    /// Additional properties not explicitly modeled.
-    /// </summary>
-    [JsonExtensionData]
-    public Dictionary<string, object>? ExtensionData { get; set; }
-}
-
 /// <summary>Describes the kind of a permission request result.</summary>
 [JsonConverter(typeof(PermissionRequestResultKind.Converter))]
 [DebuggerDisplay("{Value,nq}")]
@@ -1215,6 +1183,7 @@ public class SessionConfig
             ? new Dictionary<string, object>(other.McpServers, other.McpServers.Comparer)
             : null;
         Model = other.Model;
+        OnEvent = other.OnEvent;
         OnPermissionRequest = other.OnPermissionRequest;
         OnUserInputRequest = other.OnUserInputRequest;
         Provider = other.Provider;
@@ -1340,6 +1309,18 @@ public class SessionConfig
     public InfiniteSessionConfig? InfiniteSessions { get; set; }
 
     /// <summary>
+    /// Optional event handler that is registered on the session before the
+    /// session.create RPC is issued.
+    /// </summary>
+    /// <remarks>
+    /// Equivalent to calling <see cref="CopilotSession.On"/> immediately
+    /// after creation, but executes earlier in the lifecycle so no events are missed.
+    /// Using this property rather than <see cref="CopilotSession.On"/> guarantees that early events emitted 
+    /// by the CLI during session creation (e.g. session.start) are delivered to the handler.
+    /// </remarks>
+    public SessionEventHandler? OnEvent { get; set; }
+
+    /// <summary>
     /// Creates a shallow clone of this <see cref="SessionConfig"/> instance.
     /// </summary>
     /// <remarks>
@@ -1387,6 +1368,7 @@ public class ResumeSessionConfig
             ? new Dictionary<string, object>(other.McpServers, other.McpServers.Comparer)
             : null;
         Model = other.Model;
+        OnEvent = other.OnEvent;
         OnPermissionRequest = other.OnPermissionRequest;
         OnUserInputRequest = other.OnUserInputRequest;
         Provider = other.Provider;
@@ -1513,6 +1495,12 @@ public class ResumeSessionConfig
     /// Infinite session configuration for persistent workspaces and automatic compaction.
     /// </summary>
     public InfiniteSessionConfig? InfiniteSessions { get; set; }
+
+    /// <summary>
+    /// Optional event handler registered before the session.resume RPC is issued,
+    /// ensuring early events are delivered. See <see cref="SessionConfig.OnEvent"/>.
+    /// </summary>
+    public SessionEventHandler? OnEvent { get; set; }
 
     /// <summary>
     /// Creates a shallow clone of this <see cref="ResumeSessionConfig"/> instance.
@@ -2005,7 +1993,6 @@ public class SetForegroundSessionResponse
 [JsonSerializable(typeof(ModelPolicy))]
 [JsonSerializable(typeof(ModelSupports))]
 [JsonSerializable(typeof(ModelVisionLimits))]
-[JsonSerializable(typeof(PermissionRequest))]
 [JsonSerializable(typeof(PermissionRequestResult))]
 [JsonSerializable(typeof(PingRequest))]
 [JsonSerializable(typeof(PingResponse))]
