@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 using GitHub.Copilot.SDK.Test.Harness;
+using GitHub.Copilot.SDK.Rpc;
 using Microsoft.Extensions.AI;
 using System.ComponentModel;
 using Xunit;
@@ -244,7 +245,17 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
     [Fact]
     public async Task Should_Receive_Session_Events()
     {
-        var session = await CreateSessionAsync();
+        // Use OnEvent to capture events dispatched during session creation.
+        // session.start is emitted during the session.create RPC; if the session
+        // weren't registered in the sessions map before the RPC, it would be dropped.
+        var earlyEvents = new List<SessionEvent>();
+        var session = await CreateSessionAsync(new SessionConfig
+        {
+            OnEvent = evt => earlyEvents.Add(evt),
+        });
+
+        Assert.Contains(earlyEvents, evt => evt is SessionStartEvent);
+
         var receivedEvents = new List<SessionEvent>();
         var idleReceived = new TaskCompletionSource<bool>();
 
@@ -261,8 +272,7 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
         await session.SendAsync(new MessageOptions { Prompt = "What is 100+200?" });
 
         // Wait for session to become idle (indicating message processing is complete)
-        var completed = await Task.WhenAny(idleReceived.Task, Task.Delay(TimeSpan.FromSeconds(60)));
-        Assert.Equal(idleReceived.Task, completed);
+        await idleReceived.Task.WaitAsync(TimeSpan.FromSeconds(60));
 
         // Should have received multiple events (user message, assistant message, idle, etc.)
         Assert.NotEmpty(receivedEvents);
@@ -403,5 +413,52 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
         // Verify a model_change event was emitted with the new model
         var modelChanged = await modelChangedTask;
         Assert.Equal("gpt-4.1", modelChanged.Data.NewModel);
+    }
+
+    [Fact]
+    public async Task Should_Log_Messages_At_Various_Levels()
+    {
+        var session = await CreateSessionAsync();
+        var events = new List<SessionEvent>();
+        session.On(evt => events.Add(evt));
+
+        await session.LogAsync("Info message");
+        await session.LogAsync("Warning message", level: SessionLogRequestLevel.Warning);
+        await session.LogAsync("Error message", level: SessionLogRequestLevel.Error);
+        await session.LogAsync("Ephemeral message", ephemeral: true);
+
+        // Poll until all 4 notification events arrive
+        await WaitForAsync(() =>
+        {
+            var notifications = events.Where(e =>
+                e is SessionInfoEvent info && info.Data.InfoType == "notification" ||
+                e is SessionWarningEvent warn && warn.Data.WarningType == "notification" ||
+                e is SessionErrorEvent err && err.Data.ErrorType == "notification"
+            ).ToList();
+            return notifications.Count >= 4;
+        }, timeout: TimeSpan.FromSeconds(10));
+
+        var infoEvent = events.OfType<SessionInfoEvent>().First(e => e.Data.Message == "Info message");
+        Assert.Equal("notification", infoEvent.Data.InfoType);
+
+        var warningEvent = events.OfType<SessionWarningEvent>().First(e => e.Data.Message == "Warning message");
+        Assert.Equal("notification", warningEvent.Data.WarningType);
+
+        var errorEvent = events.OfType<SessionErrorEvent>().First(e => e.Data.Message == "Error message");
+        Assert.Equal("notification", errorEvent.Data.ErrorType);
+
+        var ephemeralEvent = events.OfType<SessionInfoEvent>().First(e => e.Data.Message == "Ephemeral message");
+        Assert.Equal("notification", ephemeralEvent.Data.InfoType);
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"Condition not met within {timeout}");
+            await Task.Delay(100);
+        }
     }
 }

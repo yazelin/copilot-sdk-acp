@@ -38,8 +38,7 @@ type ClientOptions struct {
 	// AutoStart automatically starts the CLI server on first use (default: true).
 	// Use Bool(false) to disable.
 	AutoStart *bool
-	// AutoRestart automatically restarts the CLI server if it crashes (default: true).
-	// Use Bool(false) to disable.
+	// Deprecated: AutoRestart has no effect and will be removed in a future release.
 	AutoRestart *bool
 	// Env is the environment variables for the CLI process (default: inherits from current process).
 	// Each entry is of the form "key=value".
@@ -65,7 +64,7 @@ type ClientOptions struct {
 }
 
 // Bool returns a pointer to the given bool value.
-// Use for setting AutoStart or AutoRestart: AutoStart: Bool(false)
+// Use for setting AutoStart: AutoStart: Bool(false)
 func Bool(v bool) *bool {
 	return &v
 }
@@ -402,9 +401,13 @@ type SessionConfig struct {
 	// InfiniteSessions configures infinite sessions for persistent workspaces and automatic compaction.
 	// When enabled (default), sessions automatically manage context limits and persist state.
 	InfiniteSessions *InfiniteSessionConfig
+	// OnEvent is an optional event handler that is registered on the session before
+	// the session.create RPC is issued. This guarantees that early events emitted
+	// by the CLI during session creation (e.g. session.start) are delivered to the
+	// handler. Equivalent to calling session.On(handler) immediately after creation,
+	// but executes earlier in the lifecycle so no events are missed.
+	OnEvent SessionEventHandler
 }
-
-// Tool describes a caller-implemented tool that can be invoked by Copilot
 type Tool struct {
 	Name                 string         `json:"name"`
 	Description          string         `json:"description,omitempty"`
@@ -490,9 +493,10 @@ type ResumeSessionConfig struct {
 	// DisableResume, when true, skips emitting the session.resume event.
 	// Useful for reconnecting to a session without triggering resume-related side effects.
 	DisableResume bool
+	// OnEvent is an optional event handler registered before the session.resume RPC
+	// is issued, ensuring early events are delivered. See SessionConfig.OnEvent.
+	OnEvent SessionEventHandler
 }
-
-// ProviderConfig configures a custom model provider
 type ProviderConfig struct {
 	// Type is the provider type: "openai", "azure", or "anthropic". Defaults to "openai".
 	Type string `json:"type,omitempty"`

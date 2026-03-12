@@ -50,8 +50,10 @@ public class CopilotClientOptions
     {
         if (other is null) return;
 
-        AutoRestart = other.AutoRestart;
         AutoStart = other.AutoStart;
+#pragma warning disable CS0618 // Obsolete member
+        AutoRestart = other.AutoRestart;
+#pragma warning restore CS0618
         CliArgs = (string[]?)other.CliArgs?.Clone();
         CliPath = other.CliPath;
         CliUrl = other.CliUrl;
@@ -99,9 +101,10 @@ public class CopilotClientOptions
     /// </summary>
     public bool AutoStart { get; set; } = true;
     /// <summary>
-    /// Whether to automatically restart the CLI server if it exits unexpectedly.
+    /// Obsolete. This option has no effect.
     /// </summary>
-    public bool AutoRestart { get; set; } = true;
+    [Obsolete("AutoRestart has no effect and will be removed in a future release.")]
+    public bool AutoRestart { get; set; }
     /// <summary>
     /// Environment variables to pass to the CLI process.
     /// </summary>
@@ -266,38 +269,6 @@ public class ToolInvocation
 /// </summary>
 public delegate Task<object?> ToolHandler(ToolInvocation invocation);
 
-/// <summary>
-/// Represents a permission request from the server for a tool operation.
-/// </summary>
-public class PermissionRequest
-{
-    /// <summary>
-    /// Kind of permission being requested.
-    /// <list type="bullet">
-    /// <item><description><c>"shell"</c> — execute a shell command.</description></item>
-    /// <item><description><c>"write"</c> — write to a file.</description></item>
-    /// <item><description><c>"read"</c> — read a file.</description></item>
-    /// <item><description><c>"mcp"</c> — invoke an MCP server tool.</description></item>
-    /// <item><description><c>"url"</c> — access a URL.</description></item>
-    /// <item><description><c>"custom-tool"</c> — invoke a custom tool.</description></item>
-    /// </list>
-    /// </summary>
-    [JsonPropertyName("kind")]
-    public string Kind { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Identifier of the tool call that triggered the permission request.
-    /// </summary>
-    [JsonPropertyName("toolCallId")]
-    public string? ToolCallId { get; set; }
-
-    /// <summary>
-    /// Additional properties not explicitly modeled.
-    /// </summary>
-    [JsonExtensionData]
-    public Dictionary<string, object>? ExtensionData { get; set; }
-}
-
 /// <summary>Describes the kind of a permission request result.</summary>
 [JsonConverter(typeof(PermissionRequestResultKind.Converter))]
 [DebuggerDisplay("{Value,nq}")]
@@ -382,6 +353,7 @@ public class PermissionRequestResult
     /// <item><description><c>"denied-by-rules"</c> — denied by configured permission rules.</description></item>
     /// <item><description><c>"denied-interactively-by-user"</c> — the user explicitly denied the request.</description></item>
     /// <item><description><c>"denied-no-approval-rule-and-could-not-request-from-user"</c> — no rule matched and user approval was unavailable.</description></item>
+    /// <item><description><c>"no-result"</c> — leave the pending permission request unanswered.</description></item>
     /// </list>
     /// </summary>
     [JsonPropertyName("kind")]
@@ -1215,6 +1187,7 @@ public class SessionConfig
             ? new Dictionary<string, object>(other.McpServers, other.McpServers.Comparer)
             : null;
         Model = other.Model;
+        OnEvent = other.OnEvent;
         OnPermissionRequest = other.OnPermissionRequest;
         OnUserInputRequest = other.OnUserInputRequest;
         Provider = other.Provider;
@@ -1340,6 +1313,18 @@ public class SessionConfig
     public InfiniteSessionConfig? InfiniteSessions { get; set; }
 
     /// <summary>
+    /// Optional event handler that is registered on the session before the
+    /// session.create RPC is issued.
+    /// </summary>
+    /// <remarks>
+    /// Equivalent to calling <see cref="CopilotSession.On"/> immediately
+    /// after creation, but executes earlier in the lifecycle so no events are missed.
+    /// Using this property rather than <see cref="CopilotSession.On"/> guarantees that early events emitted 
+    /// by the CLI during session creation (e.g. session.start) are delivered to the handler.
+    /// </remarks>
+    public SessionEventHandler? OnEvent { get; set; }
+
+    /// <summary>
     /// Creates a shallow clone of this <see cref="SessionConfig"/> instance.
     /// </summary>
     /// <remarks>
@@ -1387,6 +1372,7 @@ public class ResumeSessionConfig
             ? new Dictionary<string, object>(other.McpServers, other.McpServers.Comparer)
             : null;
         Model = other.Model;
+        OnEvent = other.OnEvent;
         OnPermissionRequest = other.OnPermissionRequest;
         OnUserInputRequest = other.OnUserInputRequest;
         Provider = other.Provider;
@@ -1513,6 +1499,12 @@ public class ResumeSessionConfig
     /// Infinite session configuration for persistent workspaces and automatic compaction.
     /// </summary>
     public InfiniteSessionConfig? InfiniteSessions { get; set; }
+
+    /// <summary>
+    /// Optional event handler registered before the session.resume RPC is issued,
+    /// ensuring early events are delivered. See <see cref="SessionConfig.OnEvent"/>.
+    /// </summary>
+    public SessionEventHandler? OnEvent { get; set; }
 
     /// <summary>
     /// Creates a shallow clone of this <see cref="ResumeSessionConfig"/> instance.
@@ -2005,7 +1997,6 @@ public class SetForegroundSessionResponse
 [JsonSerializable(typeof(ModelPolicy))]
 [JsonSerializable(typeof(ModelSupports))]
 [JsonSerializable(typeof(ModelVisionLimits))]
-[JsonSerializable(typeof(PermissionRequest))]
 [JsonSerializable(typeof(PermissionRequestResult))]
 [JsonSerializable(typeof(PingRequest))]
 [JsonSerializable(typeof(PingResponse))]

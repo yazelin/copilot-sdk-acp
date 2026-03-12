@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import threading
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -47,6 +48,10 @@ from .types import (
     StopError,
     ToolInvocation,
     ToolResult,
+)
+
+NO_RESULT_PERMISSION_V2_ERROR = (
+    "Permission handlers cannot return 'no-result' when connected to a protocol v2 server."
 )
 
 # Minimum protocol version this SDK can communicate with.
@@ -188,7 +193,6 @@ class CopilotClient:
             "use_stdio": False if opts.get("cli_url") else opts.get("use_stdio", True),
             "log_level": opts.get("log_level", "info"),
             "auto_start": opts.get("auto_start", True),
-            "auto_restart": opts.get("auto_restart", True),
             "use_logged_in_user": use_logged_in_user,
         }
         if opts.get("cli_args"):
@@ -507,8 +511,6 @@ class CopilotClient:
         payload: dict[str, Any] = {}
         if cfg.get("model"):
             payload["model"] = cfg["model"]
-        if cfg.get("session_id"):
-            payload["sessionId"] = cfg["session_id"]
         if cfg.get("client_name"):
             payload["clientName"] = cfg["client_name"]
         if cfg.get("reasoning_effort"):
@@ -609,19 +611,32 @@ class CopilotClient:
 
         if not self._client:
             raise RuntimeError("Client not connected")
-        response = await self._client.request("session.create", payload)
 
-        session_id = response["sessionId"]
-        workspace_path = response.get("workspacePath")
-        session = CopilotSession(session_id, self._client, workspace_path)
+        session_id = cfg.get("session_id") or str(uuid.uuid4())
+        payload["sessionId"] = session_id
+
+        # Create and register the session before issuing the RPC so that
+        # events emitted by the CLI (e.g. session.start) are not dropped.
+        session = CopilotSession(session_id, self._client, None)
         session._register_tools(tools)
         session._register_permission_handler(on_permission_request)
         if on_user_input_request:
             session._register_user_input_handler(on_user_input_request)
         if hooks:
             session._register_hooks(hooks)
+        on_event = cfg.get("on_event")
+        if on_event:
+            session.on(on_event)
         with self._sessions_lock:
             self._sessions[session_id] = session
+
+        try:
+            response = await self._client.request("session.create", payload)
+            session._workspace_path = response.get("workspacePath")
+        except BaseException:
+            with self._sessions_lock:
+                self._sessions.pop(session_id, None)
+            raise
 
         return session
 
@@ -798,19 +813,29 @@ class CopilotClient:
 
         if not self._client:
             raise RuntimeError("Client not connected")
-        response = await self._client.request("session.resume", payload)
 
-        resumed_session_id = response["sessionId"]
-        workspace_path = response.get("workspacePath")
-        session = CopilotSession(resumed_session_id, self._client, workspace_path)
+        # Create and register the session before issuing the RPC so that
+        # events emitted by the CLI (e.g. session.start) are not dropped.
+        session = CopilotSession(session_id, self._client, None)
         session._register_tools(cfg.get("tools"))
         session._register_permission_handler(on_permission_request)
         if on_user_input_request:
             session._register_user_input_handler(on_user_input_request)
         if hooks:
             session._register_hooks(hooks)
+        on_event = cfg.get("on_event")
+        if on_event:
+            session.on(on_event)
         with self._sessions_lock:
-            self._sessions[resumed_session_id] = session
+            self._sessions[session_id] = session
+
+        try:
+            response = await self._client.request("session.resume", payload)
+            session._workspace_path = response.get("workspacePath")
+        except BaseException:
+            with self._sessions_lock:
+                self._sessions.pop(session_id, None)
+            raise
 
         return session
 
@@ -1384,6 +1409,7 @@ class CopilotClient:
 
         # Create JSON-RPC client with the process
         self._client = JsonRpcClient(self._process)
+        self._client.on_close = lambda: setattr(self, "_state", "disconnected")
         self._rpc = ServerRpc(self._client)
 
         # Set up notification handler for session events
@@ -1471,6 +1497,7 @@ class CopilotClient:
 
         self._process = SocketWrapper(sock_file, sock)  # type: ignore
         self._client = JsonRpcClient(self._process)
+        self._client.on_close = lambda: setattr(self, "_state", "disconnected")
         self._rpc = ServerRpc(self._client)
 
         # Set up notification handler for session events
@@ -1638,6 +1665,8 @@ class CopilotClient:
         try:
             perm_request = PermissionRequest.from_dict(permission_request)
             result = await session._handle_permission_request(perm_request)
+            if result.kind == "no-result":
+                raise ValueError(NO_RESULT_PERMISSION_V2_ERROR)
             result_payload: dict = {"kind": result.kind}
             if result.rules is not None:
                 result_payload["rules"] = result.rules
@@ -1648,6 +1677,14 @@ class CopilotClient:
             if result.path is not None:
                 result_payload["path"] = result.path
             return {"result": result_payload}
+        except ValueError as exc:
+            if str(exc) == NO_RESULT_PERMISSION_V2_ERROR:
+                raise
+            return {
+                "result": {
+                    "kind": "denied-no-approval-rule-and-could-not-request-from-user",
+                }
+            }
         except Exception:  # pylint: disable=broad-except
             return {
                 "result": {

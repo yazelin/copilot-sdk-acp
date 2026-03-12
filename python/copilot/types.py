@@ -86,8 +86,6 @@ class CopilotClientOptions(TypedDict, total=False):
     # Mutually exclusive with cli_path, use_stdio
     log_level: LogLevel  # Log level
     auto_start: bool  # Auto-start the CLI server on first use (default: True)
-    # Auto-restart the CLI server if it crashes (default: True)
-    auto_restart: bool
     env: dict[str, str]  # Environment variables for the CLI process
     # GitHub token to use for authentication.
     # When provided, the token is passed to the CLI server via environment variable.
@@ -187,6 +185,7 @@ PermissionRequestResultKind = Literal[
     "denied-by-content-exclusion-policy",
     "denied-no-approval-rule-and-could-not-request-from-user",
     "denied-interactively-by-user",
+    "no-result",
 ]
 
 
@@ -526,9 +525,13 @@ class SessionConfig(TypedDict, total=False):
     # When enabled (default), sessions automatically manage context limits and persist state.
     # Set to {"enabled": False} to disable.
     infinite_sessions: InfiniteSessionConfig
+    # Optional event handler that is registered on the session before the
+    # session.create RPC is issued, ensuring early events (e.g. session.start)
+    # are delivered. Equivalent to calling session.on(handler) immediately
+    # after creation, but executes earlier in the lifecycle so no events are missed.
+    on_event: Callable[[SessionEvent], None]
 
 
-# Azure-specific provider options
 class AzureProviderOptions(TypedDict, total=False):
     """Azure-specific provider configuration"""
 
@@ -595,6 +598,9 @@ class ResumeSessionConfig(TypedDict, total=False):
     # When True, skips emitting the session.resume event.
     # Useful for reconnecting to a session without triggering resume-related side effects.
     disable_resume: bool
+    # Optional event handler registered before the session.resume RPC is issued,
+    # ensuring early events are delivered. See SessionConfig.on_event.
+    on_event: Callable[[SessionEvent], None]
 
 
 # Options for sending a message to a session

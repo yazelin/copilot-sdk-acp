@@ -26,6 +26,38 @@ describe("CopilotClient", () => {
         );
     });
 
+    it("does not respond to v3 permission requests when handler returns no-result", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const session = await client.createSession({
+            onPermissionRequest: () => ({ kind: "no-result" }),
+        });
+        const spy = vi.spyOn(session.rpc.permissions, "handlePendingPermissionRequest");
+
+        await (session as any)._executePermissionAndRespond("request-1", { kind: "write" });
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("throws when a v2 permission handler returns no-result", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const session = await client.createSession({
+            onPermissionRequest: () => ({ kind: "no-result" }),
+        });
+
+        await expect(
+            (client as any).handlePermissionRequestV2({
+                sessionId: session.sessionId,
+                permissionRequest: { kind: "write" },
+            })
+        ).rejects.toThrow(/protocol v2 server/);
+    });
+
     it("forwards clientName in session.create request", async () => {
         const client = new CopilotClient();
         await client.start();
@@ -209,6 +241,15 @@ describe("CopilotClient", () => {
             });
 
             expect((client as any).isExternalServer).toBe(true);
+        });
+
+        it("should not resolve cliPath when cliUrl is provided", () => {
+            const client = new CopilotClient({
+                cliUrl: "localhost:8080",
+                logLevel: "error",
+            });
+
+            expect(client["options"].cliPath).toBeUndefined();
         });
     });
 
@@ -501,6 +542,25 @@ describe("CopilotClient", () => {
             const models = await client.listModels();
             expect(handler).toHaveBeenCalledTimes(1);
             expect(models).toEqual(customModels);
+        });
+    });
+
+    describe("unexpected disconnection", () => {
+        it("transitions to disconnected when child process is killed", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            expect(client.getState()).toBe("connected");
+
+            // Kill the child process to simulate unexpected termination
+            const proc = (client as any).cliProcess as import("node:child_process").ChildProcess;
+            proc.kill();
+
+            // Wait for the connection.onClose handler to fire
+            await vi.waitFor(() => {
+                expect(client.getState()).toBe("disconnected");
+            });
         });
     });
 });

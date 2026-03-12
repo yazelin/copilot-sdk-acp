@@ -7,8 +7,8 @@
  * @module session
  */
 
-import type { MessageConnection } from "vscode-jsonrpc/node";
-import { ConnectionError, ResponseError } from "vscode-jsonrpc/node";
+import type { MessageConnection } from "vscode-jsonrpc/node.js";
+import { ConnectionError, ResponseError } from "vscode-jsonrpc/node.js";
 import { createSessionRpc } from "./generated/rpc.js";
 import type {
     MessageOptions,
@@ -27,6 +27,9 @@ import type {
     UserInputRequest,
     UserInputResponse,
 } from "./types.js";
+
+export const NO_RESULT_PERMISSION_V2_ERROR =
+    "Permission handlers cannot return 'no-result' when connected to a protocol v2 server.";
 
 /** Assistant message event - the final response from the assistant. */
 export type AssistantMessageEvent = Extract<SessionEvent, { type: "assistant.message" }>;
@@ -77,7 +80,7 @@ export class CopilotSession {
     constructor(
         public readonly sessionId: string,
         private connection: MessageConnection,
-        private readonly _workspacePath?: string
+        private _workspacePath?: string
     ) {}
 
     /**
@@ -400,6 +403,9 @@ export class CopilotSession {
             const result = await this.permissionHandler!(permissionRequest, {
                 sessionId: this.sessionId,
             });
+            if (result.kind === "no-result") {
+                return;
+            }
             await this.rpc.permissions.handlePendingPermissionRequest({ requestId, result });
         } catch (_error) {
             try {
@@ -505,8 +511,14 @@ export class CopilotSession {
             const result = await this.permissionHandler(request as PermissionRequest, {
                 sessionId: this.sessionId,
             });
+            if (result.kind === "no-result") {
+                throw new Error(NO_RESULT_PERMISSION_V2_ERROR);
+            }
             return result;
-        } catch (_error) {
+        } catch (error) {
+            if (error instanceof Error && error.message === NO_RESULT_PERMISSION_V2_ERROR) {
+                throw error;
+            }
             return { kind: "denied-no-approval-rule-and-could-not-request-from-user" };
         }
     }
@@ -692,5 +704,28 @@ export class CopilotSession {
      */
     async setModel(model: string): Promise<void> {
         await this.rpc.model.switchTo({ modelId: model });
+    }
+
+    /**
+     * Log a message to the session timeline.
+     * The message appears in the session event stream and is visible to SDK consumers
+     * and (for non-ephemeral messages) persisted to the session event log on disk.
+     *
+     * @param message - Human-readable message text
+     * @param options - Optional log level and ephemeral flag
+     *
+     * @example
+     * ```typescript
+     * await session.log("Processing started");
+     * await session.log("Disk usage high", { level: "warning" });
+     * await session.log("Connection failed", { level: "error" });
+     * await session.log("Debug info", { ephemeral: true });
+     * ```
+     */
+    async log(
+        message: string,
+        options?: { level?: "info" | "warning" | "error"; ephemeral?: boolean }
+    ): Promise<void> {
+        await this.rpc.log({ message, ...options });
     }
 }
