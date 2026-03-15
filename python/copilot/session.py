@@ -13,7 +13,9 @@ from typing import Any, cast
 
 from .generated.rpc import (
     Kind,
+    Level,
     ResultResult,
+    SessionLogParams,
     SessionModelSwitchToParams,
     SessionPermissionsHandlePendingPermissionRequestParams,
     SessionPermissionsHandlePendingPermissionRequestParamsResult,
@@ -22,6 +24,7 @@ from .generated.rpc import (
 )
 from .generated.session_events import SessionEvent, SessionEventType, session_event_from_dict
 from .jsonrpc import JsonRpcError, ProcessExitedError
+from .telemetry import get_trace_context, trace_context
 from .types import (
     MessageOptions,
     PermissionRequest,
@@ -137,15 +140,17 @@ class CopilotSession:
             ...     "attachments": [{"type": "file", "path": "./src/main.py"}]
             ... })
         """
-        response = await self._client.request(
-            "session.send",
-            {
-                "sessionId": self.session_id,
-                "prompt": options["prompt"],
-                "attachments": options.get("attachments"),
-                "mode": options.get("mode"),
-            },
-        )
+        params: dict[str, Any] = {
+            "sessionId": self.session_id,
+            "prompt": options["prompt"],
+        }
+        if "attachments" in options:
+            params["attachments"] = options["attachments"]
+        if "mode" in options:
+            params["mode"] = options["mode"]
+        params.update(get_trace_context())
+
+        response = await self._client.request("session.send", params)
         return response["messageId"]
 
     async def send_and_wait(
@@ -287,9 +292,11 @@ class CopilotSession:
 
             tool_call_id = event.data.tool_call_id or ""
             arguments = event.data.arguments
+            tp = getattr(event.data, "traceparent", None)
+            ts = getattr(event.data, "tracestate", None)
             asyncio.ensure_future(
                 self._execute_tool_and_respond(
-                    request_id, tool_name, tool_call_id, arguments, handler
+                    request_id, tool_name, tool_call_id, arguments, handler, tp, ts
                 )
             )
 
@@ -315,6 +322,8 @@ class CopilotSession:
         tool_call_id: str,
         arguments: Any,
         handler: ToolHandler,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> None:
         """Execute a tool handler and send the result back via HandlePendingToolCall RPC."""
         try:
@@ -325,9 +334,10 @@ class CopilotSession:
                 arguments=arguments,
             )
 
-            result = handler(invocation)
-            if inspect.isawaitable(result):
-                result = await result
+            with trace_context(traceparent, tracestate):
+                result = handler(invocation)
+                if inspect.isawaitable(result):
+                    result = await result
 
             tool_result: ToolResult
             if result is None:
@@ -385,6 +395,8 @@ class CopilotSession:
                 result = await result
 
             result = cast(PermissionRequestResult, result)
+            if result.kind == "no-result":
+                return
 
             perm_result = SessionPermissionsHandlePendingPermissionRequestParamsResult(
                 kind=Kind(result.kind),
@@ -716,7 +728,7 @@ class CopilotSession:
         """
         await self._client.request("session.abort", {"sessionId": self.session_id})
 
-    async def set_model(self, model: str) -> None:
+    async def set_model(self, model: str, *, reasoning_effort: str | None = None) -> None:
         """
         Change the model for this session.
 
@@ -725,11 +737,53 @@ class CopilotSession:
 
         Args:
             model: Model ID to switch to (e.g., "gpt-4.1", "claude-sonnet-4").
+            reasoning_effort: Optional reasoning effort level for the new model
+                (e.g., "low", "medium", "high", "xhigh").
 
         Raises:
             Exception: If the session has been destroyed or the connection fails.
 
         Example:
             >>> await session.set_model("gpt-4.1")
+            >>> await session.set_model("claude-sonnet-4.6", reasoning_effort="high")
         """
-        await self.rpc.model.switch_to(SessionModelSwitchToParams(model_id=model))
+        await self.rpc.model.switch_to(
+            SessionModelSwitchToParams(
+                model_id=model,
+                reasoning_effort=reasoning_effort,
+            )
+        )
+
+    async def log(
+        self,
+        message: str,
+        *,
+        level: str | None = None,
+        ephemeral: bool | None = None,
+    ) -> None:
+        """
+        Log a message to the session timeline.
+
+        The message appears in the session event stream and is visible to SDK consumers
+        and (for non-ephemeral messages) persisted to the session event log on disk.
+
+        Args:
+            message: The human-readable message to log.
+            level: Log severity level ("info", "warning", "error"). Defaults to "info".
+            ephemeral: When True, the message is transient and not persisted to disk.
+
+        Raises:
+            Exception: If the session has been destroyed or the connection fails.
+
+        Example:
+            >>> await session.log("Processing started")
+            >>> await session.log("Something looks off", level="warning")
+            >>> await session.log("Operation failed", level="error")
+            >>> await session.log("Temporary status update", ephemeral=True)
+        """
+        params = SessionLogParams(
+            message=message,
+            level=Level(level) if level is not None else None,
+            ephemeral=ephemeral,
+        )
+        await self.rpc.log(params)
