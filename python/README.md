@@ -7,9 +7,9 @@ Python SDK for programmatic control of GitHub Copilot CLI via JSON-RPC.
 ## Installation
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[telemetry,dev]"
 # or
-uv pip install -e ".[dev]"
+uv pip install -e ".[telemetry,dev]"
 ```
 
 ## Run the Sample
@@ -47,7 +47,7 @@ async def main():
     session.on(on_event)
 
     # Send a message and wait for completion
-    await session.send({"prompt": "What is 2+2?"})
+    await session.send("What is 2+2?")
     await done.wait()
 
     # Clean up
@@ -61,7 +61,7 @@ Sessions also support the `async with` context manager pattern for automatic cle
 
 ```python
 async with await client.create_session({"model": "gpt-5"}) as session:
-    await session.send({"prompt": "What is 2+2?"})
+    await session.send("What is 2+2?")
     # session is automatically disconnected when leaving the block
 ```
 
@@ -79,13 +79,10 @@ async with await client.create_session({"model": "gpt-5"}) as session:
 ### CopilotClient
 
 ```python
-client = CopilotClient({
-    "cli_path": "copilot",  # Optional: path to CLI executable
-    "cli_url": None,        # Optional: URL of existing server (e.g., "localhost:8080")
-    "log_level": "info",    # Optional: log level (default: "info")
-    "auto_start": True,     # Optional: auto-start server (default: True)
-    "auto_restart": True,   # Optional: auto-restart on crash (default: True)
-})
+from copilot import CopilotClient, SubprocessConfig
+
+# Spawn a local CLI process (default)
+client = CopilotClient()  # uses bundled CLI, stdio transport
 await client.start()
 
 session = await client.create_session({"model": "gpt-5"})
@@ -94,7 +91,7 @@ def on_event(event):
     print(f"Event: {event['type']}")
 
 session.on(on_event)
-await session.send({"prompt": "Hello!"})
+await session.send("Hello!")
 
 # ... wait for events ...
 
@@ -102,18 +99,40 @@ await session.disconnect()
 await client.stop()
 ```
 
-**CopilotClient Options:**
+```python
+from copilot import CopilotClient, ExternalServerConfig
 
-- `cli_path` (str): Path to CLI executable (default: "copilot" or `COPILOT_CLI_PATH` env var)
-- `cli_url` (str): URL of existing CLI server (e.g., `"localhost:8080"`, `"http://127.0.0.1:9000"`, or just `"8080"`). When provided, the client will not spawn a CLI process.
-- `cwd` (str): Working directory for CLI process
-- `port` (int): Server port for TCP mode (default: 0 for random)
+# Connect to an existing CLI server
+client = CopilotClient(ExternalServerConfig(url="localhost:3000"))
+```
+
+**CopilotClient Constructor:**
+
+```python
+CopilotClient(
+    config=None,        # SubprocessConfig | ExternalServerConfig | None
+    *,
+    auto_start=True,    # auto-start server on first use
+    on_list_models=None, # custom handler for list_models()
+)
+```
+
+**SubprocessConfig** — spawn a local CLI process:
+
+- `cli_path` (str | None): Path to CLI executable (default: bundled binary)
+- `cli_args` (list[str]): Extra arguments for the CLI executable
+- `cwd` (str | None): Working directory for CLI process (default: current dir)
 - `use_stdio` (bool): Use stdio transport instead of TCP (default: True)
+- `port` (int): Server port for TCP mode (default: 0 for random)
 - `log_level` (str): Log level (default: "info")
-- `auto_start` (bool): Auto-start server on first use (default: True)
-- `auto_restart` (bool): Auto-restart on crash (default: True)
-- `github_token` (str): GitHub token for authentication. When provided, takes priority over other auth methods.
-- `use_logged_in_user` (bool): Whether to use logged-in user for authentication (default: True, but False when `github_token` is provided). Cannot be used with `cli_url`.
+- `env` (dict | None): Environment variables for the CLI process
+- `github_token` (str | None): GitHub token for authentication. When provided, takes priority over other auth methods.
+- `use_logged_in_user` (bool | None): Whether to use logged-in user for authentication (default: True, but False when `github_token` is provided).
+- `telemetry` (dict | None): OpenTelemetry configuration for the CLI process. Providing this enables telemetry — no separate flag needed. See [Telemetry](#telemetry) below.
+
+**ExternalServerConfig** — connect to an existing CLI server:
+
+- `url` (str): Server URL (e.g., `"localhost:8080"`, `"http://127.0.0.1:9000"`, or just `"8080"`).
 
 **SessionConfig Options (for `create_session`):**
 
@@ -232,26 +251,36 @@ async def edit_file(params: EditFileParams) -> str:
     # your logic
 ```
 
+#### Skipping Permission Prompts
+
+Set `skip_permission=True` on a tool definition to allow it to execute without triggering a permission prompt:
+
+```python
+@define_tool(name="safe_lookup", description="A read-only lookup that needs no confirmation", skip_permission=True)
+async def safe_lookup(params: LookupParams) -> str:
+    # your logic
+```
+
 ## Image Support
 
 The SDK supports image attachments via the `attachments` parameter. You can attach images by providing their file path:
 
 ```python
-await session.send({
-    "prompt": "What's in this image?",
-    "attachments": [
+await session.send(
+    "What's in this image?",
+    attachments=[
         {
             "type": "file",
             "path": "/path/to/image.jpg",
         }
-    ]
-})
+    ],
+)
 ```
 
 Supported image formats include JPG, PNG, GIF, and other common image types. The agent's `view` tool can also read images directly from the filesystem, so you can also ask questions like:
 
 ```python
-await session.send({"prompt": "What does the most recent jpg in this directory portray?"})
+await session.send("What does the most recent jpg in this directory portray?")
 ```
 
 ## Streaming
@@ -296,7 +325,7 @@ async def main():
             done.set()
 
     session.on(on_event)
-    await session.send({"prompt": "Tell me a short story"})
+    await session.send("Tell me a short story")
     await done.wait()  # Wait for streaming to complete
 
     await session.disconnect()
@@ -373,7 +402,7 @@ session = await client.create_session({
     },
 })
 
-await session.send({"prompt": "Hello!"})
+await session.send("Hello!")
 ```
 
 **Example with custom OpenAI-compatible API:**
@@ -413,6 +442,32 @@ session = await client.create_session({
 > - When using a custom provider, the `model` parameter is **required**. The SDK will throw an error if no model is specified.
 > - For Azure OpenAI endpoints (`*.openai.azure.com`), you **must** use `type: "azure"`, not `type: "openai"`.
 > - The `base_url` should be just the host (e.g., `https://my-resource.openai.azure.com`). Do **not** include `/openai/v1` in the URL - the SDK handles path construction automatically.
+
+## Telemetry
+
+The SDK supports OpenTelemetry for distributed tracing. Provide a `telemetry` config to enable trace export and automatic W3C Trace Context propagation.
+
+```python
+from copilot import CopilotClient, SubprocessConfig
+
+client = CopilotClient(SubprocessConfig(
+    telemetry={
+        "otlp_endpoint": "http://localhost:4318",
+    },
+))
+```
+
+**TelemetryConfig options:**
+
+- `otlp_endpoint` (str): OTLP HTTP endpoint URL
+- `file_path` (str): File path for JSON-lines trace output
+- `exporter_type` (str): `"otlp-http"` or `"file"`
+- `source_name` (str): Instrumentation scope name
+- `capture_content` (bool): Whether to capture message content
+
+Trace context (`traceparent`/`tracestate`) is automatically propagated between the SDK and CLI on `create_session`, `resume_session`, and `send` calls, and inbound when the CLI invokes tool handlers.
+
+Install with telemetry extras: `pip install copilot-sdk[telemetry]` (provides `opentelemetry-api`)
 
 ## User Input Requests
 

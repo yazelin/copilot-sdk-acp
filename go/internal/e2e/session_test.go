@@ -3,11 +3,13 @@ package e2e
 import (
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/github/copilot-sdk/go/internal/e2e/testharness"
+	"github.com/github/copilot-sdk/go/rpc"
 )
 
 func TestSession(t *testing.T) {
@@ -586,9 +588,29 @@ func TestSession(t *testing.T) {
 	t.Run("should receive session events", func(t *testing.T) {
 		ctx.ConfigureForTest(t)
 
-		session, err := client.CreateSession(t.Context(), &copilot.SessionConfig{OnPermissionRequest: copilot.PermissionHandler.ApproveAll})
+		// Use OnEvent to capture events dispatched during session creation.
+		// session.start is emitted during the session.create RPC; with channel-based
+		// dispatch it may not have been delivered by the time CreateSession returns.
+		sessionStartCh := make(chan bool, 1)
+		session, err := client.CreateSession(t.Context(), &copilot.SessionConfig{
+			OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+			OnEvent: func(event copilot.SessionEvent) {
+				if event.Type == "session.start" {
+					select {
+					case sessionStartCh <- true:
+					default:
+					}
+				}
+			},
+		})
 		if err != nil {
 			t.Fatalf("Failed to create session: %v", err)
+		}
+
+		select {
+		case <-sessionStartCh:
+		case <-time.After(5 * time.Second):
+			t.Error("Expected session.start event via OnEvent during creation")
 		}
 
 		var receivedEvents []copilot.SessionEvent
@@ -735,10 +757,10 @@ func TestSession(t *testing.T) {
 
 		// Verify both sessions are in the list
 		if !contains(sessionIDs, session1.SessionID) {
-			t.Errorf("Expected session1 ID %s to be in sessions list", session1.SessionID)
+			t.Errorf("Expected session1 ID %s to be in sessions list %v", session1.SessionID, sessionIDs)
 		}
 		if !contains(sessionIDs, session2.SessionID) {
-			t.Errorf("Expected session2 ID %s to be in sessions list", session2.SessionID)
+			t.Errorf("Expected session2 ID %s to be in sessions list %v", session2.SessionID, sessionIDs)
 		}
 
 		// Verify session metadata structure
@@ -873,6 +895,49 @@ func getSystemMessage(exchange testharness.ParsedHttpExchange) string {
 	return ""
 }
 
+func TestSetModelWithReasoningEffort(t *testing.T) {
+	ctx := testharness.NewTestContext(t)
+	client := ctx.NewClient()
+	t.Cleanup(func() { client.ForceStop() })
+
+	if err := client.Start(t.Context()); err != nil {
+		t.Fatalf("Failed to start client: %v", err)
+	}
+
+	session, err := client.CreateSession(t.Context(), &copilot.SessionConfig{
+		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	modelChanged := make(chan copilot.SessionEvent, 1)
+	session.On(func(event copilot.SessionEvent) {
+		if event.Type == copilot.SessionModelChange {
+			select {
+			case modelChanged <- event:
+			default:
+			}
+		}
+	})
+
+	if err := session.SetModel(t.Context(), "gpt-4.1", copilot.SetModelOptions{ReasoningEffort: "high"}); err != nil {
+		t.Fatalf("SetModel returned error: %v", err)
+	}
+
+	select {
+	case evt := <-modelChanged:
+		if evt.Data.NewModel == nil || *evt.Data.NewModel != "gpt-4.1" {
+			t.Errorf("Expected newModel 'gpt-4.1', got %v", evt.Data.NewModel)
+		}
+		if evt.Data.ReasoningEffort == nil || *evt.Data.ReasoningEffort != "high" {
+			t.Errorf("Expected reasoningEffort 'high', got %v", evt.Data.ReasoningEffort)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Timed out waiting for session.model_change event")
+	}
+}
+
 func getToolNames(exchange testharness.ParsedHttpExchange) []string {
 	var names []string
 	for _, tool := range exchange.Request.Tools {
@@ -888,4 +953,106 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func TestSessionLog(t *testing.T) {
+	ctx := testharness.NewTestContext(t)
+	client := ctx.NewClient()
+	t.Cleanup(func() { client.ForceStop() })
+
+	if err := client.Start(t.Context()); err != nil {
+		t.Fatalf("Failed to start client: %v", err)
+	}
+
+	session, err := client.CreateSession(t.Context(), &copilot.SessionConfig{
+		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+
+	// Collect events
+	var events []copilot.SessionEvent
+	var mu sync.Mutex
+	unsubscribe := session.On(func(event copilot.SessionEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	})
+	defer unsubscribe()
+
+	t.Run("should log info message (default level)", func(t *testing.T) {
+		if err := session.Log(t.Context(), "Info message", nil); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+
+		evt := waitForEvent(t, &mu, &events, copilot.SessionInfo, "Info message", 5*time.Second)
+		if evt.Data.InfoType == nil || *evt.Data.InfoType != "notification" {
+			t.Errorf("Expected infoType 'notification', got %v", evt.Data.InfoType)
+		}
+		if evt.Data.Message == nil || *evt.Data.Message != "Info message" {
+			t.Errorf("Expected message 'Info message', got %v", evt.Data.Message)
+		}
+	})
+
+	t.Run("should log warning message", func(t *testing.T) {
+		if err := session.Log(t.Context(), "Warning message", &copilot.LogOptions{Level: rpc.Warning}); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+
+		evt := waitForEvent(t, &mu, &events, copilot.SessionWarning, "Warning message", 5*time.Second)
+		if evt.Data.WarningType == nil || *evt.Data.WarningType != "notification" {
+			t.Errorf("Expected warningType 'notification', got %v", evt.Data.WarningType)
+		}
+		if evt.Data.Message == nil || *evt.Data.Message != "Warning message" {
+			t.Errorf("Expected message 'Warning message', got %v", evt.Data.Message)
+		}
+	})
+
+	t.Run("should log error message", func(t *testing.T) {
+		if err := session.Log(t.Context(), "Error message", &copilot.LogOptions{Level: rpc.Error}); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+
+		evt := waitForEvent(t, &mu, &events, copilot.SessionError, "Error message", 5*time.Second)
+		if evt.Data.ErrorType == nil || *evt.Data.ErrorType != "notification" {
+			t.Errorf("Expected errorType 'notification', got %v", evt.Data.ErrorType)
+		}
+		if evt.Data.Message == nil || *evt.Data.Message != "Error message" {
+			t.Errorf("Expected message 'Error message', got %v", evt.Data.Message)
+		}
+	})
+
+	t.Run("should log ephemeral message", func(t *testing.T) {
+		if err := session.Log(t.Context(), "Ephemeral message", &copilot.LogOptions{Ephemeral: copilot.Bool(true)}); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+
+		evt := waitForEvent(t, &mu, &events, copilot.SessionInfo, "Ephemeral message", 5*time.Second)
+		if evt.Data.InfoType == nil || *evt.Data.InfoType != "notification" {
+			t.Errorf("Expected infoType 'notification', got %v", evt.Data.InfoType)
+		}
+		if evt.Data.Message == nil || *evt.Data.Message != "Ephemeral message" {
+			t.Errorf("Expected message 'Ephemeral message', got %v", evt.Data.Message)
+		}
+	})
+}
+
+// waitForEvent polls the collected events for a matching event type and message.
+func waitForEvent(t *testing.T, mu *sync.Mutex, events *[]copilot.SessionEvent, eventType copilot.SessionEventType, message string, timeout time.Duration) copilot.SessionEvent {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		for _, evt := range *events {
+			if evt.Type == eventType && evt.Data.Message != nil && *evt.Data.Message == message {
+				mu.Unlock()
+				return evt
+			}
+		}
+		mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("Timed out waiting for %s event with message %q", eventType, message)
+	return copilot.SessionEvent{} // unreachable
 }
