@@ -27,7 +27,7 @@ class TestTools:
             {"on_permission_request": PermissionHandler.approve_all}
         )
 
-        await session.send({"prompt": "What's the first line of README.md in this directory?"})
+        await session.send("What's the first line of README.md in this directory?")
         assistant_message = await get_final_assistant_message(session)
         assert "ELIZA" in assistant_message.data.content
 
@@ -43,7 +43,7 @@ class TestTools:
             {"tools": [encrypt_string], "on_permission_request": PermissionHandler.approve_all}
         )
 
-        await session.send({"prompt": "Use encrypt_string to encrypt this string: Hello"})
+        await session.send("Use encrypt_string to encrypt this string: Hello")
         assistant_message = await get_final_assistant_message(session)
         assert "HELLO" in assistant_message.data.content
 
@@ -56,9 +56,7 @@ class TestTools:
             {"tools": [get_user_location], "on_permission_request": PermissionHandler.approve_all}
         )
 
-        await session.send(
-            {"prompt": "What is my location? If you can't find out, just say 'unknown'."}
-        )
+        await session.send("What is my location? If you can't find out, just say 'unknown'.")
         answer = await get_final_assistant_message(session)
 
         # Check the underlying traffic
@@ -123,10 +121,8 @@ class TestTools:
         expected_session_id = session.session_id
 
         await session.send(
-            {
-                "prompt": "Perform a DB query for the 'cities' table using IDs 12 and 19, "
-                "sorting ascending. Reply only with lines of the form: [cityname] [population]"
-            }
+            "Perform a DB query for the 'cities' table using IDs 12 and 19, "
+            "sorting ascending. Reply only with lines of the form: [cityname] [population]"
         )
 
         assistant_message = await get_final_assistant_message(session)
@@ -137,6 +133,34 @@ class TestTools:
         assert "San Lorenzo" in response_content
         assert "135460" in response_content.replace(",", "")
         assert "204356" in response_content.replace(",", "")
+
+    async def test_skippermission_sent_in_tool_definition(self, ctx: E2ETestContext):
+        class LookupParams(BaseModel):
+            id: str = Field(description="ID to look up")
+
+        @define_tool(
+            "safe_lookup",
+            description="A safe lookup that skips permission",
+            skip_permission=True,
+        )
+        def safe_lookup(params: LookupParams, invocation: ToolInvocation) -> str:
+            return f"RESULT: {params.id}"
+
+        did_run_permission_request = False
+
+        def tracking_handler(request, invocation):
+            nonlocal did_run_permission_request
+            did_run_permission_request = True
+            return PermissionRequestResult(kind="no-result")
+
+        session = await ctx.client.create_session(
+            {"tools": [safe_lookup], "on_permission_request": tracking_handler}
+        )
+
+        await session.send("Use safe_lookup to look up 'test123'")
+        assistant_message = await get_final_assistant_message(session)
+        assert "RESULT: test123" in assistant_message.data.content
+        assert not did_run_permission_request
 
     async def test_overrides_built_in_tool_with_custom_tool(self, ctx: E2ETestContext):
         class GrepParams(BaseModel):
@@ -154,7 +178,7 @@ class TestTools:
             {"tools": [custom_grep], "on_permission_request": PermissionHandler.approve_all}
         )
 
-        await session.send({"prompt": "Use grep to search for the word 'hello'"})
+        await session.send("Use grep to search for the word 'hello'")
         assistant_message = await get_final_assistant_message(session)
         assert "CUSTOM_GREP_RESULT" in assistant_message.data.content
 
@@ -179,7 +203,7 @@ class TestTools:
             }
         )
 
-        await session.send({"prompt": "Use encrypt_string to encrypt this string: Hello"})
+        await session.send("Use encrypt_string to encrypt this string: Hello")
         assistant_message = await get_final_assistant_message(session)
         assert "HELLO" in assistant_message.data.content
 
@@ -210,7 +234,7 @@ class TestTools:
             }
         )
 
-        await session.send({"prompt": "Use encrypt_string to encrypt this string: Hello"})
+        await session.send("Use encrypt_string to encrypt this string: Hello")
         await get_final_assistant_message(session)
 
         # The tool handler should NOT have been called since permission was denied
