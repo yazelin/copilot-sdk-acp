@@ -166,14 +166,11 @@ const client = new CopilotClient({
     // Set log level for debugging
     logLevel: "debug",
 
-    // Pass extra CLI arguments
-    cliArgs: ["--disable-telemetry"],
+    // Pass extra CLI arguments (example: set a custom log directory)
+    cliArgs: ["--log-dir=/tmp/copilot-logs"],
 
     // Set working directory
     cwd: "/path/to/project",
-
-    // Auto-restart CLI if it crashes (default: true)
-    autoRestart: true,
 });
 ```
 

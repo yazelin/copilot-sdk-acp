@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from copilot import CopilotClient, PermissionHandler
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig
 from copilot.types import Tool, ToolResult
 
 from .testharness import E2ETestContext, get_final_assistant_message, get_next_event_of_type
@@ -35,13 +35,11 @@ class TestSessions:
             {"on_permission_request": PermissionHandler.approve_all}
         )
 
-        assistant_message = await session.send_and_wait({"prompt": "What is 1+1?"})
+        assistant_message = await session.send_and_wait("What is 1+1?")
         assert assistant_message is not None
         assert "2" in assistant_message.data.content
 
-        second_message = await session.send_and_wait(
-            {"prompt": "Now if you double that, what do you get?"}
-        )
+        second_message = await session.send_and_wait("Now if you double that, what do you get?")
         assert second_message is not None
         assert "4" in second_message.data.content
 
@@ -56,7 +54,7 @@ class TestSessions:
             }
         )
 
-        await session.send({"prompt": "What is your full name?"})
+        await session.send("What is your full name?")
         assistant_message = await get_final_assistant_message(session)
         assert "GitHub" in assistant_message.data.content
         assert "Have a nice day!" in assistant_message.data.content
@@ -78,7 +76,7 @@ class TestSessions:
             }
         )
 
-        await session.send({"prompt": "What is your full name?"})
+        await session.send("What is your full name?")
         assistant_message = await get_final_assistant_message(session)
         assert "GitHub" not in assistant_message.data.content
         assert "Testy" in assistant_message.data.content
@@ -96,7 +94,7 @@ class TestSessions:
             }
         )
 
-        await session.send({"prompt": "What is 1+1?"})
+        await session.send("What is 1+1?")
         await get_final_assistant_message(session)
 
         # It only tells the model about the specified tools and no others
@@ -112,7 +110,7 @@ class TestSessions:
             {"excluded_tools": ["view"], "on_permission_request": PermissionHandler.approve_all}
         )
 
-        await session.send({"prompt": "What is 1+1?"})
+        await session.send("What is 1+1?")
         await get_final_assistant_message(session)
 
         # It has other tools, but not the one we excluded
@@ -160,7 +158,7 @@ class TestSessions:
             {"on_permission_request": PermissionHandler.approve_all}
         )
         session_id = session1.session_id
-        answer = await session1.send_and_wait({"prompt": "What is 1+1?"})
+        answer = await session1.send_and_wait("What is 1+1?")
         assert answer is not None
         assert "2" in answer.data.content
 
@@ -173,9 +171,7 @@ class TestSessions:
         assert "2" in answer2.data.content
 
         # Can continue the conversation statefully
-        answer3 = await session2.send_and_wait(
-            {"prompt": "Now if you double that, what do you get?"}
-        )
+        answer3 = await session2.send_and_wait("Now if you double that, what do you get?")
         assert answer3 is not None
         assert "4" in answer3.data.content
 
@@ -185,7 +181,7 @@ class TestSessions:
             {"on_permission_request": PermissionHandler.approve_all}
         )
         session_id = session1.session_id
-        answer = await session1.send_and_wait({"prompt": "What is 1+1?"})
+        answer = await session1.send_and_wait("What is 1+1?")
         assert answer is not None
         assert "2" in answer.data.content
 
@@ -194,12 +190,12 @@ class TestSessions:
             "fake-token-for-e2e-tests" if os.environ.get("GITHUB_ACTIONS") == "true" else None
         )
         new_client = CopilotClient(
-            {
-                "cli_path": ctx.cli_path,
-                "cwd": ctx.work_dir,
-                "env": ctx.get_env(),
-                "github_token": github_token,
-            }
+            SubprocessConfig(
+                cli_path=ctx.cli_path,
+                cwd=ctx.work_dir,
+                env=ctx.get_env(),
+                github_token=github_token,
+            )
         )
 
         try:
@@ -214,9 +210,7 @@ class TestSessions:
             assert "session.resume" in message_types
 
             # Can continue the conversation statefully
-            answer2 = await session2.send_and_wait(
-                {"prompt": "Now if you double that, what do you get?"}
-            )
+            answer2 = await session2.send_and_wait("Now if you double that, what do you get?")
             assert answer2 is not None
             assert "4" in answer2.data.content
         finally:
@@ -235,11 +229,11 @@ class TestSessions:
         session1 = await ctx.client.create_session(
             {"on_permission_request": PermissionHandler.approve_all}
         )
-        await session1.send_and_wait({"prompt": "Say hello"})
+        await session1.send_and_wait("Say hello")
         session2 = await ctx.client.create_session(
             {"on_permission_request": PermissionHandler.approve_all}
         )
-        await session2.send_and_wait({"prompt": "Say goodbye"})
+        await session2.send_and_wait("Say goodbye")
 
         # Small delay to ensure session files are written to disk
         await asyncio.sleep(0.2)
@@ -278,7 +272,7 @@ class TestSessions:
         session = await ctx.client.create_session(
             {"on_permission_request": PermissionHandler.approve_all}
         )
-        await session.send_and_wait({"prompt": "Hello"})
+        await session.send_and_wait("Hello")
         session_id = session.session_id
 
         # Small delay to ensure session file is written to disk
@@ -310,7 +304,7 @@ class TestSessions:
         session = await ctx.client.create_session(
             {"on_permission_request": PermissionHandler.approve_all}
         )
-        await session.send_and_wait({"prompt": "Say hello"})
+        await session.send_and_wait("Say hello")
 
         # Small delay to ensure session data is flushed to disk
         await asyncio.sleep(0.5)
@@ -347,7 +341,7 @@ class TestSessions:
             }
         )
 
-        answer = await session.send_and_wait({"prompt": "What is the secret number for key ALPHA?"})
+        answer = await session.send_and_wait("What is the secret number for key ALPHA?")
         assert answer is not None
         assert "54321" in answer.data.content
 
@@ -418,12 +412,7 @@ class TestSessions:
 
         # Send a message that will trigger a long-running shell command
         await session.send(
-            {
-                "prompt": (
-                    "run the shell command 'sleep 100' "
-                    "(note this works on both bash and PowerShell)"
-                )
-            }
+            "run the shell command 'sleep 100' (note this works on both bash and PowerShell)"
         )
 
         # Wait for the tool to start executing
@@ -444,15 +433,29 @@ class TestSessions:
         assert len(abort_events) > 0, "Expected an abort event in messages"
 
         # We should be able to send another message
-        answer = await session.send_and_wait({"prompt": "What is 2+2?"})
+        answer = await session.send_and_wait("What is 2+2?")
         assert "4" in answer.data.content
 
     async def test_should_receive_session_events(self, ctx: E2ETestContext):
         import asyncio
 
+        # Use on_event to capture events dispatched during session creation.
+        # session.start is emitted during the session.create RPC; if the session
+        # weren't registered in the sessions map before the RPC, it would be dropped.
+        early_events = []
+
+        def capture_early(event):
+            early_events.append(event)
+
         session = await ctx.client.create_session(
-            {"on_permission_request": PermissionHandler.approve_all}
+            {
+                "on_permission_request": PermissionHandler.approve_all,
+                "on_event": capture_early,
+            }
         )
+
+        assert any(e.type.value == "session.start" for e in early_events)
+
         received_events = []
         idle_event = asyncio.Event()
 
@@ -464,7 +467,7 @@ class TestSessions:
         session.on(on_event)
 
         # Send a message to trigger events
-        await session.send({"prompt": "What is 100+200?"})
+        await session.send("What is 100+200?")
 
         # Wait for session to become idle
         try:
@@ -497,9 +500,101 @@ class TestSessions:
         assert session.session_id
 
         # Session should work normally with custom config dir
-        await session.send({"prompt": "What is 1+1?"})
+        await session.send("What is 1+1?")
         assistant_message = await get_final_assistant_message(session)
         assert "2" in assistant_message.data.content
+
+    async def test_session_log_emits_events_at_all_levels(self, ctx: E2ETestContext):
+        import asyncio
+
+        session = await ctx.client.create_session(
+            {"on_permission_request": PermissionHandler.approve_all}
+        )
+
+        received_events = []
+
+        def on_event(event):
+            if event.type.value in ("session.info", "session.warning", "session.error"):
+                received_events.append(event)
+
+        session.on(on_event)
+
+        await session.log("Info message")
+        await session.log("Warning message", level="warning")
+        await session.log("Error message", level="error")
+        await session.log("Ephemeral message", ephemeral=True)
+
+        # Poll until all 4 notification events arrive
+        deadline = asyncio.get_event_loop().time() + 10
+        while len(received_events) < 4:
+            if asyncio.get_event_loop().time() > deadline:
+                pytest.fail(
+                    f"Timed out waiting for 4 notification events, got {len(received_events)}"
+                )
+            await asyncio.sleep(0.1)
+
+        by_message = {e.data.message: e for e in received_events}
+
+        assert by_message["Info message"].type.value == "session.info"
+        assert by_message["Info message"].data.info_type == "notification"
+
+        assert by_message["Warning message"].type.value == "session.warning"
+        assert by_message["Warning message"].data.warning_type == "notification"
+
+        assert by_message["Error message"].type.value == "session.error"
+        assert by_message["Error message"].data.error_type == "notification"
+
+        assert by_message["Ephemeral message"].type.value == "session.info"
+        assert by_message["Ephemeral message"].data.info_type == "notification"
+
+    async def test_should_set_model_with_reasoning_effort(self, ctx: E2ETestContext):
+        """Test that setModel passes reasoningEffort and it appears in the model_change event."""
+        import asyncio
+
+        session = await ctx.client.create_session(
+            {"on_permission_request": PermissionHandler.approve_all}
+        )
+
+        model_change_event = asyncio.get_event_loop().create_future()
+
+        def on_event(event):
+            if not model_change_event.done() and event.type.value == "session.model_change":
+                model_change_event.set_result(event)
+
+        session.on(on_event)
+
+        await session.set_model("gpt-4.1", reasoning_effort="high")
+
+        event = await asyncio.wait_for(model_change_event, timeout=30)
+        assert event.data.new_model == "gpt-4.1"
+        assert event.data.reasoning_effort == "high"
+
+    async def test_should_accept_blob_attachments(self, ctx: E2ETestContext):
+        session = await ctx.client.create_session(
+            {"on_permission_request": PermissionHandler.approve_all}
+        )
+
+        # 1x1 transparent PNG pixel, base64-encoded
+        pixel_png = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAY"
+            "AAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhg"
+            "GAWjR9awAAAABJRU5ErkJggg=="
+        )
+
+        await session.send(
+            "Describe this image",
+            attachments=[
+                {
+                    "type": "blob",
+                    "data": pixel_png,
+                    "mimeType": "image/png",
+                    "displayName": "test-pixel.png",
+                },
+            ],
+        )
+
+        # Just verify send doesn't throw — blob attachment support varies by runtime
+        await session.disconnect()
 
 
 def _get_system_message(exchange: dict) -> str:

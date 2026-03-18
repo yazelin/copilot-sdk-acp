@@ -1,6 +1,6 @@
 import asyncio
 import os
-from copilot import CopilotClient
+from copilot import CopilotClient, SubprocessConfig
 
 # Track which tools requested permission
 permission_log: list[str] = []
@@ -16,10 +16,10 @@ async def auto_approve_tool(input_data, invocation):
 
 
 async def main():
-    opts = {"github_token": os.environ.get("GITHUB_TOKEN")}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        github_token=os.environ.get("GITHUB_TOKEN"),
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
         session = await client.create_session(
@@ -31,9 +31,7 @@ async def main():
         )
 
         response = await session.send_and_wait(
-            {
-                "prompt": "List the files in the current directory using glob with pattern '*.md'."
-            }
+            "List the files in the current directory using glob with pattern '*.md'."
         )
 
         if response:

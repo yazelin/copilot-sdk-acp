@@ -1,18 +1,18 @@
 import asyncio
 import os
-from copilot import CopilotClient
+from copilot import CopilotClient, ExternalServerConfig
 
 
 async def main():
-    client = CopilotClient({
-        "cli_url": os.environ.get("COPILOT_CLI_URL", "localhost:3000"),
-    })
+    client = CopilotClient(ExternalServerConfig(
+        url=os.environ.get("COPILOT_CLI_URL", "localhost:3000"),
+    ))
 
     try:
         session = await client.create_session({"model": "claude-haiku-4.5"})
 
         response = await session.send_and_wait(
-            {"prompt": "What is the capital of France?"}
+            "What is the capital of France?"
         )
 
         if response:
