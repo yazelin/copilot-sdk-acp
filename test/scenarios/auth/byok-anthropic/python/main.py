@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from copilot import CopilotClient
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
@@ -13,28 +13,28 @@ if not ANTHROPIC_API_KEY:
 
 
 async def main():
-    opts = {}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
-        session = await client.create_session({
-            "model": ANTHROPIC_MODEL,
-            "provider": {
+        session = await client.create_session(
+            on_permission_request=PermissionHandler.approve_all,
+            model=ANTHROPIC_MODEL,
+            provider={
                 "type": "anthropic",
                 "base_url": ANTHROPIC_BASE_URL,
                 "api_key": ANTHROPIC_API_KEY,
             },
-            "available_tools": [],
-            "system_message": {
+            available_tools=[],
+            system_message={
                 "mode": "replace",
                 "content": "You are a helpful assistant. Answer concisely.",
             },
-        })
+        )
 
         response = await session.send_and_wait(
-            {"prompt": "What is the capital of France?"}
+            "What is the capital of France?"
         )
 
         if response:

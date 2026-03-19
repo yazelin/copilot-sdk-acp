@@ -5,48 +5,67 @@ This module provides the :class:`CopilotClient` class, which manages the connect
 to the Copilot CLI server and provides session management capabilities.
 
 Example:
-    >>> from copilot import CopilotClient
+    >>> from copilot import CopilotClient, PermissionHandler
     >>>
     >>> async with CopilotClient() as client:
-    ...     session = await client.create_session()
-    ...     await session.send({"prompt": "Hello!"})
+    ...     session = await client.create_session(
+    ...         on_permission_request=PermissionHandler.approve_all
+    ...     )
+    ...     await session.send("Hello!")
 """
 
 import asyncio
 import inspect
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
-from collections.abc import Callable
+import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, overload
 
+from ._jsonrpc import JsonRpcClient, ProcessExitedError
+from ._sdk_protocol_version import get_sdk_protocol_version
+from ._telemetry import get_trace_context, trace_context
 from .generated.rpc import ServerRpc
 from .generated.session_events import PermissionRequest, session_event_from_dict
-from .jsonrpc import JsonRpcClient, ProcessExitedError
-from .sdk_protocol_version import get_sdk_protocol_version
 from .session import CopilotSession
 from .types import (
     ConnectionState,
-    CopilotClientOptions,
     CustomAgentConfig,
+    ExternalServerConfig,
     GetAuthStatusResponse,
     GetStatusResponse,
+    InfiniteSessionConfig,
+    MCPServerConfig,
     ModelInfo,
     PingResponse,
     ProviderConfig,
-    ResumeSessionConfig,
-    SessionConfig,
+    ReasoningEffort,
+    SessionEvent,
+    SessionHooks,
     SessionLifecycleEvent,
     SessionLifecycleEventType,
     SessionLifecycleHandler,
     SessionListFilter,
     SessionMetadata,
     StopError,
+    SubprocessConfig,
+    SystemMessageConfig,
+    Tool,
     ToolInvocation,
     ToolResult,
+    UserInputHandler,
+    _PermissionHandlerFn,
+)
+
+HandlerUnsubcribe = Callable[[], None]
+
+NO_RESULT_PERMISSION_V2_ERROR = (
+    "Permission handlers cannot return 'no-result' when connected to a protocol v2 server."
 )
 
 # Minimum protocol version this SDK can communicate with.
@@ -85,122 +104,92 @@ class CopilotClient:
     The client supports both stdio (default) and TCP transport modes for
     communication with the CLI server.
 
-    Attributes:
-        options: The configuration options for the client.
-
     Example:
         >>> # Create a client with default options (spawns CLI server)
         >>> client = CopilotClient()
         >>> await client.start()
         >>>
         >>> # Create a session and send a message
-        >>> session = await client.create_session({
-        ...     "on_permission_request": PermissionHandler.approve_all,
-        ...     "model": "gpt-4",
-        ... })
+        >>> session = await client.create_session(
+        ...     PermissionHandler.approve_all,
+        ...     "gpt-4",
+        ... )
         >>> session.on(lambda event: print(event.type))
-        >>> await session.send({"prompt": "Hello!"})
+        >>> await session.send("Hello!")
         >>>
         >>> # Clean up
         >>> await session.disconnect()
         >>> await client.stop()
 
         >>> # Or connect to an existing server
-        >>> client = CopilotClient({"cli_url": "localhost:3000"})
+        >>> client = CopilotClient(ExternalServerConfig(url="localhost:3000"))
     """
 
-    def __init__(self, options: CopilotClientOptions | None = None):
+    def __init__(
+        self,
+        config: SubprocessConfig | ExternalServerConfig | None = None,
+        *,
+        auto_start: bool = True,
+        on_list_models: Callable[[], list[ModelInfo] | Awaitable[list[ModelInfo]]] | None = None,
+    ):
         """
         Initialize a new CopilotClient.
 
         Args:
-            options: Optional configuration options for the client. If not provided,
-                default options are used (spawns CLI server using stdio).
-
-        Raises:
-            ValueError: If mutually exclusive options are provided (e.g., cli_url
-                with use_stdio or cli_path).
+            config: Connection configuration. Pass a :class:`SubprocessConfig` to
+                spawn a local CLI process, or an :class:`ExternalServerConfig` to
+                connect to an existing server. Defaults to ``SubprocessConfig()``.
+            auto_start: Automatically start the connection on first use
+                (default: ``True``).
+            on_list_models: Custom handler for :meth:`list_models`. When provided,
+                the handler is called instead of querying the CLI server.
 
         Example:
-            >>> # Default options - spawns CLI server using stdio
+            >>> # Default — spawns CLI server using stdio
             >>> client = CopilotClient()
             >>>
             >>> # Connect to an existing server
-            >>> client = CopilotClient({"cli_url": "localhost:3000"})
+            >>> client = CopilotClient(ExternalServerConfig(url="localhost:3000"))
             >>>
             >>> # Custom CLI path with specific log level
-            >>> client = CopilotClient({
-            ...     "cli_path": "/usr/local/bin/copilot",
-            ...     "log_level": "debug"
-            ... })
+            >>> client = CopilotClient(
+            ...     SubprocessConfig(
+            ...         cli_path="/usr/local/bin/copilot",
+            ...         log_level="debug",
+            ...     )
+            ... )
         """
-        opts = options or {}
+        if config is None:
+            config = SubprocessConfig()
 
-        # Validate mutually exclusive options
-        if opts.get("cli_url") and (opts.get("use_stdio") or opts.get("cli_path")):
-            raise ValueError("cli_url is mutually exclusive with use_stdio and cli_path")
+        self._config: SubprocessConfig | ExternalServerConfig = config
+        self._auto_start = auto_start
+        self._on_list_models = on_list_models
 
-        # Validate auth options with external server
-        if opts.get("cli_url") and (
-            opts.get("github_token") or opts.get("use_logged_in_user") is not None
-        ):
-            raise ValueError(
-                "github_token and use_logged_in_user cannot be used with cli_url "
-                "(external server manages its own auth)"
-            )
-
-        # Parse cli_url if provided
+        # Resolve connection-mode-specific state
         self._actual_host: str = "localhost"
-        self._is_external_server: bool = False
-        if opts.get("cli_url"):
-            self._actual_host, actual_port = self._parse_cli_url(opts["cli_url"])
+        self._is_external_server: bool = isinstance(config, ExternalServerConfig)
+
+        if isinstance(config, ExternalServerConfig):
+            self._actual_host, actual_port = self._parse_cli_url(config.url)
             self._actual_port: int | None = actual_port
-            self._is_external_server = True
         else:
             self._actual_port = None
 
-        # Determine CLI path: explicit option > bundled binary
-        # Not needed when connecting to external server via cli_url
-        if opts.get("cli_url"):
-            default_cli_path = ""  # Not used for external server
-        elif opts.get("cli_path"):
-            default_cli_path = opts["cli_path"]
-        else:
-            bundled_path = _get_bundled_cli_path()
-            if bundled_path:
-                default_cli_path = bundled_path
-            else:
-                raise RuntimeError(
-                    "Copilot CLI not found. The bundled CLI binary is not available. "
-                    "Ensure you installed a platform-specific wheel, or provide cli_path."
-                )
+            # Resolve CLI path: explicit > bundled binary
+            if config.cli_path is None:
+                bundled_path = _get_bundled_cli_path()
+                if bundled_path:
+                    config.cli_path = bundled_path
+                else:
+                    raise RuntimeError(
+                        "Copilot CLI not found. The bundled CLI binary is not available. "
+                        "Ensure you installed a platform-specific wheel, or provide cli_path."
+                    )
 
-        # Default use_logged_in_user to False when github_token is provided
-        github_token = opts.get("github_token")
-        use_logged_in_user = opts.get("use_logged_in_user")
-        if use_logged_in_user is None:
-            use_logged_in_user = False if github_token else True
-
-        self.options: CopilotClientOptions = {
-            "cli_path": default_cli_path,
-            "cwd": opts.get("cwd", os.getcwd()),
-            "port": opts.get("port", 0),
-            "use_stdio": False if opts.get("cli_url") else opts.get("use_stdio", True),
-            "log_level": opts.get("log_level", "info"),
-            "auto_start": opts.get("auto_start", True),
-            "auto_restart": opts.get("auto_restart", True),
-            "use_logged_in_user": use_logged_in_user,
-        }
-        if opts.get("cli_args"):
-            self.options["cli_args"] = opts["cli_args"]
-        if opts.get("cli_url"):
-            self.options["cli_url"] = opts["cli_url"]
-        if opts.get("env"):
-            self.options["env"] = opts["env"]
-        if github_token:
-            self.options["github_token"] = github_token
-
-        self._on_list_models = opts.get("on_list_models")
+            # Resolve use_logged_in_user default
+            if config.use_logged_in_user is None:
+                config.use_logged_in_user = not bool(config.github_token)
 
         self._process: subprocess.Popen | None = None
         self._client: JsonRpcClient | None = None
@@ -282,8 +271,9 @@ class CopilotClient:
         """
         Start the CLI server and establish a connection.
 
-        If connecting to an external server (via cli_url), only establishes the
-        connection. Otherwise, spawns the CLI server process and then connects.
+        If connecting to an external server (via :class:`ExternalServerConfig`),
+        only establishes the connection. Otherwise, spawns the CLI server process
+        and then connects.
 
         This method is called automatically when creating a session if ``auto_start``
         is True (default).
@@ -292,7 +282,7 @@ class CopilotClient:
             RuntimeError: If the server fails to start or the connection fails.
 
         Example:
-            >>> client = CopilotClient({"auto_start": False})
+            >>> client = CopilotClient(auto_start=False)
             >>> await client.start()
             >>> # Now ready to create sessions
         """
@@ -445,7 +435,32 @@ class CopilotClient:
         if not self._is_external_server:
             self._actual_port = None
 
-    async def create_session(self, config: SessionConfig) -> CopilotSession:
+    async def create_session(
+        self,
+        *,
+        on_permission_request: _PermissionHandlerFn,
+        model: str | None = None,
+        session_id: str | None = None,
+        client_name: str | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        tools: list[Tool] | None = None,
+        system_message: SystemMessageConfig | None = None,
+        available_tools: list[str] | None = None,
+        excluded_tools: list[str] | None = None,
+        on_user_input_request: UserInputHandler | None = None,
+        hooks: SessionHooks | None = None,
+        working_directory: str | None = None,
+        provider: ProviderConfig | None = None,
+        streaming: bool | None = None,
+        mcp_servers: dict[str, MCPServerConfig] | None = None,
+        custom_agents: list[CustomAgentConfig] | None = None,
+        agent: str | None = None,
+        config_dir: str | None = None,
+        skill_directories: list[str] | None = None,
+        disabled_skills: list[str] | None = None,
+        infinite_sessions: InfiniteSessionConfig | None = None,
+        on_event: Callable[[SessionEvent], None] | None = None,
+    ) -> CopilotSession:
         """
         Create a new conversation session with the Copilot CLI.
 
@@ -454,8 +469,29 @@ class CopilotClient:
         automatically start the connection.
 
         Args:
-            config: Optional configuration for the session, including model selection,
-                custom tools, system messages, and more.
+            on_permission_request: Handler for permission requests from the server.
+            model: Model to use for this session.
+            session_id: Custom session ID.
+            client_name: Client name to identify the application using the SDK.
+            reasoning_effort: Reasoning effort level ("low", "medium", "high", "xhigh").
+            tools: Custom tools exposed to the CLI.
+            system_message: System message configuration.
+            available_tools: List of tool names to allow (takes precedence over excluded_tools).
+            excluded_tools: List of tool names to disable (ignored if available_tools is set).
+            on_user_input_request: Handler for user input requests (enables ask_user tool).
+            hooks: Hook handlers for intercepting session lifecycle events.
+            working_directory: Working directory for the session.
+            provider: Custom provider configuration (BYOK - Bring Your Own Key).
+            streaming: Enable streaming of assistant message and reasoning chunks.
+            mcp_servers: MCP server configurations for the session.
+            custom_agents: Custom agent configurations for the session.
+            agent: Name of the custom agent to activate when the session starts.
+            config_dir: Override the default configuration directory location.
+            skill_directories: Directories to load skills from.
+            disabled_skills: List of skill names to disable.
+            infinite_sessions: Infinite session configuration for persistent workspaces.
+            on_event: Event handler registered before the session.create RPC, ensuring
+                early events (e.g. session.start) are not missed.
 
         Returns:
             A :class:`CopilotSession` instance for the new session.
@@ -464,34 +500,30 @@ class CopilotClient:
             RuntimeError: If the client is not connected and auto_start is disabled.
 
         Example:
-            >>> # Basic session
-            >>> config = {"on_permission_request": PermissionHandler.approve_all}
-            >>> session = await client.create_session(config)
+            >>> session = await client.create_session(
+            ...     on_permission_request=PermissionHandler.approve_all,
+            ... )
             >>>
             >>> # Session with model and streaming
-            >>> session = await client.create_session({
-            ...     "on_permission_request": PermissionHandler.approve_all,
-            ...     "model": "gpt-4",
-            ...     "streaming": True
-            ... })
+            >>> session = await client.create_session(
+            ...     on_permission_request=PermissionHandler.approve_all,
+            ...     model="gpt-4",
+            ...     streaming=True,
+            ... )
         """
+        if not on_permission_request or not callable(on_permission_request):
+            raise ValueError(
+                "A valid on_permission_request handler is required. "
+                "Use PermissionHandler.approve_all or provide a custom handler."
+            )
+
         if not self._client:
-            if self.options["auto_start"]:
+            if self._auto_start:
                 await self.start()
             else:
                 raise RuntimeError("Client not connected. Call start() first.")
 
-        cfg = config
-
-        if not cfg.get("on_permission_request"):
-            raise ValueError(
-                "An on_permission_request handler is required when creating a session. "
-                "For example, to allow all permissions, use "
-                '{"on_permission_request": PermissionHandler.approve_all}.'
-            )
-
         tool_defs = []
-        tools = cfg.get("tools")
         if tools:
             for tool in tools:
                 definition: dict[str, Any] = {
@@ -502,97 +534,66 @@ class CopilotClient:
                     definition["parameters"] = tool.parameters
                 if tool.overrides_built_in_tool:
                     definition["overridesBuiltInTool"] = True
+                if tool.skip_permission:
+                    definition["skipPermission"] = True
                 tool_defs.append(definition)
 
         payload: dict[str, Any] = {}
-        if cfg.get("model"):
-            payload["model"] = cfg["model"]
-        if cfg.get("session_id"):
-            payload["sessionId"] = cfg["session_id"]
-        if cfg.get("client_name"):
-            payload["clientName"] = cfg["client_name"]
-        if cfg.get("reasoning_effort"):
-            payload["reasoningEffort"] = cfg["reasoning_effort"]
+        if model:
+            payload["model"] = model
+        if client_name:
+            payload["clientName"] = client_name
+        if reasoning_effort:
+            payload["reasoningEffort"] = reasoning_effort
         if tool_defs:
             payload["tools"] = tool_defs
 
-        # Add system message configuration if provided
-        system_message = cfg.get("system_message")
         if system_message:
             payload["systemMessage"] = system_message
 
-        # Add tool filtering options
-        available_tools = cfg.get("available_tools")
         if available_tools is not None:
             payload["availableTools"] = available_tools
-        excluded_tools = cfg.get("excluded_tools")
         if excluded_tools is not None:
             payload["excludedTools"] = excluded_tools
 
-        # Always enable permission request callback (deny by default if no handler provided)
-        on_permission_request = cfg.get("on_permission_request")
         payload["requestPermission"] = True
 
-        # Enable user input request callback if handler provided
-        on_user_input_request = cfg.get("on_user_input_request")
         if on_user_input_request:
             payload["requestUserInput"] = True
 
-        # Enable hooks callback if any hook handler provided
-        hooks = cfg.get("hooks")
         if hooks and any(hooks.values()):
             payload["hooks"] = True
 
-        # Add working directory if provided
-        working_directory = cfg.get("working_directory")
         if working_directory:
             payload["workingDirectory"] = working_directory
 
-        # Add streaming option if provided
-        streaming = cfg.get("streaming")
         if streaming is not None:
             payload["streaming"] = streaming
 
-        # Add provider configuration if provided
-        provider = cfg.get("provider")
         if provider:
             payload["provider"] = self._convert_provider_to_wire_format(provider)
 
-        # Add MCP servers configuration if provided
-        mcp_servers = cfg.get("mcp_servers")
         if mcp_servers:
             payload["mcpServers"] = mcp_servers
         payload["envValueMode"] = "direct"
 
-        # Add custom agents configuration if provided
-        custom_agents = cfg.get("custom_agents")
         if custom_agents:
             payload["customAgents"] = [
-                self._convert_custom_agent_to_wire_format(agent) for agent in custom_agents
+                self._convert_custom_agent_to_wire_format(ca) for ca in custom_agents
             ]
 
-        # Add agent selection if provided
-        agent = cfg.get("agent")
         if agent:
             payload["agent"] = agent
 
-        # Add config directory override if provided
-        config_dir = cfg.get("config_dir")
         if config_dir:
             payload["configDir"] = config_dir
 
-        # Add skill directories configuration if provided
-        skill_directories = cfg.get("skill_directories")
         if skill_directories:
             payload["skillDirectories"] = skill_directories
 
-        # Add disabled skills configuration if provided
-        disabled_skills = cfg.get("disabled_skills")
         if disabled_skills:
             payload["disabledSkills"] = disabled_skills
 
-        # Add infinite sessions configuration if provided
-        infinite_sessions = cfg.get("infinite_sessions")
         if infinite_sessions:
             wire_config: dict[str, Any] = {}
             if "enabled" in infinite_sessions:
@@ -609,23 +610,65 @@ class CopilotClient:
 
         if not self._client:
             raise RuntimeError("Client not connected")
-        response = await self._client.request("session.create", payload)
 
-        session_id = response["sessionId"]
-        workspace_path = response.get("workspacePath")
-        session = CopilotSession(session_id, self._client, workspace_path)
+        session_id = session_id or str(uuid.uuid4())
+        payload["sessionId"] = session_id
+
+        # Propagate W3C Trace Context to CLI if OpenTelemetry is active
+        trace_ctx = get_trace_context()
+        payload.update(trace_ctx)
+
+        # Create and register the session before issuing the RPC so that
+        # events emitted by the CLI (e.g. session.start) are not dropped.
+        session = CopilotSession(session_id, self._client, None)
         session._register_tools(tools)
         session._register_permission_handler(on_permission_request)
         if on_user_input_request:
             session._register_user_input_handler(on_user_input_request)
         if hooks:
             session._register_hooks(hooks)
+        if on_event:
+            session.on(on_event)
         with self._sessions_lock:
             self._sessions[session_id] = session
 
+        try:
+            response = await self._client.request("session.create", payload)
+            session._workspace_path = response.get("workspacePath")
+        except BaseException:
+            with self._sessions_lock:
+                self._sessions.pop(session_id, None)
+            raise
+
         return session
 
-    async def resume_session(self, session_id: str, config: ResumeSessionConfig) -> CopilotSession:
+    async def resume_session(
+        self,
+        session_id: str,
+        *,
+        on_permission_request: _PermissionHandlerFn,
+        model: str | None = None,
+        client_name: str | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
+        tools: list[Tool] | None = None,
+        system_message: SystemMessageConfig | None = None,
+        available_tools: list[str] | None = None,
+        excluded_tools: list[str] | None = None,
+        on_user_input_request: UserInputHandler | None = None,
+        hooks: SessionHooks | None = None,
+        working_directory: str | None = None,
+        provider: ProviderConfig | None = None,
+        streaming: bool | None = None,
+        mcp_servers: dict[str, MCPServerConfig] | None = None,
+        custom_agents: list[CustomAgentConfig] | None = None,
+        agent: str | None = None,
+        config_dir: str | None = None,
+        skill_directories: list[str] | None = None,
+        disabled_skills: list[str] | None = None,
+        infinite_sessions: InfiniteSessionConfig | None = None,
+        disable_resume: bool = False,
+        on_event: Callable[[SessionEvent], None] | None = None,
+    ) -> CopilotSession:
         """
         Resume an existing conversation session by its ID.
 
@@ -635,7 +678,30 @@ class CopilotClient:
 
         Args:
             session_id: The ID of the session to resume.
-            config: Optional configuration for the resumed session.
+            on_permission_request: Handler for permission requests from the server.
+            model: Model to use for this session. Can change the model when resuming.
+            client_name: Client name to identify the application using the SDK.
+            reasoning_effort: Reasoning effort level ("low", "medium", "high", "xhigh").
+            tools: Custom tools exposed to the CLI.
+            system_message: System message configuration.
+            available_tools: List of tool names to allow (takes precedence over excluded_tools).
+            excluded_tools: List of tool names to disable (ignored if available_tools is set).
+            on_user_input_request: Handler for user input requests (enables ask_user tool).
+            hooks: Hook handlers for intercepting session lifecycle events.
+            working_directory: Working directory for the session.
+            provider: Custom provider configuration (BYOK - Bring Your Own Key).
+            streaming: Enable streaming of assistant message and reasoning chunks.
+            mcp_servers: MCP server configurations for the session.
+            custom_agents: Custom agent configurations for the session.
+            agent: Name of the custom agent to activate when the session starts.
+            config_dir: Override the default configuration directory location.
+            skill_directories: Directories to load skills from.
+            disabled_skills: List of skill names to disable.
+            infinite_sessions: Infinite session configuration for persistent workspaces.
+            disable_resume: When True, skips emitting the session.resume event.
+                Useful for reconnecting without triggering resume-related side effects.
+            on_event: Event handler registered before the session.resume RPC, ensuring
+                early events (e.g. session.start) are not missed.
 
         Returns:
             A :class:`CopilotSession` instance for the resumed session.
@@ -644,33 +710,32 @@ class CopilotClient:
             RuntimeError: If the session does not exist or the client is not connected.
 
         Example:
-            >>> # Resume a previous session
-            >>> config = {"on_permission_request": PermissionHandler.approve_all}
-            >>> session = await client.resume_session("session-123", config)
+            >>> session = await client.resume_session(
+            ...     "session-123",
+            ...     on_permission_request=PermissionHandler.approve_all,
+            ... )
             >>>
-            >>> # Resume with new tools
-            >>> session = await client.resume_session("session-123", {
-            ...     "on_permission_request": PermissionHandler.approve_all,
-            ...     "tools": [my_new_tool]
-            ... })
+            >>> # Resume with model and streaming
+            >>> session = await client.resume_session(
+            ...     "session-123",
+            ...     on_permission_request=PermissionHandler.approve_all,
+            ...     model="gpt-4",
+            ...     streaming=True,
+            ... )
         """
+        if not on_permission_request or not callable(on_permission_request):
+            raise ValueError(
+                "A valid on_permission_request handler is required. "
+                "Use PermissionHandler.approve_all or provide a custom handler."
+            )
+
         if not self._client:
-            if self.options["auto_start"]:
+            if self._auto_start:
                 await self.start()
             else:
                 raise RuntimeError("Client not connected. Call start() first.")
 
-        cfg = config
-
-        if not cfg.get("on_permission_request"):
-            raise ValueError(
-                "An on_permission_request handler is required when resuming a session. "
-                "For example, to allow all permissions, use "
-                '{"on_permission_request": PermissionHandler.approve_all}.'
-            )
-
         tool_defs = []
-        tools = cfg.get("tools")
         if tools:
             for tool in tools:
                 definition: dict[str, Any] = {
@@ -681,107 +746,69 @@ class CopilotClient:
                     definition["parameters"] = tool.parameters
                 if tool.overrides_built_in_tool:
                     definition["overridesBuiltInTool"] = True
+                if tool.skip_permission:
+                    definition["skipPermission"] = True
                 tool_defs.append(definition)
 
         payload: dict[str, Any] = {"sessionId": session_id}
-
-        # Add client name if provided
-        client_name = cfg.get("client_name")
-        if client_name:
-            payload["clientName"] = client_name
-
-        # Add model if provided
-        model = cfg.get("model")
         if model:
             payload["model"] = model
-
-        if cfg.get("reasoning_effort"):
-            payload["reasoningEffort"] = cfg["reasoning_effort"]
+        if client_name:
+            payload["clientName"] = client_name
+        if reasoning_effort:
+            payload["reasoningEffort"] = reasoning_effort
         if tool_defs:
             payload["tools"] = tool_defs
 
-        # Add system message configuration if provided
-        system_message = cfg.get("system_message")
         if system_message:
             payload["systemMessage"] = system_message
 
-        # Add available/excluded tools if provided
-        available_tools = cfg.get("available_tools")
         if available_tools is not None:
             payload["availableTools"] = available_tools
-
-        excluded_tools = cfg.get("excluded_tools")
         if excluded_tools is not None:
             payload["excludedTools"] = excluded_tools
 
-        provider = cfg.get("provider")
-        if provider:
-            payload["provider"] = self._convert_provider_to_wire_format(provider)
-
-        # Add streaming option if provided
-        streaming = cfg.get("streaming")
-        if streaming is not None:
-            payload["streaming"] = streaming
-
-        # Always enable permission request callback (deny by default if no handler provided)
-        on_permission_request = cfg.get("on_permission_request")
         payload["requestPermission"] = True
 
-        # Enable user input request callback if handler provided
-        on_user_input_request = cfg.get("on_user_input_request")
         if on_user_input_request:
             payload["requestUserInput"] = True
 
-        # Enable hooks callback if any hook handler provided
-        hooks = cfg.get("hooks")
         if hooks and any(hooks.values()):
             payload["hooks"] = True
 
-        # Add working directory if provided
-        working_directory = cfg.get("working_directory")
         if working_directory:
             payload["workingDirectory"] = working_directory
 
-        # Add config directory if provided
-        config_dir = cfg.get("config_dir")
-        if config_dir:
-            payload["configDir"] = config_dir
+        if streaming is not None:
+            payload["streaming"] = streaming
 
-        # Add disable resume flag if provided
-        disable_resume = cfg.get("disable_resume")
-        if disable_resume:
-            payload["disableResume"] = True
+        if provider:
+            payload["provider"] = self._convert_provider_to_wire_format(provider)
 
-        # Add MCP servers configuration if provided
-        mcp_servers = cfg.get("mcp_servers")
         if mcp_servers:
             payload["mcpServers"] = mcp_servers
         payload["envValueMode"] = "direct"
 
-        # Add custom agents configuration if provided
-        custom_agents = cfg.get("custom_agents")
         if custom_agents:
             payload["customAgents"] = [
-                self._convert_custom_agent_to_wire_format(agent) for agent in custom_agents
+                self._convert_custom_agent_to_wire_format(ca) for ca in custom_agents
             ]
 
-        # Add agent selection if provided
-        agent = cfg.get("agent")
         if agent:
             payload["agent"] = agent
 
-        # Add skill directories configuration if provided
-        skill_directories = cfg.get("skill_directories")
+        if config_dir:
+            payload["configDir"] = config_dir
+
+        if disable_resume:
+            payload["disableResume"] = True
+
         if skill_directories:
             payload["skillDirectories"] = skill_directories
 
-        # Add disabled skills configuration if provided
-        disabled_skills = cfg.get("disabled_skills")
         if disabled_skills:
             payload["disabledSkills"] = disabled_skills
 
-        # Add infinite sessions configuration if provided
-        infinite_sessions = cfg.get("infinite_sessions")
         if infinite_sessions:
             wire_config: dict[str, Any] = {}
             if "enabled" in infinite_sessions:
@@ -798,19 +825,32 @@ class CopilotClient:
 
         if not self._client:
             raise RuntimeError("Client not connected")
-        response = await self._client.request("session.resume", payload)
 
-        resumed_session_id = response["sessionId"]
-        workspace_path = response.get("workspacePath")
-        session = CopilotSession(resumed_session_id, self._client, workspace_path)
-        session._register_tools(cfg.get("tools"))
+        # Propagate W3C Trace Context to CLI if OpenTelemetry is active
+        trace_ctx = get_trace_context()
+        payload.update(trace_ctx)
+
+        # Create and register the session before issuing the RPC so that
+        # events emitted by the CLI (e.g. session.start) are not dropped.
+        session = CopilotSession(session_id, self._client, None)
+        session._register_tools(tools)
         session._register_permission_handler(on_permission_request)
         if on_user_input_request:
             session._register_user_input_handler(on_user_input_request)
         if hooks:
             session._register_hooks(hooks)
+        if on_event:
+            session.on(on_event)
         with self._sessions_lock:
-            self._sessions[resumed_session_id] = session
+            self._sessions[session_id] = session
+
+        try:
+            response = await self._client.request("session.resume", payload)
+            session._workspace_path = response.get("workspacePath")
+        except BaseException:
+            with self._sessions_lock:
+                self._sessions.pop(session_id, None)
+            raise
 
         return session
 
@@ -1028,8 +1068,7 @@ class CopilotClient:
         Example:
             >>> last_id = await client.get_last_session_id()
             >>> if last_id:
-            ...     config = {"on_permission_request": PermissionHandler.approve_all}
-            ...     session = await client.resume_session(last_id, config)
+            ...     session = await client.resume_session(last_id, PermissionHandler.approve_all)
         """
         if not self._client:
             raise RuntimeError("Client not connected")
@@ -1087,11 +1126,20 @@ class CopilotClient:
             error = response.get("error", "Unknown error")
             raise RuntimeError(f"Failed to set foreground session: {error}")
 
+    @overload
+    def on(self, handler: SessionLifecycleHandler, /) -> HandlerUnsubcribe: ...
+
+    @overload
+    def on(
+        self, event_type: SessionLifecycleEventType, /, handler: SessionLifecycleHandler
+    ) -> HandlerUnsubcribe: ...
+
     def on(
         self,
         event_type_or_handler: SessionLifecycleEventType | SessionLifecycleHandler,
+        /,
         handler: SessionLifecycleHandler | None = None,
-    ) -> Callable[[], None]:
+    ) -> HandlerUnsubcribe:
         """
         Subscribe to session lifecycle events.
 
@@ -1260,25 +1308,30 @@ class CopilotClient:
         Raises:
             RuntimeError: If the server fails to start or times out.
         """
-        cli_path = self.options["cli_path"]
+        assert isinstance(self._config, SubprocessConfig)
+        cfg = self._config
+
+        cli_path = cfg.cli_path
+        assert cli_path is not None  # resolved in __init__
 
         # Verify CLI exists
         if not os.path.exists(cli_path):
-            raise RuntimeError(f"Copilot CLI not found at {cli_path}")
+            original_path = cli_path
+            if (cli_path := shutil.which(cli_path)) is None:
+                raise RuntimeError(f"Copilot CLI not found at {original_path}")
 
         # Start with user-provided cli_args, then add SDK-managed args
-        cli_args = self.options.get("cli_args") or []
-        args = list(cli_args) + [
+        args = list(cfg.cli_args) + [
             "--headless",
             "--no-auto-update",
             "--log-level",
-            self.options["log_level"],
+            cfg.log_level,
         ]
 
         # Add auth-related flags
-        if self.options.get("github_token"):
+        if cfg.github_token:
             args.extend(["--auth-token-env", "COPILOT_SDK_AUTH_TOKEN"])
-        if not self.options.get("use_logged_in_user", True):
+        if not cfg.use_logged_in_user:
             args.append("--no-auto-login")
 
         # If cli_path is a .js file, run it with node
@@ -1289,21 +1342,39 @@ class CopilotClient:
             args = [cli_path] + args
 
         # Get environment variables
-        env = self.options.get("env")
-        if env is None:
+        if cfg.env is None:
             env = dict(os.environ)
         else:
-            env = dict(env)
+            env = dict(cfg.env)
 
         # Set auth token in environment if provided
-        if self.options.get("github_token"):
-            env["COPILOT_SDK_AUTH_TOKEN"] = self.options["github_token"]
+        if cfg.github_token:
+            env["COPILOT_SDK_AUTH_TOKEN"] = cfg.github_token
+
+        # Set OpenTelemetry environment variables if telemetry config is provided
+        telemetry = cfg.telemetry
+        if telemetry is not None:
+            env["COPILOT_OTEL_ENABLED"] = "true"
+            if "otlp_endpoint" in telemetry:
+                env["OTEL_EXPORTER_OTLP_ENDPOINT"] = telemetry["otlp_endpoint"]
+            if "file_path" in telemetry:
+                env["COPILOT_OTEL_FILE_EXPORTER_PATH"] = telemetry["file_path"]
+            if "exporter_type" in telemetry:
+                env["COPILOT_OTEL_EXPORTER_TYPE"] = telemetry["exporter_type"]
+            if "source_name" in telemetry:
+                env["COPILOT_OTEL_SOURCE_NAME"] = telemetry["source_name"]
+            if "capture_content" in telemetry:
+                env["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = str(
+                    telemetry["capture_content"]
+                ).lower()
 
         # On Windows, hide the console window to avoid distracting users in GUI apps
         creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
+        cwd = cfg.cwd or os.getcwd()
+
         # Choose transport mode
-        if self.options["use_stdio"]:
+        if cfg.use_stdio:
             args.append("--stdio")
             # Use regular Popen with pipes (buffering=0 for unbuffered)
             self._process = subprocess.Popen(
@@ -1312,25 +1383,25 @@ class CopilotClient:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
-                cwd=self.options["cwd"],
+                cwd=cwd,
                 env=env,
                 creationflags=creationflags,
             )
         else:
-            if self.options["port"] > 0:
-                args.extend(["--port", str(self.options["port"])])
+            if cfg.port > 0:
+                args.extend(["--port", str(cfg.port)])
             self._process = subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd=self.options["cwd"],
+                cwd=cwd,
                 env=env,
                 creationflags=creationflags,
             )
 
         # For stdio mode, we're ready immediately
-        if self.options["use_stdio"]:
+        if cfg.use_stdio:
             return
 
         # For TCP mode, wait for port announcement
@@ -1365,7 +1436,8 @@ class CopilotClient:
         Raises:
             RuntimeError: If the connection fails.
         """
-        if self.options["use_stdio"]:
+        use_stdio = isinstance(self._config, SubprocessConfig) and self._config.use_stdio
+        if use_stdio:
             await self._connect_via_stdio()
         else:
             await self._connect_via_tcp()
@@ -1384,6 +1456,7 @@ class CopilotClient:
 
         # Create JSON-RPC client with the process
         self._client = JsonRpcClient(self._process)
+        self._client.on_close = lambda: setattr(self, "_state", "disconnected")
         self._rpc = ServerRpc(self._client)
 
         # Set up notification handler for session events
@@ -1471,6 +1544,7 @@ class CopilotClient:
 
         self._process = SocketWrapper(sock_file, sock)  # type: ignore
         self._client = JsonRpcClient(self._process)
+        self._client.on_close = lambda: setattr(self, "_state", "disconnected")
         self._rpc = ServerRpc(self._client)
 
         # Set up notification handler for session events
@@ -1595,10 +1669,14 @@ class CopilotClient:
             arguments=arguments,
         )
 
+        tp = params.get("traceparent")
+        ts = params.get("tracestate")
+
         try:
-            result = handler(invocation)
-            if inspect.isawaitable(result):
-                result = await result
+            with trace_context(tp, ts):
+                result = handler(invocation)
+                if inspect.isawaitable(result):
+                    result = await result
 
             tool_result: ToolResult = result  # type: ignore[assignment]
             return {
@@ -1638,6 +1716,8 @@ class CopilotClient:
         try:
             perm_request = PermissionRequest.from_dict(permission_request)
             result = await session._handle_permission_request(perm_request)
+            if result.kind == "no-result":
+                raise ValueError(NO_RESULT_PERMISSION_V2_ERROR)
             result_payload: dict = {"kind": result.kind}
             if result.rules is not None:
                 result_payload["rules"] = result.rules
@@ -1648,6 +1728,14 @@ class CopilotClient:
             if result.path is not None:
                 result_payload["path"] = result.path
             return {"result": result_payload}
+        except ValueError as exc:
+            if str(exc) == NO_RESULT_PERMISSION_V2_ERROR:
+                raise
+            return {
+                "result": {
+                    "kind": "denied-no-approval-rule-and-could-not-request-from-user",
+                }
+            }
         except Exception:  # pylint: disable=broad-except
             return {
                 "result": {

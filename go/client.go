@@ -44,10 +44,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/github/copilot-sdk/go/internal/embeddedcli"
 	"github.com/github/copilot-sdk/go/internal/jsonrpc2"
 	"github.com/github/copilot-sdk/go/rpc"
 )
+
+const noResultPermissionV2Error = "permission handlers cannot return 'no-result' when connected to a protocol v2 server"
 
 // Client manages the connection to the Copilot CLI server and provides session management.
 //
@@ -69,19 +73,19 @@ import (
 //	}
 //	defer client.Stop()
 type Client struct {
-	options                   ClientOptions
-	process                   *exec.Cmd
-	client                    *jsonrpc2.Client
-	actualPort                int
-	actualHost                string
-	state                     ConnectionState
-	sessions                  map[string]*Session
-	sessionsMux               sync.Mutex
-	isExternalServer          bool
-	conn                      net.Conn // stores net.Conn for external TCP connections
-	useStdio                  bool     // resolved value from options
-	autoStart                 bool     // resolved value from options
-	autoRestart               bool     // resolved value from options
+	options          ClientOptions
+	process          *exec.Cmd
+	client           *jsonrpc2.Client
+	actualPort       int
+	actualHost       string
+	state            ConnectionState
+	sessions         map[string]*Session
+	sessionsMux      sync.Mutex
+	isExternalServer bool
+	conn             net.Conn // stores net.Conn for external TCP connections
+	useStdio         bool     // resolved value from options
+	autoStart        bool     // resolved value from options
+
 	modelsCache               []ModelInfo
 	modelsCacheMux            sync.Mutex
 	lifecycleHandlers         []SessionLifecycleHandler
@@ -130,7 +134,6 @@ func NewClient(options *ClientOptions) *Client {
 		isExternalServer: false,
 		useStdio:         true,
 		autoStart:        true, // default
-		autoRestart:      true, // default
 	}
 
 	if options != nil {
@@ -179,9 +182,6 @@ func NewClient(options *ClientOptions) *Client {
 		}
 		if options.AutoStart != nil {
 			client.autoStart = *options.AutoStart
-		}
-		if options.AutoRestart != nil {
-			client.autoRestart = *options.AutoRestart
 		}
 		if options.GitHubToken != "" {
 			opts.GitHubToken = options.GitHubToken
@@ -443,12 +443,12 @@ func (c *Client) ForceStop() {
 	c.RPC = nil
 }
 
-func (c *Client) ensureConnected() error {
+func (c *Client) ensureConnected(ctx context.Context) error {
 	if c.client != nil {
 		return nil
 	}
 	if c.autoStart {
-		return c.Start(context.Background())
+		return c.Start(ctx)
 	}
 	return fmt.Errorf("client not connected. Call Start() first")
 }
@@ -487,13 +487,12 @@ func (c *Client) CreateSession(ctx context.Context, config *SessionConfig) (*Ses
 		return nil, fmt.Errorf("an OnPermissionRequest handler is required when creating a session. For example, to allow all permissions, use &copilot.SessionConfig{OnPermissionRequest: copilot.PermissionHandler.ApproveAll}")
 	}
 
-	if err := c.ensureConnected(); err != nil {
+	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
 
 	req := createSessionRequest{}
 	req.Model = config.Model
-	req.SessionID = config.SessionID
 	req.ClientName = config.ClientName
 	req.ReasoningEffort = config.ReasoningEffort
 	req.ConfigDir = config.ConfigDir
@@ -527,17 +526,19 @@ func (c *Client) CreateSession(ctx context.Context, config *SessionConfig) (*Ses
 	}
 	req.RequestPermission = Bool(true)
 
-	result, err := c.client.Request("session.create", req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create session: %w", err)
-	}
+	traceparent, tracestate := getTraceContext(ctx)
+	req.Traceparent = traceparent
+	req.Tracestate = tracestate
 
-	var response createSessionResponse
-	if err := json.Unmarshal(result, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	sessionID := config.SessionID
+	if sessionID == "" {
+		sessionID = uuid.New().String()
 	}
+	req.SessionID = sessionID
 
-	session := newSession(response.SessionID, c.client, response.WorkspacePath)
+	// Create and register the session before issuing the RPC so that
+	// events emitted by the CLI (e.g. session.start) are not dropped.
+	session := newSession(sessionID, c.client, "")
 
 	session.registerTools(config.Tools)
 	session.registerPermissionHandler(config.OnPermissionRequest)
@@ -547,10 +548,31 @@ func (c *Client) CreateSession(ctx context.Context, config *SessionConfig) (*Ses
 	if config.Hooks != nil {
 		session.registerHooks(config.Hooks)
 	}
+	if config.OnEvent != nil {
+		session.On(config.OnEvent)
+	}
 
 	c.sessionsMux.Lock()
-	c.sessions[response.SessionID] = session
+	c.sessions[sessionID] = session
 	c.sessionsMux.Unlock()
+
+	result, err := c.client.Request("session.create", req)
+	if err != nil {
+		c.sessionsMux.Lock()
+		delete(c.sessions, sessionID)
+		c.sessionsMux.Unlock()
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	var response createSessionResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		c.sessionsMux.Lock()
+		delete(c.sessions, sessionID)
+		c.sessionsMux.Unlock()
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	session.workspacePath = response.WorkspacePath
 
 	return session, nil
 }
@@ -585,7 +607,7 @@ func (c *Client) ResumeSessionWithOptions(ctx context.Context, sessionID string,
 		return nil, fmt.Errorf("an OnPermissionRequest handler is required when resuming a session. For example, to allow all permissions, use &copilot.ResumeSessionConfig{OnPermissionRequest: copilot.PermissionHandler.ApproveAll}")
 	}
 
-	if err := c.ensureConnected(); err != nil {
+	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
 
@@ -627,17 +649,14 @@ func (c *Client) ResumeSessionWithOptions(ctx context.Context, sessionID string,
 	req.InfiniteSessions = config.InfiniteSessions
 	req.RequestPermission = Bool(true)
 
-	result, err := c.client.Request("session.resume", req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resume session: %w", err)
-	}
+	traceparent, tracestate := getTraceContext(ctx)
+	req.Traceparent = traceparent
+	req.Tracestate = tracestate
 
-	var response resumeSessionResponse
-	if err := json.Unmarshal(result, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
+	// Create and register the session before issuing the RPC so that
+	// events emitted by the CLI (e.g. session.start) are not dropped.
+	session := newSession(sessionID, c.client, "")
 
-	session := newSession(response.SessionID, c.client, response.WorkspacePath)
 	session.registerTools(config.Tools)
 	session.registerPermissionHandler(config.OnPermissionRequest)
 	if config.OnUserInputRequest != nil {
@@ -646,10 +665,31 @@ func (c *Client) ResumeSessionWithOptions(ctx context.Context, sessionID string,
 	if config.Hooks != nil {
 		session.registerHooks(config.Hooks)
 	}
+	if config.OnEvent != nil {
+		session.On(config.OnEvent)
+	}
 
 	c.sessionsMux.Lock()
-	c.sessions[response.SessionID] = session
+	c.sessions[sessionID] = session
 	c.sessionsMux.Unlock()
+
+	result, err := c.client.Request("session.resume", req)
+	if err != nil {
+		c.sessionsMux.Lock()
+		delete(c.sessions, sessionID)
+		c.sessionsMux.Unlock()
+		return nil, fmt.Errorf("failed to resume session: %w", err)
+	}
+
+	var response resumeSessionResponse
+	if err := json.Unmarshal(result, &response); err != nil {
+		c.sessionsMux.Lock()
+		delete(c.sessions, sessionID)
+		c.sessionsMux.Unlock()
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	session.workspacePath = response.WorkspacePath
 
 	return session, nil
 }
@@ -675,7 +715,7 @@ func (c *Client) ResumeSessionWithOptions(ctx context.Context, sessionID string,
 //
 //	sessions, err := client.ListSessions(context.Background(), &SessionListFilter{Repository: "owner/repo"})
 func (c *Client) ListSessions(ctx context.Context, filter *SessionListFilter) ([]SessionMetadata, error) {
-	if err := c.ensureConnected(); err != nil {
+	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
 
@@ -710,7 +750,7 @@ func (c *Client) ListSessions(ctx context.Context, filter *SessionListFilter) ([
 //	    log.Fatal(err)
 //	}
 func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
-	if err := c.ensureConnected(); err != nil {
+	if err := c.ensureConnected(ctx); err != nil {
 		return err
 	}
 
@@ -757,7 +797,7 @@ func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 //	    })
 //	}
 func (c *Client) GetLastSessionID(ctx context.Context) (*string, error) {
-	if err := c.ensureConnected(); err != nil {
+	if err := c.ensureConnected(ctx); err != nil {
 		return nil, err
 	}
 
@@ -789,14 +829,8 @@ func (c *Client) GetLastSessionID(ctx context.Context) (*string, error) {
 //	    fmt.Printf("TUI is displaying session: %s\n", *sessionID)
 //	}
 func (c *Client) GetForegroundSessionID(ctx context.Context) (*string, error) {
-	if c.client == nil {
-		if c.autoStart {
-			if err := c.Start(ctx); err != nil {
-				return nil, err
-			}
-		} else {
-			return nil, fmt.Errorf("client not connected. Call Start() first")
-		}
+	if err := c.ensureConnected(ctx); err != nil {
+		return nil, err
 	}
 
 	result, err := c.client.Request("session.getForeground", getForegroundSessionRequest{})
@@ -823,14 +857,8 @@ func (c *Client) GetForegroundSessionID(ctx context.Context) (*string, error) {
 //	    log.Fatal(err)
 //	}
 func (c *Client) SetForegroundSessionID(ctx context.Context, sessionID string) error {
-	if c.client == nil {
-		if c.autoStart {
-			if err := c.Start(ctx); err != nil {
-				return err
-			}
-		} else {
-			return fmt.Errorf("client not connected. Call Start() first")
-		}
+	if err := c.ensureConnected(ctx); err != nil {
+		return err
 	}
 
 	result, err := c.client.Request("session.setForeground", setForegroundSessionRequest{SessionID: sessionID})
@@ -1160,7 +1188,7 @@ func (c *Client) startCLIServer(ctx context.Context) error {
 		args = append([]string{cliPath}, args...)
 	}
 
-	c.process = exec.CommandContext(ctx, command, args...)
+	c.process = exec.Command(command, args...)
 
 	// Configure platform-specific process attributes (e.g., hide window on Windows)
 	configureProcAttr(c.process)
@@ -1174,6 +1202,30 @@ func (c *Client) startCLIServer(ctx context.Context) error {
 	c.process.Env = c.options.Env
 	if c.options.GitHubToken != "" {
 		c.process.Env = append(c.process.Env, "COPILOT_SDK_AUTH_TOKEN="+c.options.GitHubToken)
+	}
+
+	if c.options.Telemetry != nil {
+		t := c.options.Telemetry
+		c.process.Env = append(c.process.Env, "COPILOT_OTEL_ENABLED=true")
+		if t.OTLPEndpoint != "" {
+			c.process.Env = append(c.process.Env, "OTEL_EXPORTER_OTLP_ENDPOINT="+t.OTLPEndpoint)
+		}
+		if t.FilePath != "" {
+			c.process.Env = append(c.process.Env, "COPILOT_OTEL_FILE_EXPORTER_PATH="+t.FilePath)
+		}
+		if t.ExporterType != "" {
+			c.process.Env = append(c.process.Env, "COPILOT_OTEL_EXPORTER_TYPE="+t.ExporterType)
+		}
+		if t.SourceName != "" {
+			c.process.Env = append(c.process.Env, "COPILOT_OTEL_SOURCE_NAME="+t.SourceName)
+		}
+		if t.CaptureContent != nil {
+			val := "false"
+			if *t.CaptureContent {
+				val = "true"
+			}
+			c.process.Env = append(c.process.Env, "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="+val)
+		}
 	}
 
 	if c.useStdio {
@@ -1197,6 +1249,15 @@ func (c *Client) startCLIServer(ctx context.Context) error {
 		// Create JSON-RPC client immediately
 		c.client = jsonrpc2.NewClient(stdin, stdout)
 		c.client.SetProcessDone(c.processDone, c.processErrorPtr)
+		c.client.SetOnClose(func() {
+			// Run in a goroutine to avoid deadlocking with Stop/ForceStop,
+			// which hold startStopMux while waiting for readLoop to finish.
+			go func() {
+				c.startStopMux.Lock()
+				defer c.startStopMux.Unlock()
+				c.state = StateDisconnected
+			}()
+		})
 		c.RPC = rpc.NewServerRpc(c.client)
 		c.setupNotificationHandler()
 		c.client.Start()
@@ -1216,14 +1277,16 @@ func (c *Client) startCLIServer(ctx context.Context) error {
 		c.monitorProcess()
 
 		scanner := bufio.NewScanner(stdout)
-		timeout := time.After(10 * time.Second)
 		portRegex := regexp.MustCompile(`listening on port (\d+)`)
+
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
 
 		for {
 			select {
-			case <-timeout:
+			case <-ctx.Done():
 				killErr := c.killProcess()
-				return errors.Join(errors.New("timeout waiting for CLI server to start"), killErr)
+				return errors.Join(fmt.Errorf("failed waiting for CLI server to start: %w", ctx.Err()), killErr)
 			case <-c.processDone:
 				killErr := c.killProcess()
 				return errors.Join(errors.New("CLI server process exited before reporting port"), killErr)
@@ -1295,12 +1358,13 @@ func (c *Client) connectViaTcp(ctx context.Context) error {
 		return fmt.Errorf("server port not available")
 	}
 
-	// Create TCP connection that cancels on context done or after 10 seconds
+	// Merge a 10-second timeout with the caller's context so whichever
+	// deadline comes first wins.
 	address := net.JoinHostPort(c.actualHost, fmt.Sprintf("%d", c.actualPort))
-	dialer := net.Dialer{
-		Timeout: 10 * time.Second,
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(dialCtx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("failed to connect to CLI server at %s: %w", address, err)
 	}
@@ -1312,6 +1376,13 @@ func (c *Client) connectViaTcp(ctx context.Context) error {
 	if c.processDone != nil {
 		c.client.SetProcessDone(c.processDone, c.processErrorPtr)
 	}
+	c.client.SetOnClose(func() {
+		go func() {
+			c.startStopMux.Lock()
+			defer c.startStopMux.Unlock()
+			c.state = StateDisconnected
+		}()
+	})
 	c.RPC = rpc.NewServerRpc(c.client)
 	c.setupNotificationHandler()
 	c.client.Start()
@@ -1403,10 +1474,12 @@ func (c *Client) handleHooksInvoke(req hooksInvokeRequest) (map[string]any, *jso
 
 // toolCallRequestV2 is the v2 RPC request payload for tool.call.
 type toolCallRequestV2 struct {
-	SessionID  string `json:"sessionId"`
-	ToolCallID string `json:"toolCallId"`
-	ToolName   string `json:"toolName"`
-	Arguments  any    `json:"arguments"`
+	SessionID   string `json:"sessionId"`
+	ToolCallID  string `json:"toolCallId"`
+	ToolName    string `json:"toolName"`
+	Arguments   any    `json:"arguments"`
+	Traceparent string `json:"traceparent,omitempty"`
+	Tracestate  string `json:"tracestate,omitempty"`
 }
 
 // toolCallResponseV2 is the v2 RPC response payload for tool.call.
@@ -1448,7 +1521,15 @@ func (c *Client) handleToolCallRequestV2(req toolCallRequestV2) (*toolCallRespon
 		}}, nil
 	}
 
-	invocation := ToolInvocation(req)
+	ctx := contextWithTraceParent(context.Background(), req.Traceparent, req.Tracestate)
+
+	invocation := ToolInvocation{
+		SessionID:    req.SessionID,
+		ToolCallID:   req.ToolCallID,
+		ToolName:     req.ToolName,
+		Arguments:    req.Arguments,
+		TraceContext: ctx,
+	}
 
 	result, err := handler(invocation)
 	if err != nil {
@@ -1496,6 +1577,9 @@ func (c *Client) handlePermissionRequestV2(req permissionRequestV2) (*permission
 				Kind: PermissionRequestResultKindDeniedCouldNotRequestFromUser,
 			},
 		}, nil
+	}
+	if result.Kind == "no-result" {
+		return nil, &jsonrpc2.Error{Code: -32603, Message: noResultPermissionV2Error}
 	}
 
 	return &permissionResponseV2{Result: result}, nil

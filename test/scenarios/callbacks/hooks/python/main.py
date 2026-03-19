@@ -1,6 +1,6 @@
 import asyncio
 import os
-from copilot import CopilotClient
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig
 
 
 hook_log: list[str] = []
@@ -40,31 +40,27 @@ async def on_error_occurred(input_data, invocation):
 
 
 async def main():
-    opts = {"github_token": os.environ.get("GITHUB_TOKEN")}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        github_token=os.environ.get("GITHUB_TOKEN"),
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
         session = await client.create_session(
-            {
-                "model": "claude-haiku-4.5",
-                "on_permission_request": auto_approve_permission,
-                "hooks": {
-                    "on_session_start": on_session_start,
-                    "on_session_end": on_session_end,
-                    "on_pre_tool_use": on_pre_tool_use,
-                    "on_post_tool_use": on_post_tool_use,
-                    "on_user_prompt_submitted": on_user_prompt_submitted,
-                    "on_error_occurred": on_error_occurred,
-                },
-            }
+            on_permission_request=auto_approve_permission,
+            model="claude-haiku-4.5",
+            hooks={
+                "on_session_start": on_session_start,
+                "on_session_end": on_session_end,
+                "on_pre_tool_use": on_pre_tool_use,
+                "on_post_tool_use": on_post_tool_use,
+                "on_user_prompt_submitted": on_user_prompt_submitted,
+                "on_error_occurred": on_error_occurred,
+            },
         )
 
         response = await session.send_and_wait(
-            {
-                "prompt": "List the files in the current directory using the glob tool with pattern '*.md'.",
-            }
+            "List the files in the current directory using the glob tool with pattern '*.md'."
         )
 
         if response:

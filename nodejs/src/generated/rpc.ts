@@ -44,16 +44,34 @@ export interface ModelsListResult {
      * Model capabilities and limits
      */
     capabilities: {
+      /**
+       * Feature flags indicating what the model supports
+       */
       supports: {
+        /**
+         * Whether this model supports vision/image input
+         */
         vision?: boolean;
         /**
          * Whether this model supports reasoning effort configuration
          */
         reasoningEffort?: boolean;
       };
+      /**
+       * Token limits for prompts, outputs, and context window
+       */
       limits: {
+        /**
+         * Maximum number of prompt/input tokens
+         */
         max_prompt_tokens?: number;
+        /**
+         * Maximum number of output/completion tokens
+         */
         max_output_tokens?: number;
+        /**
+         * Maximum total context window size in tokens
+         */
         max_context_window_tokens: number;
       };
     };
@@ -61,13 +79,22 @@ export interface ModelsListResult {
      * Policy state (if applicable)
      */
     policy?: {
+      /**
+       * Current policy state for this model
+       */
       state: string;
+      /**
+       * Usage terms or conditions for this model
+       */
       terms: string;
     };
     /**
      * Billing information
      */
     billing?: {
+      /**
+       * Billing cost multiplier relative to the base rate
+       */
       multiplier: number;
     };
     /**
@@ -153,6 +180,9 @@ export interface AccountGetQuotaResult {
 }
 
 export interface SessionModelGetCurrentResult {
+  /**
+   * Currently active model identifier
+   */
   modelId?: string;
 }
 
@@ -164,6 +194,9 @@ export interface SessionModelGetCurrentParams {
 }
 
 export interface SessionModelSwitchToResult {
+  /**
+   * Currently active model identifier after the switch
+   */
   modelId?: string;
 }
 
@@ -172,7 +205,14 @@ export interface SessionModelSwitchToParams {
    * Target session identifier
    */
   sessionId: string;
+  /**
+   * Model identifier to switch to
+   */
   modelId: string;
+  /**
+   * Reasoning effort level to use for the model
+   */
+  reasoningEffort?: string;
 }
 
 export interface SessionModeGetResult {
@@ -300,6 +340,7 @@ export interface SessionWorkspaceCreateFileParams {
   content: string;
 }
 
+/** @experimental */
 export interface SessionFleetStartResult {
   /**
    * Whether fleet mode was successfully activated
@@ -307,6 +348,7 @@ export interface SessionFleetStartResult {
   started: boolean;
 }
 
+/** @experimental */
 export interface SessionFleetStartParams {
   /**
    * Target session identifier
@@ -318,6 +360,7 @@ export interface SessionFleetStartParams {
   prompt?: string;
 }
 
+/** @experimental */
 export interface SessionAgentListResult {
   /**
    * Available custom agents
@@ -338,6 +381,7 @@ export interface SessionAgentListResult {
   }[];
 }
 
+/** @experimental */
 export interface SessionAgentListParams {
   /**
    * Target session identifier
@@ -345,6 +389,7 @@ export interface SessionAgentListParams {
   sessionId: string;
 }
 
+/** @experimental */
 export interface SessionAgentGetCurrentResult {
   /**
    * Currently selected custom agent, or null if using the default agent
@@ -365,6 +410,7 @@ export interface SessionAgentGetCurrentResult {
   } | null;
 }
 
+/** @experimental */
 export interface SessionAgentGetCurrentParams {
   /**
    * Target session identifier
@@ -372,6 +418,7 @@ export interface SessionAgentGetCurrentParams {
   sessionId: string;
 }
 
+/** @experimental */
 export interface SessionAgentSelectResult {
   /**
    * The newly selected custom agent
@@ -392,6 +439,7 @@ export interface SessionAgentSelectResult {
   };
 }
 
+/** @experimental */
 export interface SessionAgentSelectParams {
   /**
    * Target session identifier
@@ -403,8 +451,10 @@ export interface SessionAgentSelectParams {
   name: string;
 }
 
+/** @experimental */
 export interface SessionAgentDeselectResult {}
 
+/** @experimental */
 export interface SessionAgentDeselectParams {
   /**
    * Target session identifier
@@ -412,6 +462,7 @@ export interface SessionAgentDeselectParams {
   sessionId: string;
 }
 
+/** @experimental */
 export interface SessionCompactionCompactResult {
   /**
    * Whether compaction completed successfully
@@ -427,6 +478,7 @@ export interface SessionCompactionCompactResult {
   messagesRemoved: number;
 }
 
+/** @experimental */
 export interface SessionCompactionCompactParams {
   /**
    * Target session identifier
@@ -435,6 +487,9 @@ export interface SessionCompactionCompactParams {
 }
 
 export interface SessionToolsHandlePendingToolCallResult {
+  /**
+   * Whether the tool call result was handled successfully
+   */
   success: boolean;
 }
 
@@ -458,6 +513,9 @@ export interface SessionToolsHandlePendingToolCallParams {
 }
 
 export interface SessionPermissionsHandlePendingPermissionRequestResult {
+  /**
+   * Whether the permission request was handled successfully
+   */
   success: boolean;
 }
 
@@ -487,6 +545,80 @@ export interface SessionPermissionsHandlePendingPermissionRequestParams {
         path: string;
         message: string;
       };
+}
+
+export interface SessionLogResult {
+  /**
+   * The unique identifier of the emitted session event
+   */
+  eventId: string;
+}
+
+export interface SessionLogParams {
+  /**
+   * Target session identifier
+   */
+  sessionId: string;
+  /**
+   * Human-readable message
+   */
+  message: string;
+  /**
+   * Log severity level. Determines how the message is displayed in the timeline. Defaults to "info".
+   */
+  level?: "info" | "warning" | "error";
+  /**
+   * When true, the message is transient and not persisted to the session event log on disk
+   */
+  ephemeral?: boolean;
+}
+
+export interface SessionShellExecResult {
+  /**
+   * Unique identifier for tracking streamed output
+   */
+  processId: string;
+}
+
+export interface SessionShellExecParams {
+  /**
+   * Target session identifier
+   */
+  sessionId: string;
+  /**
+   * Shell command to execute
+   */
+  command: string;
+  /**
+   * Working directory (defaults to session working directory)
+   */
+  cwd?: string;
+  /**
+   * Timeout in milliseconds (default: 30000)
+   */
+  timeout?: number;
+}
+
+export interface SessionShellKillResult {
+  /**
+   * Whether the signal was sent successfully
+   */
+  killed: boolean;
+}
+
+export interface SessionShellKillParams {
+  /**
+   * Target session identifier
+   */
+  sessionId: string;
+  /**
+   * Process identifier returned by shell.exec
+   */
+  processId: string;
+  /**
+   * Signal to send (default: SIGTERM)
+   */
+  signal?: "SIGTERM" | "SIGKILL" | "SIGINT";
 }
 
 /** Create typed server-scoped RPC methods (no session required). */
@@ -540,10 +672,12 @@ export function createSessionRpc(connection: MessageConnection, sessionId: strin
             createFile: async (params: Omit<SessionWorkspaceCreateFileParams, "sessionId">): Promise<SessionWorkspaceCreateFileResult> =>
                 connection.sendRequest("session.workspace.createFile", { sessionId, ...params }),
         },
+        /** @experimental */
         fleet: {
             start: async (params: Omit<SessionFleetStartParams, "sessionId">): Promise<SessionFleetStartResult> =>
                 connection.sendRequest("session.fleet.start", { sessionId, ...params }),
         },
+        /** @experimental */
         agent: {
             list: async (): Promise<SessionAgentListResult> =>
                 connection.sendRequest("session.agent.list", { sessionId }),
@@ -554,6 +688,7 @@ export function createSessionRpc(connection: MessageConnection, sessionId: strin
             deselect: async (): Promise<SessionAgentDeselectResult> =>
                 connection.sendRequest("session.agent.deselect", { sessionId }),
         },
+        /** @experimental */
         compaction: {
             compact: async (): Promise<SessionCompactionCompactResult> =>
                 connection.sendRequest("session.compaction.compact", { sessionId }),
@@ -565,6 +700,14 @@ export function createSessionRpc(connection: MessageConnection, sessionId: strin
         permissions: {
             handlePendingPermissionRequest: async (params: Omit<SessionPermissionsHandlePendingPermissionRequestParams, "sessionId">): Promise<SessionPermissionsHandlePendingPermissionRequestResult> =>
                 connection.sendRequest("session.permissions.handlePendingPermissionRequest", { sessionId, ...params }),
+        },
+        log: async (params: Omit<SessionLogParams, "sessionId">): Promise<SessionLogResult> =>
+            connection.sendRequest("session.log", { sessionId, ...params }),
+        shell: {
+            exec: async (params: Omit<SessionShellExecParams, "sessionId">): Promise<SessionShellExecResult> =>
+                connection.sendRequest("session.shell.exec", { sessionId, ...params }),
+            kill: async (params: Omit<SessionShellKillParams, "sessionId">): Promise<SessionShellKillResult> =>
+                connection.sendRequest("session.shell.kill", { sessionId, ...params }),
         },
     };
 }

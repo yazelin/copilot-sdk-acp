@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from copilot import CopilotClient
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig
 
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "claude-haiku-4.5")
@@ -13,23 +13,23 @@ if not OPENAI_API_KEY:
 
 
 async def main():
-    opts = {}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
-        session = await client.create_session({
-            "model": OPENAI_MODEL,
-            "provider": {
+        session = await client.create_session(
+            on_permission_request=PermissionHandler.approve_all,
+            model=OPENAI_MODEL,
+            provider={
                 "type": "openai",
                 "base_url": OPENAI_BASE_URL,
                 "api_key": OPENAI_API_KEY,
             },
-        })
+        )
 
         response = await session.send_and_wait(
-            {"prompt": "What is the capital of France?"}
+            "What is the capital of France?"
         )
 
         if response:

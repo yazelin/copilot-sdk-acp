@@ -3,7 +3,7 @@ import os
 
 from pydantic import BaseModel, Field
 
-from copilot import CopilotClient, PermissionHandler, define_tool
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig, define_tool
 
 
 class GrepParams(BaseModel):
@@ -16,22 +16,18 @@ def custom_grep(params: GrepParams) -> str:
 
 
 async def main():
-    opts = {"github_token": os.environ.get("GITHUB_TOKEN")}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        github_token=os.environ.get("GITHUB_TOKEN"),
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
         session = await client.create_session(
-            {
-                "model": "claude-haiku-4.5",
-                "tools": [custom_grep],
-                "on_permission_request": PermissionHandler.approve_all,
-            }
+            on_permission_request=PermissionHandler.approve_all, model="claude-haiku-4.5", tools=[custom_grep]
         )
 
         response = await session.send_and_wait(
-            {"prompt": "Use grep to search for the word 'hello'"}
+            "Use grep to search for the word 'hello'"
         )
 
         if response:

@@ -5,7 +5,7 @@ Type definitions for the Copilot SDK
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass, field
 from typing import Any, Literal, NotRequired, TypedDict
 
 # Import generated SessionEvent types
@@ -65,44 +65,103 @@ class SelectionAttachment(TypedDict):
     text: NotRequired[str]
 
 
+class BlobAttachment(TypedDict):
+    """Inline base64-encoded content attachment (e.g. images)."""
+
+    type: Literal["blob"]
+    data: str
+    """Base64-encoded content"""
+    mimeType: str
+    """MIME type of the inline data"""
+    displayName: NotRequired[str]
+
+
 # Attachment type - union of all attachment types
-Attachment = FileAttachment | DirectoryAttachment | SelectionAttachment
+Attachment = FileAttachment | DirectoryAttachment | SelectionAttachment | BlobAttachment
 
 
-# Options for creating a CopilotClient
-class CopilotClientOptions(TypedDict, total=False):
-    """Options for creating a CopilotClient"""
+# Configuration for OpenTelemetry integration with the Copilot CLI.
+class TelemetryConfig(TypedDict, total=False):
+    """Configuration for OpenTelemetry integration with the Copilot CLI."""
 
-    cli_path: str  # Path to the Copilot CLI executable (default: "copilot")
-    # Extra arguments to pass to the CLI executable (inserted before SDK-managed args)
-    cli_args: list[str]
-    # Working directory for the CLI process (default: current process's cwd)
-    cwd: str
-    port: int  # Port for the CLI server (TCP mode only, default: 0)
-    use_stdio: bool  # Use stdio transport instead of TCP (default: True)
-    cli_url: str  # URL of an existing Copilot CLI server to connect to over TCP
-    # Format: "host:port" or "http://host:port" or just "port" (defaults to localhost)
-    # Examples: "localhost:8080", "http://127.0.0.1:9000", "8080"
-    # Mutually exclusive with cli_path, use_stdio
-    log_level: LogLevel  # Log level
-    auto_start: bool  # Auto-start the CLI server on first use (default: True)
-    # Auto-restart the CLI server if it crashes (default: True)
-    auto_restart: bool
-    env: dict[str, str]  # Environment variables for the CLI process
-    # GitHub token to use for authentication.
-    # When provided, the token is passed to the CLI server via environment variable.
-    # This takes priority over other authentication methods.
-    github_token: str
-    # Whether to use the logged-in user for authentication.
-    # When True, the CLI server will attempt to use stored OAuth tokens or gh CLI auth.
-    # When False, only explicit tokens (github_token or environment variables) are used.
-    # Default: True (but defaults to False when github_token is provided)
-    use_logged_in_user: bool
-    # Custom handler for listing available models.
-    # When provided, client.list_models() calls this handler instead of
-    # querying the CLI server. Useful in BYOK mode to return models
-    # available from your custom provider.
-    on_list_models: Callable[[], list[ModelInfo] | Awaitable[list[ModelInfo]]]
+    otlp_endpoint: str
+    """OTLP HTTP endpoint URL for trace/metric export. Sets OTEL_EXPORTER_OTLP_ENDPOINT."""
+    file_path: str
+    """File path for JSON-lines trace output. Sets COPILOT_OTEL_FILE_EXPORTER_PATH."""
+    exporter_type: str
+    """Exporter backend type: "otlp-http" or "file". Sets COPILOT_OTEL_EXPORTER_TYPE."""
+    source_name: str
+    """Instrumentation scope name. Sets COPILOT_OTEL_SOURCE_NAME."""
+    capture_content: bool
+    """Whether to capture message content. Sets OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT."""  # noqa: E501
+
+
+# Configuration for CopilotClient connection modes
+
+
+@dataclass
+class SubprocessConfig:
+    """Config for spawning a local Copilot CLI subprocess.
+
+    Example:
+        >>> config = SubprocessConfig(github_token="ghp_...")
+        >>> client = CopilotClient(config)
+
+        >>> # Custom CLI path with TCP transport
+        >>> config = SubprocessConfig(
+        ...     cli_path="/usr/local/bin/copilot",
+        ...     use_stdio=False,
+        ...     log_level="debug",
+        ... )
+    """
+
+    cli_path: str | None = None
+    """Path to the Copilot CLI executable. ``None`` uses the bundled binary."""
+
+    cli_args: list[str] = field(default_factory=list)
+    """Extra arguments passed to the CLI executable (inserted before SDK-managed args)."""
+
+    _: KW_ONLY
+
+    cwd: str | None = None
+    """Working directory for the CLI process. ``None`` uses the current directory."""
+
+    use_stdio: bool = True
+    """Use stdio transport (``True``, default) or TCP (``False``)."""
+
+    port: int = 0
+    """TCP port for the CLI server (only when ``use_stdio=False``). 0 means random."""
+
+    log_level: LogLevel = "info"
+    """Log level for the CLI process."""
+
+    env: dict[str, str] | None = None
+    """Environment variables for the CLI process. ``None`` inherits the current env."""
+
+    github_token: str | None = None
+    """GitHub token for authentication. Takes priority over other auth methods."""
+
+    use_logged_in_user: bool | None = None
+    """Use the logged-in user for authentication.
+
+    ``None`` (default) resolves to ``True`` unless ``github_token`` is set.
+    """
+
+    telemetry: TelemetryConfig | None = None
+    """OpenTelemetry configuration. Providing this enables telemetry — no separate flag needed."""
+
+
+@dataclass
+class ExternalServerConfig:
+    """Config for connecting to an existing Copilot CLI server over TCP.
+
+    Example:
+        >>> config = ExternalServerConfig(url="localhost:3000")
+        >>> client = CopilotClient(config)
+    """
+
+    url: str
+    """Server URL. Supports ``"host:port"``, ``"http://host:port"``, or just ``"port"``."""
 
 
 ToolResultType = Literal["success", "failure", "rejected", "denied"]
@@ -150,6 +209,7 @@ class Tool:
     handler: ToolHandler
     parameters: dict[str, Any] | None = None
     overrides_built_in_tool: bool = False
+    skip_permission: bool = False
 
 
 # System message configuration (discriminated union)
@@ -187,6 +247,7 @@ PermissionRequestResultKind = Literal[
     "denied-by-content-exclusion-policy",
     "denied-no-approval-rule-and-could-not-request-from-user",
     "denied-interactively-by-user",
+    "no-result",
 ]
 
 
@@ -476,58 +537,6 @@ class InfiniteSessionConfig(TypedDict, total=False):
     buffer_exhaustion_threshold: float
 
 
-# Configuration for creating a session
-class SessionConfig(TypedDict, total=False):
-    """Configuration for creating a session"""
-
-    session_id: str  # Optional custom session ID
-    # Client name to identify the application using the SDK.
-    # Included in the User-Agent header for API requests.
-    client_name: str
-    model: str  # Model to use for this session. Use client.list_models() to see available models.
-    # Reasoning effort level for models that support it.
-    # Only valid for models where capabilities.supports.reasoning_effort is True.
-    reasoning_effort: ReasoningEffort
-    tools: list[Tool]
-    system_message: SystemMessageConfig  # System message configuration
-    # List of tool names to allow (takes precedence over excluded_tools)
-    available_tools: list[str]
-    # List of tool names to disable (ignored if available_tools is set)
-    excluded_tools: list[str]
-    # Handler for permission requests from the server
-    on_permission_request: _PermissionHandlerFn
-    # Handler for user input requests from the agent (enables ask_user tool)
-    on_user_input_request: UserInputHandler
-    # Hook handlers for intercepting session lifecycle events
-    hooks: SessionHooks
-    # Working directory for the session. Tool operations will be relative to this directory.
-    working_directory: str
-    # Custom provider configuration (BYOK - Bring Your Own Key)
-    provider: ProviderConfig
-    # Enable streaming of assistant message and reasoning chunks
-    # When True, assistant.message_delta and assistant.reasoning_delta events
-    # with delta_content are sent as the response is generated
-    streaming: bool
-    # MCP server configurations for the session
-    mcp_servers: dict[str, MCPServerConfig]
-    # Custom agent configurations for the session
-    custom_agents: list[CustomAgentConfig]
-    # Name of the custom agent to activate when the session starts.
-    # Must match the name of one of the agents in custom_agents.
-    agent: str
-    # Override the default configuration directory location.
-    # When specified, the session will use this directory for storing config and state.
-    config_dir: str
-    # Directories to load skills from
-    skill_directories: list[str]
-    # List of skill names to disable
-    disabled_skills: list[str]
-    # Infinite session configuration for persistent workspaces and automatic compaction.
-    # When enabled (default), sessions automatically manage context limits and persist state.
-    # Set to {"enabled": False} to disable.
-    infinite_sessions: InfiniteSessionConfig
-
-
 # Azure-specific provider options
 class AzureProviderOptions(TypedDict, total=False):
     """Azure-specific provider configuration"""
@@ -548,64 +557,6 @@ class ProviderConfig(TypedDict, total=False):
     # Takes precedence over api_key when both are set.
     bearer_token: str
     azure: AzureProviderOptions  # Azure-specific options
-
-
-# Configuration for resuming a session
-class ResumeSessionConfig(TypedDict, total=False):
-    """Configuration for resuming a session"""
-
-    # Client name to identify the application using the SDK.
-    # Included in the User-Agent header for API requests.
-    client_name: str
-    # Model to use for this session. Can change the model when resuming.
-    model: str
-    tools: list[Tool]
-    system_message: SystemMessageConfig  # System message configuration
-    # List of tool names to allow (takes precedence over excluded_tools)
-    available_tools: list[str]
-    # List of tool names to disable (ignored if available_tools is set)
-    excluded_tools: list[str]
-    provider: ProviderConfig
-    # Reasoning effort level for models that support it.
-    reasoning_effort: ReasoningEffort
-    on_permission_request: _PermissionHandlerFn
-    # Handler for user input requestsfrom the agent (enables ask_user tool)
-    on_user_input_request: UserInputHandler
-    # Hook handlers for intercepting session lifecycle events
-    hooks: SessionHooks
-    # Working directory for the session. Tool operations will be relative to this directory.
-    working_directory: str
-    # Override the default configuration directory location.
-    config_dir: str
-    # Enable streaming of assistant message chunks
-    streaming: bool
-    # MCP server configurations for the session
-    mcp_servers: dict[str, MCPServerConfig]
-    # Custom agent configurations for the session
-    custom_agents: list[CustomAgentConfig]
-    # Name of the custom agent to activate when the session starts.
-    # Must match the name of one of the agents in custom_agents.
-    agent: str
-    # Directories to load skills from
-    skill_directories: list[str]
-    # List of skill names to disable
-    disabled_skills: list[str]
-    # Infinite session configuration for persistent workspaces and automatic compaction.
-    infinite_sessions: InfiniteSessionConfig
-    # When True, skips emitting the session.resume event.
-    # Useful for reconnecting to a session without triggering resume-related side effects.
-    disable_resume: bool
-
-
-# Options for sending a message to a session
-class MessageOptions(TypedDict):
-    """Options for sending a message to a session"""
-
-    prompt: str  # The prompt/message to send
-    # Optional file/directory attachments
-    attachments: NotRequired[list[Attachment]]
-    # Message processing mode
-    mode: NotRequired[Literal["enqueue", "immediate"]]
 
 
 # Event handler type

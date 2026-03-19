@@ -9,11 +9,15 @@ import asyncio
 import inspect
 import threading
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, Literal, cast
 
+from ._jsonrpc import JsonRpcError, ProcessExitedError
+from ._telemetry import get_trace_context, trace_context
 from .generated.rpc import (
     Kind,
+    Level,
     ResultResult,
+    SessionLogParams,
     SessionModelSwitchToParams,
     SessionPermissionsHandlePendingPermissionRequestParams,
     SessionPermissionsHandlePendingPermissionRequestParamsResult,
@@ -21,9 +25,8 @@ from .generated.rpc import (
     SessionToolsHandlePendingToolCallParams,
 )
 from .generated.session_events import SessionEvent, SessionEventType, session_event_from_dict
-from .jsonrpc import JsonRpcError, ProcessExitedError
 from .types import (
-    MessageOptions,
+    Attachment,
     PermissionRequest,
     PermissionRequestResult,
     SessionHooks,
@@ -61,7 +64,7 @@ class CopilotSession:
         ...     unsubscribe = session.on(lambda event: print(event.type))
         ...
         ...     # Send a message
-        ...     await session.send({"prompt": "Hello, world!"})
+        ...     await session.send("Hello, world!")
         ...
         ...     # Clean up
         ...     unsubscribe()
@@ -113,43 +116,57 @@ class CopilotSession:
         """
         return self._workspace_path
 
-    async def send(self, options: MessageOptions) -> str:
+    async def send(
+        self,
+        prompt: str,
+        *,
+        attachments: list[Attachment] | None = None,
+        mode: Literal["enqueue", "immediate"] | None = None,
+    ) -> str:
         """
-        Send a message to this session and wait for the response.
+        Send a message to this session.
 
         The message is processed asynchronously. Subscribe to events via :meth:`on`
-        to receive streaming responses and other session events.
+        to receive streaming responses and other session events. Use
+        :meth:`send_and_wait` to block until the assistant finishes processing.
 
         Args:
-            options: Message options including the prompt and optional attachments.
-                Must contain a "prompt" key with the message text. Can optionally
-                include "attachments" and "mode" keys.
+            prompt: The message text to send.
+            attachments: Optional file, directory, or selection attachments.
+            mode: Message delivery mode (``"enqueue"`` or ``"immediate"``).
 
         Returns:
-            The message ID of the response, which can be used to correlate events.
+            The message ID assigned by the server, which can be used to correlate events.
 
         Raises:
             Exception: If the session has been disconnected or the connection fails.
 
         Example:
-            >>> message_id = await session.send({
-            ...     "prompt": "Explain this code",
-            ...     "attachments": [{"type": "file", "path": "./src/main.py"}]
-            ... })
+            >>> message_id = await session.send(
+            ...     "Explain this code",
+            ...     attachments=[{"type": "file", "path": "./src/main.py"}],
+            ... )
         """
-        response = await self._client.request(
-            "session.send",
-            {
-                "sessionId": self.session_id,
-                "prompt": options["prompt"],
-                "attachments": options.get("attachments"),
-                "mode": options.get("mode"),
-            },
-        )
+        params: dict[str, Any] = {
+            "sessionId": self.session_id,
+            "prompt": prompt,
+        }
+        if attachments is not None:
+            params["attachments"] = attachments
+        if mode is not None:
+            params["mode"] = mode
+        params.update(get_trace_context())
+
+        response = await self._client.request("session.send", params)
         return response["messageId"]
 
     async def send_and_wait(
-        self, options: MessageOptions, timeout: float | None = None
+        self,
+        prompt: str,
+        *,
+        attachments: list[Attachment] | None = None,
+        mode: Literal["enqueue", "immediate"] | None = None,
+        timeout: float = 60.0,
     ) -> SessionEvent | None:
         """
         Send a message to this session and wait until the session becomes idle.
@@ -161,7 +178,9 @@ class CopilotSession:
         Events are still delivered to handlers registered via :meth:`on` while waiting.
 
         Args:
-            options: Message options including the prompt and optional attachments.
+            prompt: The message text to send.
+            attachments: Optional file, directory, or selection attachments.
+            mode: Message delivery mode (``"enqueue"`` or ``"immediate"``).
             timeout: Timeout in seconds (default: 60). Controls how long to wait;
                 does not abort in-flight agent work.
 
@@ -173,12 +192,10 @@ class CopilotSession:
             Exception: If the session has been disconnected or the connection fails.
 
         Example:
-            >>> response = await session.send_and_wait({"prompt": "What is 2+2?"})
+            >>> response = await session.send_and_wait("What is 2+2?")
             >>> if response:
             ...     print(response.data.content)
         """
-        effective_timeout = timeout if timeout is not None else 60.0
-
         idle_event = asyncio.Event()
         error_event: Exception | None = None
         last_assistant_message: SessionEvent | None = None
@@ -197,13 +214,13 @@ class CopilotSession:
 
         unsubscribe = self.on(handler)
         try:
-            await self.send(options)
-            await asyncio.wait_for(idle_event.wait(), timeout=effective_timeout)
+            await self.send(prompt, attachments=attachments, mode=mode)
+            await asyncio.wait_for(idle_event.wait(), timeout=timeout)
             if error_event:
                 raise error_event
             return last_assistant_message
         except TimeoutError:
-            raise TimeoutError(f"Timeout after {effective_timeout}s waiting for session.idle")
+            raise TimeoutError(f"Timeout after {timeout}s waiting for session.idle")
         finally:
             unsubscribe()
 
@@ -228,9 +245,7 @@ class CopilotSession:
             ...         print(f"Assistant: {event.data.content}")
             ...     elif event.type == "session.error":
             ...         print(f"Error: {event.data.message}")
-            ...
             >>> unsubscribe = session.on(handle_event)
-            ...
             >>> # Later, to stop receiving events:
             >>> unsubscribe()
         """
@@ -287,9 +302,11 @@ class CopilotSession:
 
             tool_call_id = event.data.tool_call_id or ""
             arguments = event.data.arguments
+            tp = getattr(event.data, "traceparent", None)
+            ts = getattr(event.data, "tracestate", None)
             asyncio.ensure_future(
                 self._execute_tool_and_respond(
-                    request_id, tool_name, tool_call_id, arguments, handler
+                    request_id, tool_name, tool_call_id, arguments, handler, tp, ts
                 )
             )
 
@@ -315,6 +332,8 @@ class CopilotSession:
         tool_call_id: str,
         arguments: Any,
         handler: ToolHandler,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> None:
         """Execute a tool handler and send the result back via HandlePendingToolCall RPC."""
         try:
@@ -325,9 +344,10 @@ class CopilotSession:
                 arguments=arguments,
             )
 
-            result = handler(invocation)
-            if inspect.isawaitable(result):
-                result = await result
+            with trace_context(traceparent, tracestate):
+                result = handler(invocation)
+                if inspect.isawaitable(result):
+                    result = await result
 
             tool_result: ToolResult
             if result is None:
@@ -385,6 +405,8 @@ class CopilotSession:
                 result = await result
 
             result = cast(PermissionRequestResult, result)
+            if result.kind == "no-result":
+                return
 
             perm_result = SessionPermissionsHandlePendingPermissionRequestParamsResult(
                 kind=Kind(result.kind),
@@ -706,9 +728,7 @@ class CopilotSession:
             >>> import asyncio
             >>>
             >>> # Start a long-running request
-            >>> task = asyncio.create_task(
-            ...     session.send({"prompt": "Write a very long story..."})
-            ... )
+            >>> task = asyncio.create_task(session.send("Write a very long story..."))
             >>>
             >>> # Abort after 5 seconds
             >>> await asyncio.sleep(5)
@@ -716,7 +736,7 @@ class CopilotSession:
         """
         await self._client.request("session.abort", {"sessionId": self.session_id})
 
-    async def set_model(self, model: str) -> None:
+    async def set_model(self, model: str, *, reasoning_effort: str | None = None) -> None:
         """
         Change the model for this session.
 
@@ -725,11 +745,53 @@ class CopilotSession:
 
         Args:
             model: Model ID to switch to (e.g., "gpt-4.1", "claude-sonnet-4").
+            reasoning_effort: Optional reasoning effort level for the new model
+                (e.g., "low", "medium", "high", "xhigh").
 
         Raises:
             Exception: If the session has been destroyed or the connection fails.
 
         Example:
             >>> await session.set_model("gpt-4.1")
+            >>> await session.set_model("claude-sonnet-4.6", reasoning_effort="high")
         """
-        await self.rpc.model.switch_to(SessionModelSwitchToParams(model_id=model))
+        await self.rpc.model.switch_to(
+            SessionModelSwitchToParams(
+                model_id=model,
+                reasoning_effort=reasoning_effort,
+            )
+        )
+
+    async def log(
+        self,
+        message: str,
+        *,
+        level: str | None = None,
+        ephemeral: bool | None = None,
+    ) -> None:
+        """
+        Log a message to the session timeline.
+
+        The message appears in the session event stream and is visible to SDK consumers
+        and (for non-ephemeral messages) persisted to the session event log on disk.
+
+        Args:
+            message: The human-readable message to log.
+            level: Log severity level ("info", "warning", "error"). Defaults to "info".
+            ephemeral: When True, the message is transient and not persisted to disk.
+
+        Raises:
+            Exception: If the session has been destroyed or the connection fails.
+
+        Example:
+            >>> await session.log("Processing started")
+            >>> await session.log("Something looks off", level="warning")
+            >>> await session.log("Operation failed", level="error")
+            >>> await session.log("Temporary status update", ephemeral=True)
+        """
+        params = SessionLogParams(
+            message=message,
+            level=Level(level) if level is not None else None,
+            ephemeral=ephemeral,
+        )
+        await self.rpc.log(params)

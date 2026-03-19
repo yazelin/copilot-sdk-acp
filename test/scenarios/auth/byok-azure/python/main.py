@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from copilot import CopilotClient
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig
 
 AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY")
@@ -14,15 +14,15 @@ if not AZURE_OPENAI_ENDPOINT or not AZURE_OPENAI_API_KEY:
 
 
 async def main():
-    opts = {}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
-        session = await client.create_session({
-            "model": AZURE_OPENAI_MODEL,
-            "provider": {
+        session = await client.create_session(
+            on_permission_request=PermissionHandler.approve_all,
+            model=AZURE_OPENAI_MODEL,
+            provider={
                 "type": "azure",
                 "base_url": AZURE_OPENAI_ENDPOINT,
                 "api_key": AZURE_OPENAI_API_KEY,
@@ -30,15 +30,15 @@ async def main():
                     "api_version": AZURE_API_VERSION,
                 },
             },
-            "available_tools": [],
-            "system_message": {
+            available_tools=[],
+            system_message={
                 "mode": "replace",
                 "content": "You are a helpful assistant. Answer concisely.",
             },
-        })
+        )
 
         response = await session.send_and_wait(
-            {"prompt": "What is the capital of France?"}
+            "What is the capital of France?"
         )
 
         if response:

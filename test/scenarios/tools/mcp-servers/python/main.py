@@ -1,13 +1,13 @@
 import asyncio
 import os
-from copilot import CopilotClient
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig
 
 
 async def main():
-    opts = {"github_token": os.environ.get("GITHUB_TOKEN")}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        github_token=os.environ.get("GITHUB_TOKEN"),
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
         # MCP server config — demonstrates the configuration pattern.
@@ -22,8 +22,7 @@ async def main():
                 "args": args,
             }
 
-        session_config = {
-            "model": "claude-haiku-4.5",
+        session_kwargs = {
             "available_tools": [],
             "system_message": {
                 "mode": "replace",
@@ -31,12 +30,14 @@ async def main():
             },
         }
         if mcp_servers:
-            session_config["mcp_servers"] = mcp_servers
+            session_kwargs["mcp_servers"] = mcp_servers
 
-        session = await client.create_session(session_config)
+        session = await client.create_session(
+            on_permission_request=PermissionHandler.approve_all, model="claude-haiku-4.5", **session_kwargs
+        )
 
         response = await session.send_and_wait(
-            {"prompt": "What is the capital of France?"}
+            "What is the capital of France?"
         )
 
         if response:

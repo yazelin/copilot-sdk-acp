@@ -6,13 +6,14 @@ Generated from: api.schema.json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..jsonrpc import JsonRpcClient
+    from .._jsonrpc import JsonRpcClient
 
 
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 from collections.abc import Callable
 from enum import Enum
+from uuid import UUID
 
 
 T = TypeVar("T")
@@ -123,6 +124,7 @@ class Billing:
     """Billing information"""
 
     multiplier: float
+    """Billing cost multiplier relative to the base rate"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Billing':
@@ -138,9 +140,16 @@ class Billing:
 
 @dataclass
 class Limits:
+    """Token limits for prompts, outputs, and context window"""
+
     max_context_window_tokens: float
+    """Maximum total context window size in tokens"""
+
     max_output_tokens: float | None = None
+    """Maximum number of output/completion tokens"""
+
     max_prompt_tokens: float | None = None
+    """Maximum number of prompt/input tokens"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Limits':
@@ -162,10 +171,13 @@ class Limits:
 
 @dataclass
 class Supports:
+    """Feature flags indicating what the model supports"""
+
     reasoning_effort: bool | None = None
     """Whether this model supports reasoning effort configuration"""
 
     vision: bool | None = None
+    """Whether this model supports vision/image input"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Supports':
@@ -188,7 +200,10 @@ class Capabilities:
     """Model capabilities and limits"""
 
     limits: Limits
+    """Token limits for prompts, outputs, and context window"""
+
     supports: Supports
+    """Feature flags indicating what the model supports"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Capabilities':
@@ -209,7 +224,10 @@ class Policy:
     """Policy state (if applicable)"""
 
     state: str
+    """Current policy state for this model"""
+
     terms: str
+    """Usage terms or conditions for this model"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Policy':
@@ -434,6 +452,7 @@ class AccountGetQuotaResult:
 @dataclass
 class SessionModelGetCurrentResult:
     model_id: str | None = None
+    """Currently active model identifier"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionModelGetCurrentResult':
@@ -451,6 +470,7 @@ class SessionModelGetCurrentResult:
 @dataclass
 class SessionModelSwitchToResult:
     model_id: str | None = None
+    """Currently active model identifier after the switch"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionModelSwitchToResult':
@@ -468,16 +488,23 @@ class SessionModelSwitchToResult:
 @dataclass
 class SessionModelSwitchToParams:
     model_id: str
+    """Model identifier to switch to"""
+
+    reasoning_effort: str | None = None
+    """Reasoning effort level to use for the model"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionModelSwitchToParams':
         assert isinstance(obj, dict)
         model_id = from_str(obj.get("modelId"))
-        return SessionModelSwitchToParams(model_id)
+        reasoning_effort = from_union([from_str, from_none], obj.get("reasoningEffort"))
+        return SessionModelSwitchToParams(model_id, reasoning_effort)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["modelId"] = from_str(self.model_id)
+        if self.reasoning_effort is not None:
+            result["reasoningEffort"] = from_union([from_str, from_none], self.reasoning_effort)
         return result
 
 
@@ -697,6 +724,7 @@ class SessionWorkspaceCreateFileParams:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionFleetStartResult:
     started: bool
@@ -714,6 +742,7 @@ class SessionFleetStartResult:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionFleetStartParams:
     prompt: str | None = None
@@ -759,6 +788,7 @@ class AgentElement:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentListResult:
     agents: list[AgentElement]
@@ -803,6 +833,7 @@ class SessionAgentGetCurrentResultAgent:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentGetCurrentResult:
     agent: SessionAgentGetCurrentResultAgent | None = None
@@ -849,6 +880,7 @@ class SessionAgentSelectResultAgent:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentSelectResult:
     agent: SessionAgentSelectResultAgent
@@ -866,6 +898,7 @@ class SessionAgentSelectResult:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentSelectParams:
     name: str
@@ -883,6 +916,7 @@ class SessionAgentSelectParams:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentDeselectResult:
     @staticmethod
@@ -895,6 +929,7 @@ class SessionAgentDeselectResult:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionCompactionCompactResult:
     messages_removed: float
@@ -925,6 +960,7 @@ class SessionCompactionCompactResult:
 @dataclass
 class SessionToolsHandlePendingToolCallResult:
     success: bool
+    """Whether the tool call result was handled successfully"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionToolsHandlePendingToolCallResult':
@@ -993,6 +1029,7 @@ class SessionToolsHandlePendingToolCallParams:
 @dataclass
 class SessionPermissionsHandlePendingPermissionRequestResult:
     success: bool
+    """Whether the permission request was handled successfully"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionPermissionsHandlePendingPermissionRequestResult':
@@ -1062,6 +1099,157 @@ class SessionPermissionsHandlePendingPermissionRequestParams:
         result: dict = {}
         result["requestId"] = from_str(self.request_id)
         result["result"] = to_class(SessionPermissionsHandlePendingPermissionRequestParamsResult, self.result)
+        return result
+
+
+@dataclass
+class SessionLogResult:
+    event_id: UUID
+    """The unique identifier of the emitted session event"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionLogResult':
+        assert isinstance(obj, dict)
+        event_id = UUID(obj.get("eventId"))
+        return SessionLogResult(event_id)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["eventId"] = str(self.event_id)
+        return result
+
+
+class Level(Enum):
+    """Log severity level. Determines how the message is displayed in the timeline. Defaults to
+    "info".
+    """
+    ERROR = "error"
+    INFO = "info"
+    WARNING = "warning"
+
+
+@dataclass
+class SessionLogParams:
+    message: str
+    """Human-readable message"""
+
+    ephemeral: bool | None = None
+    """When true, the message is transient and not persisted to the session event log on disk"""
+
+    level: Level | None = None
+    """Log severity level. Determines how the message is displayed in the timeline. Defaults to
+    "info".
+    """
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionLogParams':
+        assert isinstance(obj, dict)
+        message = from_str(obj.get("message"))
+        ephemeral = from_union([from_bool, from_none], obj.get("ephemeral"))
+        level = from_union([Level, from_none], obj.get("level"))
+        return SessionLogParams(message, ephemeral, level)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["message"] = from_str(self.message)
+        if self.ephemeral is not None:
+            result["ephemeral"] = from_union([from_bool, from_none], self.ephemeral)
+        if self.level is not None:
+            result["level"] = from_union([lambda x: to_enum(Level, x), from_none], self.level)
+        return result
+
+
+@dataclass
+class SessionShellExecResult:
+    process_id: str
+    """Unique identifier for tracking streamed output"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionShellExecResult':
+        assert isinstance(obj, dict)
+        process_id = from_str(obj.get("processId"))
+        return SessionShellExecResult(process_id)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["processId"] = from_str(self.process_id)
+        return result
+
+
+@dataclass
+class SessionShellExecParams:
+    command: str
+    """Shell command to execute"""
+
+    cwd: str | None = None
+    """Working directory (defaults to session working directory)"""
+
+    timeout: float | None = None
+    """Timeout in milliseconds (default: 30000)"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionShellExecParams':
+        assert isinstance(obj, dict)
+        command = from_str(obj.get("command"))
+        cwd = from_union([from_str, from_none], obj.get("cwd"))
+        timeout = from_union([from_float, from_none], obj.get("timeout"))
+        return SessionShellExecParams(command, cwd, timeout)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["command"] = from_str(self.command)
+        if self.cwd is not None:
+            result["cwd"] = from_union([from_str, from_none], self.cwd)
+        if self.timeout is not None:
+            result["timeout"] = from_union([to_float, from_none], self.timeout)
+        return result
+
+
+@dataclass
+class SessionShellKillResult:
+    killed: bool
+    """Whether the signal was sent successfully"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionShellKillResult':
+        assert isinstance(obj, dict)
+        killed = from_bool(obj.get("killed"))
+        return SessionShellKillResult(killed)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["killed"] = from_bool(self.killed)
+        return result
+
+
+class Signal(Enum):
+    """Signal to send (default: SIGTERM)"""
+
+    SIGINT = "SIGINT"
+    SIGKILL = "SIGKILL"
+    SIGTERM = "SIGTERM"
+
+
+@dataclass
+class SessionShellKillParams:
+    process_id: str
+    """Process identifier returned by shell.exec"""
+
+    signal: Signal | None = None
+    """Signal to send (default: SIGTERM)"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionShellKillParams':
+        assert isinstance(obj, dict)
+        process_id = from_str(obj.get("processId"))
+        signal = from_union([Signal, from_none], obj.get("signal"))
+        return SessionShellKillParams(process_id, signal)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["processId"] = from_str(self.process_id)
+        if self.signal is not None:
+            result["signal"] = from_union([lambda x: to_enum(Signal, x), from_none], self.signal)
         return result
 
 
@@ -1329,6 +1517,54 @@ def session_permissions_handle_pending_permission_request_params_to_dict(x: Sess
     return to_class(SessionPermissionsHandlePendingPermissionRequestParams, x)
 
 
+def session_log_result_from_dict(s: Any) -> SessionLogResult:
+    return SessionLogResult.from_dict(s)
+
+
+def session_log_result_to_dict(x: SessionLogResult) -> Any:
+    return to_class(SessionLogResult, x)
+
+
+def session_log_params_from_dict(s: Any) -> SessionLogParams:
+    return SessionLogParams.from_dict(s)
+
+
+def session_log_params_to_dict(x: SessionLogParams) -> Any:
+    return to_class(SessionLogParams, x)
+
+
+def session_shell_exec_result_from_dict(s: Any) -> SessionShellExecResult:
+    return SessionShellExecResult.from_dict(s)
+
+
+def session_shell_exec_result_to_dict(x: SessionShellExecResult) -> Any:
+    return to_class(SessionShellExecResult, x)
+
+
+def session_shell_exec_params_from_dict(s: Any) -> SessionShellExecParams:
+    return SessionShellExecParams.from_dict(s)
+
+
+def session_shell_exec_params_to_dict(x: SessionShellExecParams) -> Any:
+    return to_class(SessionShellExecParams, x)
+
+
+def session_shell_kill_result_from_dict(s: Any) -> SessionShellKillResult:
+    return SessionShellKillResult.from_dict(s)
+
+
+def session_shell_kill_result_to_dict(x: SessionShellKillResult) -> Any:
+    return to_class(SessionShellKillResult, x)
+
+
+def session_shell_kill_params_from_dict(s: Any) -> SessionShellKillParams:
+    return SessionShellKillParams.from_dict(s)
+
+
+def session_shell_kill_params_to_dict(x: SessionShellKillParams) -> Any:
+    return to_class(SessionShellKillParams, x)
+
+
 def _timeout_kwargs(timeout: float | None) -> dict:
     """Build keyword arguments for optional timeout forwarding."""
     if timeout is not None:
@@ -1438,6 +1674,7 @@ class WorkspaceApi:
         return SessionWorkspaceCreateFileResult.from_dict(await self._client.request("session.workspace.createFile", params_dict, **_timeout_kwargs(timeout)))
 
 
+# Experimental: this API group is experimental and may change or be removed.
 class FleetApi:
     def __init__(self, client: "JsonRpcClient", session_id: str):
         self._client = client
@@ -1449,6 +1686,7 @@ class FleetApi:
         return SessionFleetStartResult.from_dict(await self._client.request("session.fleet.start", params_dict, **_timeout_kwargs(timeout)))
 
 
+# Experimental: this API group is experimental and may change or be removed.
 class AgentApi:
     def __init__(self, client: "JsonRpcClient", session_id: str):
         self._client = client
@@ -1469,6 +1707,7 @@ class AgentApi:
         return SessionAgentDeselectResult.from_dict(await self._client.request("session.agent.deselect", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
 
 
+# Experimental: this API group is experimental and may change or be removed.
 class CompactionApi:
     def __init__(self, client: "JsonRpcClient", session_id: str):
         self._client = client
@@ -1500,6 +1739,22 @@ class PermissionsApi:
         return SessionPermissionsHandlePendingPermissionRequestResult.from_dict(await self._client.request("session.permissions.handlePendingPermissionRequest", params_dict, **_timeout_kwargs(timeout)))
 
 
+class ShellApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def exec(self, params: SessionShellExecParams, *, timeout: float | None = None) -> SessionShellExecResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionShellExecResult.from_dict(await self._client.request("session.shell.exec", params_dict, **_timeout_kwargs(timeout)))
+
+    async def kill(self, params: SessionShellKillParams, *, timeout: float | None = None) -> SessionShellKillResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionShellKillResult.from_dict(await self._client.request("session.shell.kill", params_dict, **_timeout_kwargs(timeout)))
+
+
 class SessionRpc:
     """Typed session-scoped RPC methods."""
     def __init__(self, client: "JsonRpcClient", session_id: str):
@@ -1514,4 +1769,10 @@ class SessionRpc:
         self.compaction = CompactionApi(client, session_id)
         self.tools = ToolsApi(client, session_id)
         self.permissions = PermissionsApi(client, session_id)
+        self.shell = ShellApi(client, session_id)
+
+    async def log(self, params: SessionLogParams, *, timeout: float | None = None) -> SessionLogResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionLogResult.from_dict(await self._client.request("session.log", params_dict, **_timeout_kwargs(timeout)))
 

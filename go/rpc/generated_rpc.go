@@ -48,30 +48,41 @@ type Model struct {
 
 // Billing information
 type Billing struct {
+	// Billing cost multiplier relative to the base rate
 	Multiplier float64 `json:"multiplier"`
 }
 
 // Model capabilities and limits
 type Capabilities struct {
-	Limits   Limits   `json:"limits"`
+	// Token limits for prompts, outputs, and context window
+	Limits Limits `json:"limits"`
+	// Feature flags indicating what the model supports
 	Supports Supports `json:"supports"`
 }
 
+// Token limits for prompts, outputs, and context window
 type Limits struct {
-	MaxContextWindowTokens float64  `json:"max_context_window_tokens"`
-	MaxOutputTokens        *float64 `json:"max_output_tokens,omitempty"`
-	MaxPromptTokens        *float64 `json:"max_prompt_tokens,omitempty"`
+	// Maximum total context window size in tokens
+	MaxContextWindowTokens float64 `json:"max_context_window_tokens"`
+	// Maximum number of output/completion tokens
+	MaxOutputTokens *float64 `json:"max_output_tokens,omitempty"`
+	// Maximum number of prompt/input tokens
+	MaxPromptTokens *float64 `json:"max_prompt_tokens,omitempty"`
 }
 
+// Feature flags indicating what the model supports
 type Supports struct {
 	// Whether this model supports reasoning effort configuration
 	ReasoningEffort *bool `json:"reasoningEffort,omitempty"`
-	Vision          *bool `json:"vision,omitempty"`
+	// Whether this model supports vision/image input
+	Vision *bool `json:"vision,omitempty"`
 }
 
 // Policy state (if applicable)
 type Policy struct {
+	// Current policy state for this model
 	State string `json:"state"`
+	// Usage terms or conditions for this model
 	Terms string `json:"terms"`
 }
 
@@ -121,15 +132,20 @@ type QuotaSnapshot struct {
 }
 
 type SessionModelGetCurrentResult struct {
+	// Currently active model identifier
 	ModelID *string `json:"modelId,omitempty"`
 }
 
 type SessionModelSwitchToResult struct {
+	// Currently active model identifier after the switch
 	ModelID *string `json:"modelId,omitempty"`
 }
 
 type SessionModelSwitchToParams struct {
+	// Model identifier to switch to
 	ModelID string `json:"modelId"`
+	// Reasoning effort level to use for the model
+	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 }
 
 type SessionModeGetResult struct {
@@ -192,16 +208,19 @@ type SessionWorkspaceCreateFileParams struct {
 	Path string `json:"path"`
 }
 
+// Experimental: SessionFleetStartResult is part of an experimental API and may change or be removed.
 type SessionFleetStartResult struct {
 	// Whether fleet mode was successfully activated
 	Started bool `json:"started"`
 }
 
+// Experimental: SessionFleetStartParams is part of an experimental API and may change or be removed.
 type SessionFleetStartParams struct {
 	// Optional user prompt to combine with fleet instructions
 	Prompt *string `json:"prompt,omitempty"`
 }
 
+// Experimental: SessionAgentListResult is part of an experimental API and may change or be removed.
 type SessionAgentListResult struct {
 	// Available custom agents
 	Agents []AgentElement `json:"agents"`
@@ -216,6 +235,7 @@ type AgentElement struct {
 	Name string `json:"name"`
 }
 
+// Experimental: SessionAgentGetCurrentResult is part of an experimental API and may change or be removed.
 type SessionAgentGetCurrentResult struct {
 	// Currently selected custom agent, or null if using the default agent
 	Agent *SessionAgentGetCurrentResultAgent `json:"agent"`
@@ -230,6 +250,7 @@ type SessionAgentGetCurrentResultAgent struct {
 	Name string `json:"name"`
 }
 
+// Experimental: SessionAgentSelectResult is part of an experimental API and may change or be removed.
 type SessionAgentSelectResult struct {
 	// The newly selected custom agent
 	Agent SessionAgentSelectResultAgent `json:"agent"`
@@ -245,14 +266,17 @@ type SessionAgentSelectResultAgent struct {
 	Name string `json:"name"`
 }
 
+// Experimental: SessionAgentSelectParams is part of an experimental API and may change or be removed.
 type SessionAgentSelectParams struct {
 	// Name of the custom agent to select
 	Name string `json:"name"`
 }
 
+// Experimental: SessionAgentDeselectResult is part of an experimental API and may change or be removed.
 type SessionAgentDeselectResult struct {
 }
 
+// Experimental: SessionCompactionCompactResult is part of an experimental API and may change or be removed.
 type SessionCompactionCompactResult struct {
 	// Number of messages removed during compaction
 	MessagesRemoved float64 `json:"messagesRemoved"`
@@ -263,6 +287,7 @@ type SessionCompactionCompactResult struct {
 }
 
 type SessionToolsHandlePendingToolCallResult struct {
+	// Whether the tool call result was handled successfully
 	Success bool `json:"success"`
 }
 
@@ -280,6 +305,7 @@ type ResultResult struct {
 }
 
 type SessionPermissionsHandlePendingPermissionRequestResult struct {
+	// Whether the permission request was handled successfully
 	Success bool `json:"success"`
 }
 
@@ -294,6 +320,47 @@ type SessionPermissionsHandlePendingPermissionRequestParamsResult struct {
 	Feedback *string       `json:"feedback,omitempty"`
 	Message  *string       `json:"message,omitempty"`
 	Path     *string       `json:"path,omitempty"`
+}
+
+type SessionLogResult struct {
+	// The unique identifier of the emitted session event
+	EventID string `json:"eventId"`
+}
+
+type SessionLogParams struct {
+	// When true, the message is transient and not persisted to the session event log on disk
+	Ephemeral *bool `json:"ephemeral,omitempty"`
+	// Log severity level. Determines how the message is displayed in the timeline. Defaults to
+	// "info".
+	Level *Level `json:"level,omitempty"`
+	// Human-readable message
+	Message string `json:"message"`
+}
+
+type SessionShellExecResult struct {
+	// Unique identifier for tracking streamed output
+	ProcessID string `json:"processId"`
+}
+
+type SessionShellExecParams struct {
+	// Shell command to execute
+	Command string `json:"command"`
+	// Working directory (defaults to session working directory)
+	Cwd *string `json:"cwd,omitempty"`
+	// Timeout in milliseconds (default: 30000)
+	Timeout *float64 `json:"timeout,omitempty"`
+}
+
+type SessionShellKillResult struct {
+	// Whether the signal was sent successfully
+	Killed bool `json:"killed"`
+}
+
+type SessionShellKillParams struct {
+	// Process identifier returned by shell.exec
+	ProcessID string `json:"processId"`
+	// Signal to send (default: SIGTERM)
+	Signal *Signal `json:"signal,omitempty"`
 }
 
 // The current agent mode.
@@ -319,12 +386,33 @@ const (
 	DeniedNoApprovalRuleAndCouldNotRequestFromUser Kind = "denied-no-approval-rule-and-could-not-request-from-user"
 )
 
+// Log severity level. Determines how the message is displayed in the timeline. Defaults to
+// "info".
+type Level string
+
+const (
+	Error   Level = "error"
+	Info    Level = "info"
+	Warning Level = "warning"
+)
+
+// Signal to send (default: SIGTERM)
+type Signal string
+
+const (
+	Sigint  Signal = "SIGINT"
+	Sigkill Signal = "SIGKILL"
+	Sigterm Signal = "SIGTERM"
+)
+
 type ResultUnion struct {
 	ResultResult *ResultResult
 	String       *string
 }
 
-type ServerModelsRpcApi struct{ client *jsonrpc2.Client }
+type ServerModelsRpcApi struct {
+	client *jsonrpc2.Client
+}
 
 func (a *ServerModelsRpcApi) List(ctx context.Context) (*ModelsListResult, error) {
 	raw, err := a.client.Request("models.list", map[string]interface{}{})
@@ -338,7 +426,9 @@ func (a *ServerModelsRpcApi) List(ctx context.Context) (*ModelsListResult, error
 	return &result, nil
 }
 
-type ServerToolsRpcApi struct{ client *jsonrpc2.Client }
+type ServerToolsRpcApi struct {
+	client *jsonrpc2.Client
+}
 
 func (a *ServerToolsRpcApi) List(ctx context.Context, params *ToolsListParams) (*ToolsListResult, error) {
 	raw, err := a.client.Request("tools.list", params)
@@ -352,7 +442,9 @@ func (a *ServerToolsRpcApi) List(ctx context.Context, params *ToolsListParams) (
 	return &result, nil
 }
 
-type ServerAccountRpcApi struct{ client *jsonrpc2.Client }
+type ServerAccountRpcApi struct {
+	client *jsonrpc2.Client
+}
 
 func (a *ServerAccountRpcApi) GetQuota(ctx context.Context) (*AccountGetQuotaResult, error) {
 	raw, err := a.client.Request("account.getQuota", map[string]interface{}{})
@@ -416,6 +508,9 @@ func (a *ModelRpcApi) SwitchTo(ctx context.Context, params *SessionModelSwitchTo
 	req := map[string]interface{}{"sessionId": a.sessionID}
 	if params != nil {
 		req["modelId"] = params.ModelID
+		if params.ReasoningEffort != nil {
+			req["reasoningEffort"] = *params.ReasoningEffort
+		}
 	}
 	raw, err := a.client.Request("session.model.switchTo", req)
 	if err != nil {
@@ -560,6 +655,7 @@ func (a *WorkspaceRpcApi) CreateFile(ctx context.Context, params *SessionWorkspa
 	return &result, nil
 }
 
+// Experimental: FleetRpcApi contains experimental APIs that may change or be removed.
 type FleetRpcApi struct {
 	client    *jsonrpc2.Client
 	sessionID string
@@ -583,6 +679,7 @@ func (a *FleetRpcApi) Start(ctx context.Context, params *SessionFleetStartParams
 	return &result, nil
 }
 
+// Experimental: AgentRpcApi contains experimental APIs that may change or be removed.
 type AgentRpcApi struct {
 	client    *jsonrpc2.Client
 	sessionID string
@@ -643,6 +740,7 @@ func (a *AgentRpcApi) Deselect(ctx context.Context) (*SessionAgentDeselectResult
 	return &result, nil
 }
 
+// Experimental: CompactionRpcApi contains experimental APIs that may change or be removed.
 type CompactionRpcApi struct {
 	client    *jsonrpc2.Client
 	sessionID string
@@ -710,6 +808,52 @@ func (a *PermissionsRpcApi) HandlePendingPermissionRequest(ctx context.Context, 
 	return &result, nil
 }
 
+type ShellRpcApi struct {
+	client    *jsonrpc2.Client
+	sessionID string
+}
+
+func (a *ShellRpcApi) Exec(ctx context.Context, params *SessionShellExecParams) (*SessionShellExecResult, error) {
+	req := map[string]interface{}{"sessionId": a.sessionID}
+	if params != nil {
+		req["command"] = params.Command
+		if params.Cwd != nil {
+			req["cwd"] = *params.Cwd
+		}
+		if params.Timeout != nil {
+			req["timeout"] = *params.Timeout
+		}
+	}
+	raw, err := a.client.Request("session.shell.exec", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionShellExecResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *ShellRpcApi) Kill(ctx context.Context, params *SessionShellKillParams) (*SessionShellKillResult, error) {
+	req := map[string]interface{}{"sessionId": a.sessionID}
+	if params != nil {
+		req["processId"] = params.ProcessID
+		if params.Signal != nil {
+			req["signal"] = *params.Signal
+		}
+	}
+	raw, err := a.client.Request("session.shell.kill", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionShellKillResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // SessionRpc provides typed session-scoped RPC methods.
 type SessionRpc struct {
 	client      *jsonrpc2.Client
@@ -723,6 +867,29 @@ type SessionRpc struct {
 	Compaction  *CompactionRpcApi
 	Tools       *ToolsRpcApi
 	Permissions *PermissionsRpcApi
+	Shell       *ShellRpcApi
+}
+
+func (a *SessionRpc) Log(ctx context.Context, params *SessionLogParams) (*SessionLogResult, error) {
+	req := map[string]interface{}{"sessionId": a.sessionID}
+	if params != nil {
+		req["message"] = params.Message
+		if params.Level != nil {
+			req["level"] = *params.Level
+		}
+		if params.Ephemeral != nil {
+			req["ephemeral"] = *params.Ephemeral
+		}
+	}
+	raw, err := a.client.Request("session.log", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionLogResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func NewSessionRpc(client *jsonrpc2.Client, sessionID string) *SessionRpc {
@@ -736,5 +903,6 @@ func NewSessionRpc(client *jsonrpc2.Client, sessionID string) *SessionRpc {
 		Compaction:  &CompactionRpcApi{client: client, sessionID: sessionID},
 		Tools:       &ToolsRpcApi{client: client, sessionID: sessionID},
 		Permissions: &PermissionsRpcApi{client: client, sessionID: sessionID},
+		Shell:       &ShellRpcApi{client: client, sessionID: sessionID},
 	}
 }

@@ -1,41 +1,39 @@
 import asyncio
 import os
-from copilot import CopilotClient
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig
 
 PIRATE_PROMPT = "You are a pirate. Always say Arrr!"
 ROBOT_PROMPT = "You are a robot. Always say BEEP BOOP!"
 
 
 async def main():
-    opts = {"github_token": os.environ.get("GITHUB_TOKEN")}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        github_token=os.environ.get("GITHUB_TOKEN"),
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
         session1, session2 = await asyncio.gather(
             client.create_session(
-                {
-                    "model": "claude-haiku-4.5",
-                    "system_message": {"mode": "replace", "content": PIRATE_PROMPT},
-                    "available_tools": [],
-                }
+                on_permission_request=PermissionHandler.approve_all,
+                model="claude-haiku-4.5",
+                system_message={"mode": "replace", "content": PIRATE_PROMPT},
+                available_tools=[],
             ),
             client.create_session(
-                {
-                    "model": "claude-haiku-4.5",
-                    "system_message": {"mode": "replace", "content": ROBOT_PROMPT},
-                    "available_tools": [],
-                }
+                on_permission_request=PermissionHandler.approve_all,
+                model="claude-haiku-4.5",
+                system_message={"mode": "replace", "content": ROBOT_PROMPT},
+                available_tools=[],
             ),
         )
 
         response1, response2 = await asyncio.gather(
             session1.send_and_wait(
-                {"prompt": "What is the capital of France?"}
+                "What is the capital of France?"
             ),
             session2.send_and_wait(
-                {"prompt": "What is the capital of France?"}
+                "What is the capital of France?"
             ),
         )
 

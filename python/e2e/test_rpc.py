@@ -2,7 +2,7 @@
 
 import pytest
 
-from copilot import CopilotClient, PermissionHandler
+from copilot import CopilotClient, PermissionHandler, SubprocessConfig
 from copilot.generated.rpc import PingParams
 
 from .testharness import CLI_PATH, E2ETestContext
@@ -14,7 +14,7 @@ class TestRpc:
     @pytest.mark.asyncio
     async def test_should_call_rpc_ping_with_typed_params(self):
         """Test calling rpc.ping with typed params and result"""
-        client = CopilotClient({"cli_path": CLI_PATH, "use_stdio": True})
+        client = CopilotClient(SubprocessConfig(cli_path=CLI_PATH, use_stdio=True))
 
         try:
             await client.start()
@@ -30,7 +30,7 @@ class TestRpc:
     @pytest.mark.asyncio
     async def test_should_call_rpc_models_list(self):
         """Test calling rpc.models.list with typed result"""
-        client = CopilotClient({"cli_path": CLI_PATH, "use_stdio": True})
+        client = CopilotClient(SubprocessConfig(cli_path=CLI_PATH, use_stdio=True))
 
         try:
             await client.start()
@@ -53,7 +53,7 @@ class TestRpc:
     @pytest.mark.asyncio
     async def test_should_call_rpc_account_get_quota(self):
         """Test calling rpc.account.getQuota when authenticated"""
-        client = CopilotClient({"cli_path": CLI_PATH, "use_stdio": True})
+        client = CopilotClient(SubprocessConfig(cli_path=CLI_PATH, use_stdio=True))
 
         try:
             await client.start()
@@ -78,7 +78,7 @@ class TestSessionRpc:
     async def test_should_call_session_rpc_model_get_current(self, ctx: E2ETestContext):
         """Test calling session.rpc.model.getCurrent"""
         session = await ctx.client.create_session(
-            {"model": "claude-sonnet-4.5", "on_permission_request": PermissionHandler.approve_all}
+            on_permission_request=PermissionHandler.approve_all, model="claude-sonnet-4.5"
         )
 
         result = await session.rpc.model.get_current()
@@ -92,15 +92,17 @@ class TestSessionRpc:
         from copilot.generated.rpc import SessionModelSwitchToParams
 
         session = await ctx.client.create_session(
-            {"model": "claude-sonnet-4.5", "on_permission_request": PermissionHandler.approve_all}
+            on_permission_request=PermissionHandler.approve_all, model="claude-sonnet-4.5"
         )
 
         # Get initial model
         before = await session.rpc.model.get_current()
         assert before.model_id is not None
 
-        # Switch to a different model
-        result = await session.rpc.model.switch_to(SessionModelSwitchToParams(model_id="gpt-4.1"))
+        # Switch to a different model with reasoning effort
+        result = await session.rpc.model.switch_to(
+            SessionModelSwitchToParams(model_id="gpt-4.1", reasoning_effort="high")
+        )
         assert result.model_id == "gpt-4.1"
 
         # Verify the switch persisted
@@ -112,12 +114,12 @@ class TestSessionRpc:
         """Test getting and setting session mode"""
         from copilot.generated.rpc import Mode, SessionModeSetParams
 
-        client = CopilotClient({"cli_path": CLI_PATH, "use_stdio": True})
+        client = CopilotClient(SubprocessConfig(cli_path=CLI_PATH, use_stdio=True))
 
         try:
             await client.start()
             session = await client.create_session(
-                {"on_permission_request": PermissionHandler.approve_all}
+                on_permission_request=PermissionHandler.approve_all
             )
 
             # Get initial mode (default should be interactive)
@@ -148,12 +150,12 @@ class TestSessionRpc:
         """Test reading, updating, and deleting plan"""
         from copilot.generated.rpc import SessionPlanUpdateParams
 
-        client = CopilotClient({"cli_path": CLI_PATH, "use_stdio": True})
+        client = CopilotClient(SubprocessConfig(cli_path=CLI_PATH, use_stdio=True))
 
         try:
             await client.start()
             session = await client.create_session(
-                {"on_permission_request": PermissionHandler.approve_all}
+                on_permission_request=PermissionHandler.approve_all
             )
 
             # Initially plan should not exist
@@ -191,12 +193,12 @@ class TestSessionRpc:
             SessionWorkspaceReadFileParams,
         )
 
-        client = CopilotClient({"cli_path": CLI_PATH, "use_stdio": True})
+        client = CopilotClient(SubprocessConfig(cli_path=CLI_PATH, use_stdio=True))
 
         try:
             await client.start()
             session = await client.create_session(
-                {"on_permission_request": PermissionHandler.approve_all}
+                on_permission_request=PermissionHandler.approve_all
             )
 
             # Initially no files
