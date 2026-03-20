@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -61,6 +63,7 @@ type Client struct {
 	processDone     chan struct{} // closed when the underlying process exits
 	processError    error         // set before processDone is closed
 	processErrorMu  sync.RWMutex  // protects processError
+	onClose         func()        // called when the read loop exits unexpectedly
 }
 
 // NewClient creates a new JSON-RPC client
@@ -293,9 +296,22 @@ func (c *Client) sendMessage(message any) error {
 	return nil
 }
 
+// SetOnClose sets a callback invoked when the read loop exits unexpectedly
+// (e.g. the underlying connection or process was lost).
+func (c *Client) SetOnClose(fn func()) {
+	c.onClose = fn
+}
+
 // readLoop reads messages from stdout in a background goroutine
 func (c *Client) readLoop() {
 	defer c.wg.Done()
+	defer func() {
+		// If still running, the read loop exited unexpectedly (process died or
+		// connection dropped). Notify the caller so it can update its state.
+		if c.onClose != nil && c.running.Load() {
+			c.onClose()
+		}
+	}()
 
 	reader := bufio.NewReader(c.stdout)
 
@@ -306,7 +322,7 @@ func (c *Client) readLoop() {
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				// Only log unexpected errors (not EOF or closed pipe during shutdown)
-				if err != io.EOF && c.running.Load() {
+				if err != io.EOF && !errors.Is(err, os.ErrClosed) && c.running.Load() {
 					fmt.Printf("Error reading header: %v\n", err)
 				}
 				return
@@ -331,7 +347,10 @@ func (c *Client) readLoop() {
 		// Read message body
 		body := make([]byte, contentLength)
 		if _, err := io.ReadFull(reader, body); err != nil {
-			fmt.Printf("Error reading body: %v\n", err)
+			// Only log unexpected errors (not EOF or closed pipe during shutdown)
+			if err != io.EOF && !errors.Is(err, os.ErrClosed) && c.running.Load() {
+				fmt.Printf("Error reading body: %v\n", err)
+			}
 			return
 		}
 
