@@ -7,14 +7,17 @@
  * @module session
  */
 
-import type { MessageConnection } from "vscode-jsonrpc/node";
-import { ConnectionError, ResponseError } from "vscode-jsonrpc/node";
+import type { MessageConnection } from "vscode-jsonrpc/node.js";
+import { ConnectionError, ResponseError } from "vscode-jsonrpc/node.js";
 import { createSessionRpc } from "./generated/rpc.js";
+import { getTraceContext } from "./telemetry.js";
 import type {
     MessageOptions,
     PermissionHandler,
     PermissionRequest,
     PermissionRequestResult,
+    ReasoningEffort,
+    SectionTransformFn,
     SessionEvent,
     SessionEventHandler,
     SessionEventPayload,
@@ -22,11 +25,15 @@ import type {
     SessionHooks,
     Tool,
     ToolHandler,
+    TraceContextProvider,
     TypedSessionEventHandler,
     UserInputHandler,
     UserInputRequest,
     UserInputResponse,
 } from "./types.js";
+
+export const NO_RESULT_PERMISSION_V2_ERROR =
+    "Permission handlers cannot return 'no-result' when connected to a protocol v2 server.";
 
 /** Assistant message event - the final response from the assistant. */
 export type AssistantMessageEvent = Extract<SessionEvent, { type: "assistant.message" }>;
@@ -64,7 +71,9 @@ export class CopilotSession {
     private permissionHandler?: PermissionHandler;
     private userInputHandler?: UserInputHandler;
     private hooks?: SessionHooks;
+    private transformCallbacks?: Map<string, SectionTransformFn>;
     private _rpc: ReturnType<typeof createSessionRpc> | null = null;
+    private traceContextProvider?: TraceContextProvider;
 
     /**
      * Creates a new CopilotSession instance.
@@ -72,13 +81,17 @@ export class CopilotSession {
      * @param sessionId - The unique identifier for this session
      * @param connection - The JSON-RPC message connection to the Copilot CLI
      * @param workspacePath - Path to the session workspace directory (when infinite sessions enabled)
+     * @param traceContextProvider - Optional callback to get W3C Trace Context for outbound RPCs
      * @internal This constructor is internal. Use {@link CopilotClient.createSession} to create sessions.
      */
     constructor(
         public readonly sessionId: string,
         private connection: MessageConnection,
-        private readonly _workspacePath?: string
-    ) {}
+        private _workspacePath?: string,
+        traceContextProvider?: TraceContextProvider
+    ) {
+        this.traceContextProvider = traceContextProvider;
+    }
 
     /**
      * Typed session-scoped RPC methods.
@@ -119,6 +132,7 @@ export class CopilotSession {
      */
     async send(options: MessageOptions): Promise<string> {
         const response = await this.connection.sendRequest("session.send", {
+            ...(await getTraceContext(this.traceContextProvider)),
             sessionId: this.sessionId,
             prompt: options.prompt,
             attachments: options.attachments,
@@ -333,9 +347,19 @@ export class CopilotSession {
             };
             const args = (event.data as { arguments: unknown }).arguments;
             const toolCallId = (event.data as { toolCallId: string }).toolCallId;
+            const traceparent = (event.data as { traceparent?: string }).traceparent;
+            const tracestate = (event.data as { tracestate?: string }).tracestate;
             const handler = this.toolHandlers.get(toolName);
             if (handler) {
-                void this._executeToolAndRespond(requestId, toolName, toolCallId, args, handler);
+                void this._executeToolAndRespond(
+                    requestId,
+                    toolName,
+                    toolCallId,
+                    args,
+                    handler,
+                    traceparent,
+                    tracestate
+                );
             }
         } else if (event.type === "permission.requested") {
             const { requestId, permissionRequest } = event.data as {
@@ -357,7 +381,9 @@ export class CopilotSession {
         toolName: string,
         toolCallId: string,
         args: unknown,
-        handler: ToolHandler
+        handler: ToolHandler,
+        traceparent?: string,
+        tracestate?: string
     ): Promise<void> {
         try {
             const rawResult = await handler(args, {
@@ -365,6 +391,8 @@ export class CopilotSession {
                 toolCallId,
                 toolName,
                 arguments: args,
+                traceparent,
+                tracestate,
             });
             let result: string;
             if (rawResult == null) {
@@ -400,6 +428,9 @@ export class CopilotSession {
             const result = await this.permissionHandler!(permissionRequest, {
                 sessionId: this.sessionId,
             });
+            if (result.kind === "no-result") {
+                return;
+            }
             await this.rpc.permissions.handlePendingPermissionRequest({ requestId, result });
         } catch (_error) {
             try {
@@ -489,6 +520,48 @@ export class CopilotSession {
     }
 
     /**
+     * Registers transform callbacks for system message sections.
+     *
+     * @param callbacks - Map of section ID to transform callback, or undefined to clear
+     * @internal This method is typically called internally when creating a session.
+     */
+    registerTransformCallbacks(callbacks?: Map<string, SectionTransformFn>): void {
+        this.transformCallbacks = callbacks;
+    }
+
+    /**
+     * Handles a systemMessage.transform request from the runtime.
+     * Dispatches each section to its registered transform callback.
+     *
+     * @param sections - Map of section IDs to their current rendered content
+     * @returns A promise that resolves with the transformed sections
+     * @internal This method is for internal use by the SDK.
+     */
+    async _handleSystemMessageTransform(
+        sections: Record<string, { content: string }>
+    ): Promise<{ sections: Record<string, { content: string }> }> {
+        const result: Record<string, { content: string }> = {};
+
+        for (const [sectionId, { content }] of Object.entries(sections)) {
+            const callback = this.transformCallbacks?.get(sectionId);
+            if (callback) {
+                try {
+                    const transformed = await callback(content);
+                    result[sectionId] = { content: transformed };
+                } catch (_error) {
+                    // Callback failed — return original content
+                    result[sectionId] = { content };
+                }
+            } else {
+                // No callback for this section — pass through unchanged
+                result[sectionId] = { content };
+            }
+        }
+
+        return { sections: result };
+    }
+
+    /**
      * Handles a permission request in the v2 protocol format (synchronous RPC).
      * Used as a back-compat adapter when connected to a v2 server.
      *
@@ -505,8 +578,14 @@ export class CopilotSession {
             const result = await this.permissionHandler(request as PermissionRequest, {
                 sessionId: this.sessionId,
             });
+            if (result.kind === "no-result") {
+                throw new Error(NO_RESULT_PERMISSION_V2_ERROR);
+            }
             return result;
-        } catch (_error) {
+        } catch (error) {
+            if (error instanceof Error && error.message === NO_RESULT_PERMISSION_V2_ERROR) {
+                throw error;
+            }
             return { kind: "denied-no-approval-rule-and-could-not-request-from-user" };
         }
     }
@@ -684,13 +763,38 @@ export class CopilotSession {
      * The new model takes effect for the next message. Conversation history is preserved.
      *
      * @param model - Model ID to switch to
+     * @param options - Optional settings for the new model
      *
      * @example
      * ```typescript
      * await session.setModel("gpt-4.1");
+     * await session.setModel("claude-sonnet-4.6", { reasoningEffort: "high" });
      * ```
      */
-    async setModel(model: string): Promise<void> {
-        await this.rpc.model.switchTo({ modelId: model });
+    async setModel(model: string, options?: { reasoningEffort?: ReasoningEffort }): Promise<void> {
+        await this.rpc.model.switchTo({ modelId: model, ...options });
+    }
+
+    /**
+     * Log a message to the session timeline.
+     * The message appears in the session event stream and is visible to SDK consumers
+     * and (for non-ephemeral messages) persisted to the session event log on disk.
+     *
+     * @param message - Human-readable message text
+     * @param options - Optional log level and ephemeral flag
+     *
+     * @example
+     * ```typescript
+     * await session.log("Processing started");
+     * await session.log("Disk usage high", { level: "warning" });
+     * await session.log("Connection failed", { level: "error" });
+     * await session.log("Debug info", { ephemeral: true });
+     * ```
+     */
+    async log(
+        message: string,
+        options?: { level?: "info" | "warning" | "error"; ephemeral?: boolean }
+    ): Promise<void> {
+        await this.rpc.log({ message, ...options });
     }
 }
