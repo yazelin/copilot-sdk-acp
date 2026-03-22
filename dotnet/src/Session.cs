@@ -2,12 +2,15 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
+using GitHub.Copilot.SDK.Rpc;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using StreamJsonRpc;
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using GitHub.Copilot.SDK.Rpc;
+using System.Threading.Channels;
 
 namespace GitHub.Copilot.SDK;
 
@@ -52,21 +55,28 @@ namespace GitHub.Copilot.SDK;
 /// </example>
 public sealed partial class CopilotSession : IAsyncDisposable
 {
-    /// <summary>
-    /// Multicast delegate used as a thread-safe, insertion-ordered handler list.
-    /// The compiler-generated add/remove accessors use a lock-free CAS loop over the backing field.
-    /// Dispatch reads the field once (inherent snapshot, no allocation).
-    /// Expected handler count is small (typically 1–3), so Delegate.Combine/Remove cost is negligible.
-    /// </summary>
-    private event SessionEventHandler? EventHandlers;
     private readonly Dictionary<string, AIFunction> _toolHandlers = [];
     private readonly JsonRpc _rpc;
+    private readonly ILogger _logger;
+
     private volatile PermissionRequestHandler? _permissionHandler;
     private volatile UserInputHandler? _userInputHandler;
+    private ImmutableArray<SessionEventHandler> _eventHandlers = ImmutableArray<SessionEventHandler>.Empty;
+
     private SessionHooks? _hooks;
     private readonly SemaphoreSlim _hooksLock = new(1, 1);
+    private Dictionary<string, Func<string, Task<string>>>? _transformCallbacks;
+    private readonly SemaphoreSlim _transformCallbacksLock = new(1, 1);
     private SessionRpc? _sessionRpc;
     private int _isDisposed;
+
+    /// <summary>
+    /// Channel that serializes event dispatch. <see cref="DispatchEvent"/> enqueues;
+    /// a single background consumer (<see cref="ProcessEventsAsync"/>) dequeues and
+    /// invokes handlers one at a time, preserving arrival order.
+    /// </summary>
+    private readonly Channel<SessionEvent> _eventChannel = Channel.CreateUnbounded<SessionEvent>(
+        new() { SingleReader = true });
 
     /// <summary>
     /// Gets the unique identifier for this session.
@@ -86,22 +96,27 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// The path to the workspace containing checkpoints/, plan.md, and files/ subdirectories,
     /// or null if infinite sessions are disabled.
     /// </value>
-    public string? WorkspacePath { get; }
+    public string? WorkspacePath { get; internal set; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CopilotSession"/> class.
     /// </summary>
     /// <param name="sessionId">The unique identifier for this session.</param>
     /// <param name="rpc">The JSON-RPC connection to the Copilot CLI.</param>
+    /// <param name="logger">Logger for diagnostics.</param>
     /// <param name="workspacePath">The workspace path if infinite sessions are enabled.</param>
     /// <remarks>
     /// This constructor is internal. Use <see cref="CopilotClient.CreateSessionAsync"/> to create sessions.
     /// </remarks>
-    internal CopilotSession(string sessionId, JsonRpc rpc, string? workspacePath = null)
+    internal CopilotSession(string sessionId, JsonRpc rpc, ILogger logger, string? workspacePath = null)
     {
         SessionId = sessionId;
         _rpc = rpc;
+        _logger = logger;
         WorkspacePath = workspacePath;
+
+        // Start the asynchronous processing loop.
+        _ = ProcessEventsAsync();
     }
 
     private Task<T> InvokeRpcAsync<T>(string method, object?[]? args, CancellationToken cancellationToken)
@@ -139,12 +154,16 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// </example>
     public async Task<string> SendAsync(MessageOptions options, CancellationToken cancellationToken = default)
     {
+        var (traceparent, tracestate) = TelemetryHelpers.GetTraceContext();
+
         var request = new SendMessageRequest
         {
             SessionId = SessionId,
             Prompt = options.Prompt,
             Attachments = options.Attachments,
-            Mode = options.Mode
+            Mode = options.Mode,
+            Traceparent = traceparent,
+            Tracestate = tracestate
         };
 
         var response = await InvokeRpcAsync<SendMessageResponse>(
@@ -186,7 +205,7 @@ public sealed partial class CopilotSession : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(60);
-        var tcs = new TaskCompletionSource<AssistantMessageEvent?>();
+        var tcs = new TaskCompletionSource<AssistantMessageEvent?>(TaskCreationOptions.RunContinuationsAsynchronously);
         AssistantMessageEvent? lastAssistantMessage = null;
 
         void Handler(SessionEvent evt)
@@ -236,7 +255,9 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// Multiple handlers can be registered and will all receive events.
     /// </para>
     /// <para>
-    /// Handler exceptions are allowed to propagate so they are not lost.
+    /// Handlers are invoked serially in event-arrival order on a background thread.
+    /// A handler will never be called concurrently with itself or with other handlers
+    /// on the same session.
     /// </para>
     /// </remarks>
     /// <example>
@@ -259,27 +280,53 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// </example>
     public IDisposable On(SessionEventHandler handler)
     {
-        EventHandlers += handler;
-        return new ActionDisposable(() => EventHandlers -= handler);
+        ImmutableInterlocked.Update(ref _eventHandlers, array => array.Add(handler));
+        return new ActionDisposable(() => ImmutableInterlocked.Update(ref _eventHandlers, array => array.Remove(handler)));
     }
 
     /// <summary>
-    /// Dispatches an event to all registered handlers.
+    /// Enqueues an event for serial dispatch to all registered handlers.
     /// </summary>
     /// <param name="sessionEvent">The session event to dispatch.</param>
     /// <remarks>
-    /// This method is internal. Handler exceptions are allowed to propagate so they are not lost.
-    /// Broadcast request events (external_tool.requested, permission.requested) are handled
-    /// internally before being forwarded to user handlers.
+    /// This method is non-blocking. Broadcast request events (external_tool.requested,
+    /// permission.requested) are fired concurrently so that a stalled handler does not
+    /// block event delivery. The event is then placed into an in-memory channel and
+    /// processed by a single background consumer (<see cref="ProcessEventsAsync"/>),
+    /// which guarantees user handlers see events one at a time, in order.
     /// </remarks>
     internal void DispatchEvent(SessionEvent sessionEvent)
     {
-        // Handle broadcast request events (protocol v3) before dispatching to user handlers.
-        // Fire-and-forget: the response is sent asynchronously via RPC.
-        HandleBroadcastEventAsync(sessionEvent);
+        // Fire broadcast work concurrently (fire-and-forget with error logging).
+        // This is done outside the channel so broadcast handlers don't block the
+        // consumer loop — important when a secondary client's handler intentionally
+        // never completes (multi-client permission scenario).
+        _ = HandleBroadcastEventAsync(sessionEvent);
 
-        // Reading the field once gives us a snapshot; delegates are immutable.
-        EventHandlers?.Invoke(sessionEvent);
+        // Queue the event for serial processing by user handlers.
+        _eventChannel.Writer.TryWrite(sessionEvent);
+    }
+
+    /// <summary>
+    /// Single-reader consumer loop that processes events from the channel.
+    /// Ensures user event handlers are invoked serially and in FIFO order.
+    /// </summary>
+    private async Task ProcessEventsAsync()
+    {
+        await foreach (var sessionEvent in _eventChannel.Reader.ReadAllAsync())
+        {
+            foreach (var handler in _eventHandlers)
+            {
+                try
+                {
+                    handler(sessionEvent);
+                }
+                catch (Exception ex)
+                {
+                    LogEventHandlerError(ex);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -339,7 +386,7 @@ public sealed partial class CopilotSession : IAsyncDisposable
             };
         }
 
-        var request = JsonSerializer.Deserialize(permissionRequestData.GetRawText(), SessionJsonContext.Default.PermissionRequest)
+        var request = JsonSerializer.Deserialize(permissionRequestData.GetRawText(), SessionEventsJsonContext.Default.PermissionRequest)
             ?? throw new InvalidOperationException("Failed to deserialize permission request");
 
         var invocation = new PermissionInvocation
@@ -355,37 +402,45 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// Implements the protocol v3 broadcast model where tool calls and permission requests
     /// are broadcast as session events to all clients.
     /// </summary>
-    private async void HandleBroadcastEventAsync(SessionEvent sessionEvent)
+    private async Task HandleBroadcastEventAsync(SessionEvent sessionEvent)
     {
-        switch (sessionEvent)
+        try
         {
-            case ExternalToolRequestedEvent toolEvent:
-                {
-                    var data = toolEvent.Data;
-                    if (string.IsNullOrEmpty(data.RequestId) || string.IsNullOrEmpty(data.ToolName))
-                        return;
+            switch (sessionEvent)
+            {
+                case ExternalToolRequestedEvent toolEvent:
+                    {
+                        var data = toolEvent.Data;
+                        if (string.IsNullOrEmpty(data.RequestId) || string.IsNullOrEmpty(data.ToolName))
+                            return;
 
-                    var tool = GetTool(data.ToolName);
-                    if (tool is null)
-                        return; // This client doesn't handle this tool; another client will.
+                        var tool = GetTool(data.ToolName);
+                        if (tool is null)
+                            return; // This client doesn't handle this tool; another client will.
 
-                    await ExecuteToolAndRespondAsync(data.RequestId, data.ToolName, data.ToolCallId, data.Arguments, tool);
-                    break;
-                }
+                        using (TelemetryHelpers.RestoreTraceContext(data.Traceparent, data.Tracestate))
+                            await ExecuteToolAndRespondAsync(data.RequestId, data.ToolName, data.ToolCallId, data.Arguments, tool);
+                        break;
+                    }
 
-            case PermissionRequestedEvent permEvent:
-                {
-                    var data = permEvent.Data;
-                    if (string.IsNullOrEmpty(data.RequestId) || data.PermissionRequest is null)
-                        return;
+                case PermissionRequestedEvent permEvent:
+                    {
+                        var data = permEvent.Data;
+                        if (string.IsNullOrEmpty(data.RequestId) || data.PermissionRequest is null)
+                            return;
 
-                    var handler = _permissionHandler;
-                    if (handler is null)
-                        return; // This client doesn't handle permissions; another client will.
+                        var handler = _permissionHandler;
+                        if (handler is null)
+                            return; // This client doesn't handle permissions; another client will.
 
-                    await ExecutePermissionAndRespondAsync(data.RequestId, data.PermissionRequest, handler);
-                    break;
-                }
+                        await ExecutePermissionAndRespondAsync(data.RequestId, data.PermissionRequest, handler);
+                        break;
+                    }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogBroadcastHandlerError(ex);
         }
     }
 
@@ -457,27 +512,20 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// <summary>
     /// Executes a permission handler and sends the result back via the HandlePendingPermissionRequest RPC.
     /// </summary>
-    private async Task ExecutePermissionAndRespondAsync(string requestId, object permissionRequestData, PermissionRequestHandler handler)
+    private async Task ExecutePermissionAndRespondAsync(string requestId, PermissionRequest permissionRequest, PermissionRequestHandler handler)
     {
         try
         {
-            // PermissionRequestedData.PermissionRequest is typed as `object` in generated code,
-            // but StreamJsonRpc deserializes it as a JsonElement.
-            if (permissionRequestData is not JsonElement permJsonElement)
-            {
-                throw new InvalidOperationException(
-                    $"Permission request data must be a {nameof(JsonElement)}; received {permissionRequestData.GetType().Name}");
-            }
-
-            var request = JsonSerializer.Deserialize(permJsonElement.GetRawText(), SessionJsonContext.Default.PermissionRequest)
-                ?? throw new InvalidOperationException("Failed to deserialize permission request");
-
             var invocation = new PermissionInvocation
             {
                 SessionId = SessionId
             };
 
-            var result = await handler(request, invocation);
+            var result = await handler(permissionRequest, invocation);
+            if (result.Kind == new PermissionRequestResultKind("no-result"))
+            {
+                return;
+            }
             await Rpc.Permissions.HandlePendingPermissionRequestAsync(requestId, result);
         }
         catch (Exception)
@@ -608,6 +656,72 @@ public sealed partial class CopilotSession : IAsyncDisposable
     }
 
     /// <summary>
+    /// Registers transform callbacks for system message sections.
+    /// </summary>
+    /// <param name="callbacks">The transform callbacks keyed by section identifier.</param>
+    internal void RegisterTransformCallbacks(Dictionary<string, Func<string, Task<string>>>? callbacks)
+    {
+        _transformCallbacksLock.Wait();
+        try
+        {
+            _transformCallbacks = callbacks;
+        }
+        finally
+        {
+            _transformCallbacksLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Handles a systemMessage.transform RPC call from the Copilot CLI.
+    /// </summary>
+    /// <param name="sections">The raw JSON element containing sections to transform.</param>
+    /// <returns>A task that resolves with the transformed sections.</returns>
+    internal async Task<SystemMessageTransformRpcResponse> HandleSystemMessageTransformAsync(JsonElement sections)
+    {
+        Dictionary<string, Func<string, Task<string>>>? callbacks;
+        await _transformCallbacksLock.WaitAsync();
+        try
+        {
+            callbacks = _transformCallbacks;
+        }
+        finally
+        {
+            _transformCallbacksLock.Release();
+        }
+
+        var parsed = JsonSerializer.Deserialize(
+            sections.GetRawText(),
+            SessionJsonContext.Default.DictionaryStringSystemMessageTransformSection) ?? new();
+
+        var result = new Dictionary<string, SystemMessageTransformSection>();
+        foreach (var (sectionId, data) in parsed)
+        {
+            Func<string, Task<string>>? callback = null;
+            callbacks?.TryGetValue(sectionId, out callback);
+
+            if (callback != null)
+            {
+                try
+                {
+                    var transformed = await callback(data.Content ?? "");
+                    result[sectionId] = new SystemMessageTransformSection { Content = transformed };
+                }
+                catch
+                {
+                    result[sectionId] = new SystemMessageTransformSection { Content = data.Content ?? "" };
+                }
+            }
+            else
+            {
+                result[sectionId] = new SystemMessageTransformSection { Content = data.Content ?? "" };
+            }
+        }
+
+        return new SystemMessageTransformRpcResponse { Sections = result };
+    }
+
+    /// <summary>
     /// Gets the complete list of messages and events in the session.
     /// </summary>
     /// <param name="cancellationToken">A <see cref="CancellationToken"/> that can be used to cancel the operation.</param>
@@ -674,15 +788,48 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// The new model takes effect for the next message. Conversation history is preserved.
     /// </summary>
     /// <param name="model">Model ID to switch to (e.g., "gpt-4.1").</param>
+    /// <param name="reasoningEffort">Reasoning effort level (e.g., "low", "medium", "high", "xhigh").</param>
     /// <param name="cancellationToken">Optional cancellation token.</param>
     /// <example>
     /// <code>
     /// await session.SetModelAsync("gpt-4.1");
+    /// await session.SetModelAsync("claude-sonnet-4.6", "high");
     /// </code>
     /// </example>
-    public async Task SetModelAsync(string model, CancellationToken cancellationToken = default)
+    public async Task SetModelAsync(string model, string? reasoningEffort, CancellationToken cancellationToken = default)
     {
-        await Rpc.Model.SwitchToAsync(model, cancellationToken);
+        await Rpc.Model.SwitchToAsync(model, reasoningEffort, cancellationToken);
+    }
+
+    /// <summary>
+    /// Changes the model for this session.
+    /// </summary>
+    public Task SetModelAsync(string model, CancellationToken cancellationToken = default)
+    {
+        return SetModelAsync(model, reasoningEffort: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Log a message to the session timeline.
+    /// The message appears in the session event stream and is visible to SDK consumers
+    /// and (for non-ephemeral messages) persisted to the session event log on disk.
+    /// </summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="level">Log level (default: info).</param>
+    /// <param name="ephemeral">When <c>true</c>, the message is not persisted to disk.</param>
+    /// <param name="url">Optional URL to associate with the log entry.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <example>
+    /// <code>
+    /// await session.LogAsync("Build completed successfully");
+    /// await session.LogAsync("Disk space low", level: SessionLogRequestLevel.Warning);
+    /// await session.LogAsync("Connection failed", level: SessionLogRequestLevel.Error);
+    /// await session.LogAsync("Temporary status", ephemeral: true);
+    /// </code>
+    /// </example>
+    public async Task LogAsync(string message, SessionLogRequestLevel? level = null, bool? ephemeral = null, string? url = null, CancellationToken cancellationToken = default)
+    {
+        await Rpc.LogAsync(message, level, ephemeral, url, cancellationToken);
     }
 
     /// <summary>
@@ -691,6 +838,11 @@ public sealed partial class CopilotSession : IAsyncDisposable
     /// </summary>
     /// <returns>A task representing the dispose operation.</returns>
     /// <remarks>
+    /// <para>
+    /// The caller should ensure the session is idle (e.g., <see cref="SendAndWaitAsync"/>
+    /// has returned) before disposing. If the session is not idle, in-flight event handlers
+    /// or tool handlers may observe failures.
+    /// </para>
     /// <para>
     /// Session state on disk (conversation history, planning state, artifacts) is
     /// preserved, so the conversation can be resumed later by calling
@@ -720,6 +872,8 @@ public sealed partial class CopilotSession : IAsyncDisposable
             return;
         }
 
+        _eventChannel.Writer.TryComplete();
+
         try
         {
             await InvokeRpcAsync<object>(
@@ -734,11 +888,17 @@ public sealed partial class CopilotSession : IAsyncDisposable
             // Connection is broken or closed
         }
 
-        EventHandlers = null;
+        _eventHandlers = ImmutableInterlocked.InterlockedExchange(ref _eventHandlers, ImmutableArray<SessionEventHandler>.Empty);
         _toolHandlers.Clear();
 
         _permissionHandler = null;
     }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Unhandled exception in broadcast event handler")]
+    private partial void LogBroadcastHandlerError(Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Unhandled exception in session event handler")]
+    private partial void LogEventHandlerError(Exception exception);
 
     internal record SendMessageRequest
     {
@@ -746,6 +906,8 @@ public sealed partial class CopilotSession : IAsyncDisposable
         public string Prompt { get; init; } = string.Empty;
         public List<UserMessageDataAttachmentsItem>? Attachments { get; init; }
         public string? Mode { get; init; }
+        public string? Traceparent { get; init; }
+        public string? Tracestate { get; init; }
     }
 
     internal record SendMessageResponse
@@ -780,7 +942,6 @@ public sealed partial class CopilotSession : IAsyncDisposable
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonSerializable(typeof(GetMessagesRequest))]
     [JsonSerializable(typeof(GetMessagesResponse))]
-    [JsonSerializable(typeof(PermissionRequest))]
     [JsonSerializable(typeof(SendMessageRequest))]
     [JsonSerializable(typeof(SendMessageResponse))]
     [JsonSerializable(typeof(SessionAbortRequest))]
@@ -798,5 +959,8 @@ public sealed partial class CopilotSession : IAsyncDisposable
     [JsonSerializable(typeof(SessionEndHookOutput))]
     [JsonSerializable(typeof(ErrorOccurredHookInput))]
     [JsonSerializable(typeof(ErrorOccurredHookOutput))]
+    [JsonSerializable(typeof(SystemMessageTransformSection))]
+    [JsonSerializable(typeof(SystemMessageTransformRpcResponse))]
+    [JsonSerializable(typeof(Dictionary<string, SystemMessageTransformSection>))]
     internal partial class SessionJsonContext : JsonSerializerContext;
 }
