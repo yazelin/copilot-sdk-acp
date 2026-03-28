@@ -13,6 +13,41 @@ export type SessionEvent = GeneratedSessionEvent;
 /**
  * Options for creating a CopilotClient
  */
+/**
+ * W3C Trace Context headers used for distributed trace propagation.
+ */
+export interface TraceContext {
+    traceparent?: string;
+    tracestate?: string;
+}
+
+/**
+ * Callback that returns the current W3C Trace Context.
+ * Wire this up to your OpenTelemetry (or other tracing) SDK to enable
+ * distributed trace propagation between your app and the Copilot CLI.
+ */
+export type TraceContextProvider = () => TraceContext | Promise<TraceContext>;
+
+/**
+ * Configuration for OpenTelemetry instrumentation.
+ *
+ * When provided via {@link CopilotClientOptions.telemetry}, the SDK sets
+ * the corresponding environment variables on the spawned CLI process so
+ * that the CLI's built-in OTel exporter is configured automatically.
+ */
+export interface TelemetryConfig {
+    /** OTLP HTTP endpoint URL for trace/metric export. Sets OTEL_EXPORTER_OTLP_ENDPOINT. */
+    otlpEndpoint?: string;
+    /** File path for JSON-lines trace output. Sets COPILOT_OTEL_FILE_EXPORTER_PATH. */
+    filePath?: string;
+    /** Exporter backend type: "otlp-http" or "file". Sets COPILOT_OTEL_EXPORTER_TYPE. */
+    exporterType?: string;
+    /** Instrumentation scope name. Sets COPILOT_OTEL_SOURCE_NAME. */
+    sourceName?: string;
+    /** Whether to capture message content (prompts, responses). Sets OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT. */
+    captureContent?: boolean;
+}
+
 export interface CopilotClientOptions {
     /**
      * Path to the CLI executable or JavaScript entry point.
@@ -72,8 +107,7 @@ export interface CopilotClientOptions {
     autoStart?: boolean;
 
     /**
-     * Auto-restart the CLI server if it crashes
-     * @default true
+     * @deprecated This option has no effect and will be removed in a future release.
      */
     autoRestart?: boolean;
 
@@ -112,6 +146,39 @@ export interface CopilotClientOptions {
      * available from your custom provider.
      */
     onListModels?: () => Promise<ModelInfo[]> | ModelInfo[];
+
+    /**
+     * OpenTelemetry configuration for the CLI process.
+     * When provided, the corresponding OTel environment variables are set
+     * on the spawned CLI server.
+     */
+    telemetry?: TelemetryConfig;
+
+    /**
+     * Advanced: callback that returns the current W3C Trace Context for distributed
+     * trace propagation.  Most users do not need this — the {@link telemetry} config
+     * alone is sufficient to collect traces from the CLI.
+     *
+     * This callback is only useful when your application creates its own
+     * OpenTelemetry spans and you want them to appear in the **same** distributed
+     * trace as the CLI's spans.  The SDK calls this before `session.create`,
+     * `session.resume`, and `session.send` RPCs to inject `traceparent`/`tracestate`
+     * into the request.
+     *
+     * @example
+     * ```typescript
+     * import { propagation, context } from "@opentelemetry/api";
+     *
+     * const client = new CopilotClient({
+     *   onGetTraceContext: () => {
+     *     const carrier: Record<string, string> = {};
+     *     propagation.inject(context.active(), carrier);
+     *     return carrier;
+     *   },
+     * });
+     * ```
+     */
+    onGetTraceContext?: TraceContextProvider;
 }
 
 /**
@@ -142,6 +209,10 @@ export interface ToolInvocation {
     toolCallId: string;
     toolName: string;
     arguments: unknown;
+    /** W3C Trace Context traceparent from the CLI's execute_tool span. */
+    traceparent?: string;
+    /** W3C Trace Context tracestate from the CLI's execute_tool span. */
+    tracestate?: string;
 }
 
 export type ToolHandler<TArgs = unknown> = (
@@ -175,6 +246,10 @@ export interface Tool<TArgs = unknown> {
      * will return an error.
      */
     overridesBuiltInTool?: boolean;
+    /**
+     * When true, the tool can execute without a permission prompt.
+     */
+    skipPermission?: boolean;
 }
 
 /**
@@ -188,9 +263,209 @@ export function defineTool<T = unknown>(
         parameters?: ZodSchema<T> | Record<string, unknown>;
         handler: ToolHandler<T>;
         overridesBuiltInTool?: boolean;
+        skipPermission?: boolean;
     }
 ): Tool<T> {
     return { name, ...config };
+}
+
+// ============================================================================
+// Commands
+// ============================================================================
+
+/**
+ * Context passed to a command handler when a command is executed.
+ */
+export interface CommandContext {
+    /** Session ID where the command was invoked */
+    sessionId: string;
+    /** The full command text (e.g. "/deploy production") */
+    command: string;
+    /** Command name without leading / */
+    commandName: string;
+    /** Raw argument string after the command name */
+    args: string;
+}
+
+/**
+ * Handler invoked when a registered command is executed by a user.
+ */
+export type CommandHandler = (context: CommandContext) => Promise<void> | void;
+
+/**
+ * Definition of a slash command registered with the session.
+ * When the CLI is running with a TUI, registered commands appear as
+ * `/commandName` for the user to invoke.
+ */
+export interface CommandDefinition {
+    /** Command name (without leading /). */
+    name: string;
+    /** Human-readable description shown in command completion UI. */
+    description?: string;
+    /** Handler invoked when the command is executed. */
+    handler: CommandHandler;
+}
+
+// ============================================================================
+// UI Elicitation
+// ============================================================================
+
+/**
+ * Capabilities reported by the CLI host for this session.
+ */
+export interface SessionCapabilities {
+    ui?: {
+        /** Whether the host supports interactive elicitation dialogs. */
+        elicitation?: boolean;
+    };
+}
+
+/**
+ * A single field in an elicitation schema — matches the MCP SDK's
+ * `PrimitiveSchemaDefinition` union.
+ */
+export type ElicitationSchemaField =
+    | {
+          type: "string";
+          title?: string;
+          description?: string;
+          enum: string[];
+          enumNames?: string[];
+          default?: string;
+      }
+    | {
+          type: "string";
+          title?: string;
+          description?: string;
+          oneOf: { const: string; title: string }[];
+          default?: string;
+      }
+    | {
+          type: "array";
+          title?: string;
+          description?: string;
+          minItems?: number;
+          maxItems?: number;
+          items: { type: "string"; enum: string[] };
+          default?: string[];
+      }
+    | {
+          type: "array";
+          title?: string;
+          description?: string;
+          minItems?: number;
+          maxItems?: number;
+          items: { anyOf: { const: string; title: string }[] };
+          default?: string[];
+      }
+    | {
+          type: "boolean";
+          title?: string;
+          description?: string;
+          default?: boolean;
+      }
+    | {
+          type: "string";
+          title?: string;
+          description?: string;
+          minLength?: number;
+          maxLength?: number;
+          format?: "email" | "uri" | "date" | "date-time";
+          default?: string;
+      }
+    | {
+          type: "number" | "integer";
+          title?: string;
+          description?: string;
+          minimum?: number;
+          maximum?: number;
+          default?: number;
+      };
+
+/**
+ * Schema describing the form fields for an elicitation request.
+ */
+export interface ElicitationSchema {
+    type: "object";
+    properties: Record<string, ElicitationSchemaField>;
+    required?: string[];
+}
+
+/**
+ * Primitive field value in an elicitation result.
+ * Matches MCP SDK's `ElicitResult.content` value type.
+ */
+export type ElicitationFieldValue = string | number | boolean | string[];
+
+/**
+ * Result returned from an elicitation request.
+ */
+export interface ElicitationResult {
+    /** User action: "accept" (submitted), "decline" (rejected), or "cancel" (dismissed). */
+    action: "accept" | "decline" | "cancel";
+    /** Form values submitted by the user (present when action is "accept"). */
+    content?: Record<string, ElicitationFieldValue>;
+}
+
+/**
+ * Parameters for a raw elicitation request.
+ */
+export interface ElicitationParams {
+    /** Message describing what information is needed from the user. */
+    message: string;
+    /** JSON Schema describing the form fields to present. */
+    requestedSchema: ElicitationSchema;
+}
+
+/**
+ * Options for the `input()` convenience method.
+ */
+export interface InputOptions {
+    /** Title label for the input field. */
+    title?: string;
+    /** Descriptive text shown below the field. */
+    description?: string;
+    /** Minimum character length. */
+    minLength?: number;
+    /** Maximum character length. */
+    maxLength?: number;
+    /** Semantic format hint. */
+    format?: "email" | "uri" | "date" | "date-time";
+    /** Default value pre-populated in the field. */
+    default?: string;
+}
+
+/**
+ * The `session.ui` API object providing interactive UI methods.
+ * Only usable when the CLI host supports elicitation.
+ */
+export interface SessionUiApi {
+    /**
+     * Shows a generic elicitation dialog with a custom schema.
+     * @throws Error if the host does not support elicitation.
+     */
+    elicitation(params: ElicitationParams): Promise<ElicitationResult>;
+
+    /**
+     * Shows a confirmation dialog and returns the user's boolean answer.
+     * Returns `false` if the user declines or cancels.
+     * @throws Error if the host does not support elicitation.
+     */
+    confirm(message: string): Promise<boolean>;
+
+    /**
+     * Shows a selection dialog with the given options.
+     * Returns the selected value, or `null` if the user declines/cancels.
+     * @throws Error if the host does not support elicitation.
+     */
+    select(message: string, options: string[]): Promise<string | null>;
+
+    /**
+     * Shows a text input dialog.
+     * Returns the entered text, or `null` if the user declines/cancels.
+     * @throws Error if the host does not support elicitation.
+     */
+    input(message: string, options?: InputOptions): Promise<string | null>;
 }
 
 export interface ToolCallRequestPayload {
@@ -202,6 +477,79 @@ export interface ToolCallRequestPayload {
 
 export interface ToolCallResponsePayload {
     result: ToolResult;
+}
+
+/**
+ * Known system prompt section identifiers for the "customize" mode.
+ * Each section corresponds to a distinct part of the system prompt.
+ */
+export type SystemPromptSection =
+    | "identity"
+    | "tone"
+    | "tool_efficiency"
+    | "environment_context"
+    | "code_change_rules"
+    | "guidelines"
+    | "safety"
+    | "tool_instructions"
+    | "custom_instructions"
+    | "last_instructions";
+
+/** Section metadata for documentation and tooling. */
+export const SYSTEM_PROMPT_SECTIONS: Record<SystemPromptSection, { description: string }> = {
+    identity: { description: "Agent identity preamble and mode statement" },
+    tone: { description: "Response style, conciseness rules, output formatting preferences" },
+    tool_efficiency: { description: "Tool usage patterns, parallel calling, batching guidelines" },
+    environment_context: { description: "CWD, OS, git root, directory listing, available tools" },
+    code_change_rules: { description: "Coding rules, linting/testing, ecosystem tools, style" },
+    guidelines: { description: "Tips, behavioral best practices, behavioral guidelines" },
+    safety: { description: "Environment limitations, prohibited actions, security policies" },
+    tool_instructions: { description: "Per-tool usage instructions" },
+    custom_instructions: { description: "Repository and organization custom instructions" },
+    last_instructions: {
+        description:
+            "End-of-prompt instructions: parallel tool calling, persistence, task completion",
+    },
+};
+
+/**
+ * Transform callback for a single section: receives current content, returns new content.
+ */
+export type SectionTransformFn = (currentContent: string) => string | Promise<string>;
+
+/**
+ * Override action: a string literal for static overrides, or a callback for transforms.
+ *
+ * - `"replace"`: Replace section content entirely
+ * - `"remove"`: Remove the section
+ * - `"append"`: Append to existing section content
+ * - `"prepend"`: Prepend to existing section content
+ * - `function`: Transform callback — receives current section content, returns new content
+ */
+export type SectionOverrideAction =
+    | "replace"
+    | "remove"
+    | "append"
+    | "prepend"
+    | SectionTransformFn;
+
+/**
+ * Override operation for a single system prompt section.
+ */
+export interface SectionOverride {
+    /**
+     * The operation to perform on this section.
+     * Can be a string action or a transform callback function.
+     */
+    action: SectionOverrideAction;
+
+    /**
+     * Content for the override. Optional for all actions.
+     * - For replace, omitting content replaces with an empty string.
+     * - For append/prepend, content is added before/after the existing section.
+     * - Ignored for the remove action.
+     */
+    content?: string;
 }
 
 /**
@@ -231,11 +579,36 @@ export interface SystemMessageReplaceConfig {
 }
 
 /**
+ * Customize mode: Override individual sections of the system prompt.
+ * Keeps the SDK-managed prompt structure while allowing targeted modifications.
+ */
+export interface SystemMessageCustomizeConfig {
+    mode: "customize";
+
+    /**
+     * Override specific sections of the system prompt by section ID.
+     * Unknown section IDs gracefully fall back: content-bearing overrides are appended
+     * to additional instructions, and "remove" on unknown sections is a silent no-op.
+     */
+    sections?: Partial<Record<SystemPromptSection, SectionOverride>>;
+
+    /**
+     * Additional content appended after all sections.
+     * Equivalent to append mode's content field — provided for convenience.
+     */
+    content?: string;
+}
+
+/**
  * System message configuration for session creation.
  * - Append mode (default): SDK foundation + optional custom content
  * - Replace mode: Full control, caller provides entire system message
+ * - Customize mode: Section-level overrides with graceful fallback
  */
-export type SystemMessageConfig = SystemMessageAppendConfig | SystemMessageReplaceConfig;
+export type SystemMessageConfig =
+    | SystemMessageAppendConfig
+    | SystemMessageReplaceConfig
+    | SystemMessageCustomizeConfig;
 
 /**
  * Permission request types from the server
@@ -249,7 +622,8 @@ export interface PermissionRequest {
 import type { SessionPermissionsHandlePendingPermissionRequestParams } from "./generated/rpc.js";
 
 export type PermissionRequestResult =
-    SessionPermissionsHandlePendingPermissionRequestParams["result"];
+    | SessionPermissionsHandlePendingPermissionRequestParams["result"]
+    | { kind: "no-result" };
 
 export type PermissionHandler = (
     request: PermissionRequest,
@@ -674,6 +1048,13 @@ export interface SessionConfig {
     tools?: Tool<any>[];
 
     /**
+     * Slash commands registered for this session.
+     * When the CLI has a TUI, each command appears as `/name` for the user to invoke.
+     * The handler is called when the user executes the command.
+     */
+    commands?: CommandDefinition[];
+
+    /**
      * System message configuration
      * Controls how the system prompt is constructed
      */
@@ -764,6 +1145,17 @@ export interface SessionConfig {
      * Set to `{ enabled: false }` to disable.
      */
     infiniteSessions?: InfiniteSessionConfig;
+
+    /**
+     * Optional event handler that is registered on the session before the
+     * session.create RPC is issued. This guarantees that early events emitted
+     * by the CLI during session creation (e.g. session.start) are delivered to
+     * the handler.
+     *
+     * Equivalent to calling `session.on(handler)` immediately after creation,
+     * but executes earlier in the lifecycle so no events are missed.
+     */
+    onEvent?: SessionEventHandler;
 }
 
 /**
@@ -774,6 +1166,7 @@ export type ResumeSessionConfig = Pick<
     | "clientName"
     | "model"
     | "tools"
+    | "commands"
     | "systemMessage"
     | "availableTools"
     | "excludedTools"
@@ -791,6 +1184,7 @@ export type ResumeSessionConfig = Pick<
     | "skillDirectories"
     | "disabledSkills"
     | "infiniteSessions"
+    | "onEvent"
 > & {
     /**
      * When true, skips emitting the session.resume event.
@@ -852,7 +1246,7 @@ export interface MessageOptions {
     prompt: string;
 
     /**
-     * File, directory, or selection attachments
+     * File, directory, selection, or blob attachments
      */
     attachments?: Array<
         | {
@@ -874,6 +1268,12 @@ export interface MessageOptions {
                   end: { line: number; character: number };
               };
               text?: string;
+          }
+        | {
+              type: "blob";
+              data: string;
+              mimeType: string;
+              displayName?: string;
           }
     >;
 
