@@ -6,13 +6,14 @@ Generated from: api.schema.json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..jsonrpc import JsonRpcClient
+    from .._jsonrpc import JsonRpcClient
 
 
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 from collections.abc import Callable
 from enum import Enum
+from uuid import UUID
 
 
 T = TypeVar("T")
@@ -73,6 +74,11 @@ def to_enum(c: type[EnumT], x: Any) -> EnumT:
     return x.value
 
 
+def from_int(x: Any) -> int:
+    assert isinstance(x, int) and not isinstance(x, bool)
+    return x
+
+
 @dataclass
 class PingResult:
     message: str
@@ -123,6 +129,7 @@ class Billing:
     """Billing information"""
 
     multiplier: float
+    """Billing cost multiplier relative to the base rate"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Billing':
@@ -138,9 +145,16 @@ class Billing:
 
 @dataclass
 class Limits:
+    """Token limits for prompts, outputs, and context window"""
+
     max_context_window_tokens: float
+    """Maximum total context window size in tokens"""
+
     max_output_tokens: float | None = None
+    """Maximum number of output/completion tokens"""
+
     max_prompt_tokens: float | None = None
+    """Maximum number of prompt/input tokens"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Limits':
@@ -162,10 +176,13 @@ class Limits:
 
 @dataclass
 class Supports:
+    """Feature flags indicating what the model supports"""
+
     reasoning_effort: bool | None = None
     """Whether this model supports reasoning effort configuration"""
 
     vision: bool | None = None
+    """Whether this model supports vision/image input"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Supports':
@@ -188,7 +205,10 @@ class Capabilities:
     """Model capabilities and limits"""
 
     limits: Limits
+    """Token limits for prompts, outputs, and context window"""
+
     supports: Supports
+    """Feature flags indicating what the model supports"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Capabilities':
@@ -209,7 +229,10 @@ class Policy:
     """Policy state (if applicable)"""
 
     state: str
+    """Current policy state for this model"""
+
     terms: str
+    """Usage terms or conditions for this model"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'Policy':
@@ -434,6 +457,7 @@ class AccountGetQuotaResult:
 @dataclass
 class SessionModelGetCurrentResult:
     model_id: str | None = None
+    """Currently active model identifier"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionModelGetCurrentResult':
@@ -451,6 +475,7 @@ class SessionModelGetCurrentResult:
 @dataclass
 class SessionModelSwitchToResult:
     model_id: str | None = None
+    """Currently active model identifier after the switch"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionModelSwitchToResult':
@@ -468,16 +493,23 @@ class SessionModelSwitchToResult:
 @dataclass
 class SessionModelSwitchToParams:
     model_id: str
+    """Model identifier to switch to"""
+
+    reasoning_effort: str | None = None
+    """Reasoning effort level to use for the model"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionModelSwitchToParams':
         assert isinstance(obj, dict)
         model_id = from_str(obj.get("modelId"))
-        return SessionModelSwitchToParams(model_id)
+        reasoning_effort = from_union([from_str, from_none], obj.get("reasoningEffort"))
+        return SessionModelSwitchToParams(model_id, reasoning_effort)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["modelId"] = from_str(self.model_id)
+        if self.reasoning_effort is not None:
+            result["reasoningEffort"] = from_union([from_str, from_none], self.reasoning_effort)
         return result
 
 
@@ -697,6 +729,7 @@ class SessionWorkspaceCreateFileParams:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionFleetStartResult:
     started: bool
@@ -714,6 +747,7 @@ class SessionFleetStartResult:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionFleetStartParams:
     prompt: str | None = None
@@ -733,7 +767,7 @@ class SessionFleetStartParams:
 
 
 @dataclass
-class AgentElement:
+class SessionAgentListResultAgent:
     description: str
     """Description of the agent's purpose"""
 
@@ -744,12 +778,12 @@ class AgentElement:
     """Unique identifier of the custom agent"""
 
     @staticmethod
-    def from_dict(obj: Any) -> 'AgentElement':
+    def from_dict(obj: Any) -> 'SessionAgentListResultAgent':
         assert isinstance(obj, dict)
         description = from_str(obj.get("description"))
         display_name = from_str(obj.get("displayName"))
         name = from_str(obj.get("name"))
-        return AgentElement(description, display_name, name)
+        return SessionAgentListResultAgent(description, display_name, name)
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -759,20 +793,21 @@ class AgentElement:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentListResult:
-    agents: list[AgentElement]
+    agents: list[SessionAgentListResultAgent]
     """Available custom agents"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionAgentListResult':
         assert isinstance(obj, dict)
-        agents = from_list(AgentElement.from_dict, obj.get("agents"))
+        agents = from_list(SessionAgentListResultAgent.from_dict, obj.get("agents"))
         return SessionAgentListResult(agents)
 
     def to_dict(self) -> dict:
         result: dict = {}
-        result["agents"] = from_list(lambda x: to_class(AgentElement, x), self.agents)
+        result["agents"] = from_list(lambda x: to_class(SessionAgentListResultAgent, x), self.agents)
         return result
 
 
@@ -803,6 +838,7 @@ class SessionAgentGetCurrentResultAgent:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentGetCurrentResult:
     agent: SessionAgentGetCurrentResultAgent | None = None
@@ -849,6 +885,7 @@ class SessionAgentSelectResultAgent:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentSelectResult:
     agent: SessionAgentSelectResultAgent
@@ -866,6 +903,7 @@ class SessionAgentSelectResult:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentSelectParams:
     name: str
@@ -883,6 +921,7 @@ class SessionAgentSelectParams:
         return result
 
 
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionAgentDeselectResult:
     @staticmethod
@@ -895,6 +934,517 @@ class SessionAgentDeselectResult:
         return result
 
 
+@dataclass
+class SessionAgentReloadResultAgent:
+    description: str
+    """Description of the agent's purpose"""
+
+    display_name: str
+    """Human-readable display name"""
+
+    name: str
+    """Unique identifier of the custom agent"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentReloadResultAgent':
+        assert isinstance(obj, dict)
+        description = from_str(obj.get("description"))
+        display_name = from_str(obj.get("displayName"))
+        name = from_str(obj.get("name"))
+        return SessionAgentReloadResultAgent(description, display_name, name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["description"] = from_str(self.description)
+        result["displayName"] = from_str(self.display_name)
+        result["name"] = from_str(self.name)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionAgentReloadResult:
+    agents: list[SessionAgentReloadResultAgent]
+    """Reloaded custom agents"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionAgentReloadResult':
+        assert isinstance(obj, dict)
+        agents = from_list(SessionAgentReloadResultAgent.from_dict, obj.get("agents"))
+        return SessionAgentReloadResult(agents)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["agents"] = from_list(lambda x: to_class(SessionAgentReloadResultAgent, x), self.agents)
+        return result
+
+
+@dataclass
+class Skill:
+    description: str
+    """Description of what the skill does"""
+
+    enabled: bool
+    """Whether the skill is currently enabled"""
+
+    name: str
+    """Unique identifier for the skill"""
+
+    source: str
+    """Source location type (e.g., project, personal, plugin)"""
+
+    user_invocable: bool
+    """Whether the skill can be invoked by the user as a slash command"""
+
+    path: str | None = None
+    """Absolute path to the skill file"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'Skill':
+        assert isinstance(obj, dict)
+        description = from_str(obj.get("description"))
+        enabled = from_bool(obj.get("enabled"))
+        name = from_str(obj.get("name"))
+        source = from_str(obj.get("source"))
+        user_invocable = from_bool(obj.get("userInvocable"))
+        path = from_union([from_str, from_none], obj.get("path"))
+        return Skill(description, enabled, name, source, user_invocable, path)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["description"] = from_str(self.description)
+        result["enabled"] = from_bool(self.enabled)
+        result["name"] = from_str(self.name)
+        result["source"] = from_str(self.source)
+        result["userInvocable"] = from_bool(self.user_invocable)
+        if self.path is not None:
+            result["path"] = from_union([from_str, from_none], self.path)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionSkillsListResult:
+    skills: list[Skill]
+    """Available skills"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionSkillsListResult':
+        assert isinstance(obj, dict)
+        skills = from_list(Skill.from_dict, obj.get("skills"))
+        return SessionSkillsListResult(skills)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["skills"] = from_list(lambda x: to_class(Skill, x), self.skills)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionSkillsEnableResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionSkillsEnableResult':
+        assert isinstance(obj, dict)
+        return SessionSkillsEnableResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionSkillsEnableParams:
+    name: str
+    """Name of the skill to enable"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionSkillsEnableParams':
+        assert isinstance(obj, dict)
+        name = from_str(obj.get("name"))
+        return SessionSkillsEnableParams(name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["name"] = from_str(self.name)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionSkillsDisableResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionSkillsDisableResult':
+        assert isinstance(obj, dict)
+        return SessionSkillsDisableResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionSkillsDisableParams:
+    name: str
+    """Name of the skill to disable"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionSkillsDisableParams':
+        assert isinstance(obj, dict)
+        name = from_str(obj.get("name"))
+        return SessionSkillsDisableParams(name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["name"] = from_str(self.name)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionSkillsReloadResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionSkillsReloadResult':
+        assert isinstance(obj, dict)
+        return SessionSkillsReloadResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+class ServerStatus(Enum):
+    """Connection status: connected, failed, pending, disabled, or not_configured"""
+
+    CONNECTED = "connected"
+    DISABLED = "disabled"
+    FAILED = "failed"
+    NOT_CONFIGURED = "not_configured"
+    PENDING = "pending"
+
+
+@dataclass
+class Server:
+    name: str
+    """Server name (config key)"""
+
+    status: ServerStatus
+    """Connection status: connected, failed, pending, disabled, or not_configured"""
+
+    error: str | None = None
+    """Error message if the server failed to connect"""
+
+    source: str | None = None
+    """Configuration source: user, workspace, plugin, or builtin"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'Server':
+        assert isinstance(obj, dict)
+        name = from_str(obj.get("name"))
+        status = ServerStatus(obj.get("status"))
+        error = from_union([from_str, from_none], obj.get("error"))
+        source = from_union([from_str, from_none], obj.get("source"))
+        return Server(name, status, error, source)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["name"] = from_str(self.name)
+        result["status"] = to_enum(ServerStatus, self.status)
+        if self.error is not None:
+            result["error"] = from_union([from_str, from_none], self.error)
+        if self.source is not None:
+            result["source"] = from_union([from_str, from_none], self.source)
+        return result
+
+
+@dataclass
+class SessionMCPListResult:
+    servers: list[Server]
+    """Configured MCP servers"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionMCPListResult':
+        assert isinstance(obj, dict)
+        servers = from_list(Server.from_dict, obj.get("servers"))
+        return SessionMCPListResult(servers)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["servers"] = from_list(lambda x: to_class(Server, x), self.servers)
+        return result
+
+
+@dataclass
+class SessionMCPEnableResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionMCPEnableResult':
+        assert isinstance(obj, dict)
+        return SessionMCPEnableResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+@dataclass
+class SessionMCPEnableParams:
+    server_name: str
+    """Name of the MCP server to enable"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionMCPEnableParams':
+        assert isinstance(obj, dict)
+        server_name = from_str(obj.get("serverName"))
+        return SessionMCPEnableParams(server_name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["serverName"] = from_str(self.server_name)
+        return result
+
+
+@dataclass
+class SessionMCPDisableResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionMCPDisableResult':
+        assert isinstance(obj, dict)
+        return SessionMCPDisableResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+@dataclass
+class SessionMCPDisableParams:
+    server_name: str
+    """Name of the MCP server to disable"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionMCPDisableParams':
+        assert isinstance(obj, dict)
+        server_name = from_str(obj.get("serverName"))
+        return SessionMCPDisableParams(server_name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["serverName"] = from_str(self.server_name)
+        return result
+
+
+@dataclass
+class SessionMCPReloadResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionMCPReloadResult':
+        assert isinstance(obj, dict)
+        return SessionMCPReloadResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+@dataclass
+class Plugin:
+    enabled: bool
+    """Whether the plugin is currently enabled"""
+
+    marketplace: str
+    """Marketplace the plugin came from"""
+
+    name: str
+    """Plugin name"""
+
+    version: str | None = None
+    """Installed version"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'Plugin':
+        assert isinstance(obj, dict)
+        enabled = from_bool(obj.get("enabled"))
+        marketplace = from_str(obj.get("marketplace"))
+        name = from_str(obj.get("name"))
+        version = from_union([from_str, from_none], obj.get("version"))
+        return Plugin(enabled, marketplace, name, version)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["enabled"] = from_bool(self.enabled)
+        result["marketplace"] = from_str(self.marketplace)
+        result["name"] = from_str(self.name)
+        if self.version is not None:
+            result["version"] = from_union([from_str, from_none], self.version)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionPluginsListResult:
+    plugins: list[Plugin]
+    """Installed plugins"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionPluginsListResult':
+        assert isinstance(obj, dict)
+        plugins = from_list(Plugin.from_dict, obj.get("plugins"))
+        return SessionPluginsListResult(plugins)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["plugins"] = from_list(lambda x: to_class(Plugin, x), self.plugins)
+        return result
+
+
+class Source(Enum):
+    """Discovery source: project (.github/extensions/) or user (~/.copilot/extensions/)"""
+
+    PROJECT = "project"
+    USER = "user"
+
+
+class ExtensionStatus(Enum):
+    """Current status: running, disabled, failed, or starting"""
+
+    DISABLED = "disabled"
+    FAILED = "failed"
+    RUNNING = "running"
+    STARTING = "starting"
+
+
+@dataclass
+class Extension:
+    id: str
+    """Source-qualified ID (e.g., 'project:my-ext', 'user:auth-helper')"""
+
+    name: str
+    """Extension name (directory name)"""
+
+    source: Source
+    """Discovery source: project (.github/extensions/) or user (~/.copilot/extensions/)"""
+
+    status: ExtensionStatus
+    """Current status: running, disabled, failed, or starting"""
+
+    pid: int | None = None
+    """Process ID if the extension is running"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'Extension':
+        assert isinstance(obj, dict)
+        id = from_str(obj.get("id"))
+        name = from_str(obj.get("name"))
+        source = Source(obj.get("source"))
+        status = ExtensionStatus(obj.get("status"))
+        pid = from_union([from_int, from_none], obj.get("pid"))
+        return Extension(id, name, source, status, pid)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["id"] = from_str(self.id)
+        result["name"] = from_str(self.name)
+        result["source"] = to_enum(Source, self.source)
+        result["status"] = to_enum(ExtensionStatus, self.status)
+        if self.pid is not None:
+            result["pid"] = from_union([from_int, from_none], self.pid)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionExtensionsListResult:
+    extensions: list[Extension]
+    """Discovered extensions and their current status"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionExtensionsListResult':
+        assert isinstance(obj, dict)
+        extensions = from_list(Extension.from_dict, obj.get("extensions"))
+        return SessionExtensionsListResult(extensions)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["extensions"] = from_list(lambda x: to_class(Extension, x), self.extensions)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionExtensionsEnableResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionExtensionsEnableResult':
+        assert isinstance(obj, dict)
+        return SessionExtensionsEnableResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionExtensionsEnableParams:
+    id: str
+    """Source-qualified extension ID to enable"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionExtensionsEnableParams':
+        assert isinstance(obj, dict)
+        id = from_str(obj.get("id"))
+        return SessionExtensionsEnableParams(id)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["id"] = from_str(self.id)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionExtensionsDisableResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionExtensionsDisableResult':
+        assert isinstance(obj, dict)
+        return SessionExtensionsDisableResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionExtensionsDisableParams:
+    id: str
+    """Source-qualified extension ID to disable"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionExtensionsDisableParams':
+        assert isinstance(obj, dict)
+        id = from_str(obj.get("id"))
+        return SessionExtensionsDisableParams(id)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["id"] = from_str(self.id)
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
+@dataclass
+class SessionExtensionsReloadResult:
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionExtensionsReloadResult':
+        assert isinstance(obj, dict)
+        return SessionExtensionsReloadResult()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        return result
+
+
+# Experimental: this type is part of an experimental API and may change or be removed.
 @dataclass
 class SessionCompactionCompactResult:
     messages_removed: float
@@ -925,6 +1475,7 @@ class SessionCompactionCompactResult:
 @dataclass
 class SessionToolsHandlePendingToolCallResult:
     success: bool
+    """Whether the tool call result was handled successfully"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionToolsHandlePendingToolCallResult':
@@ -991,8 +1542,355 @@ class SessionToolsHandlePendingToolCallParams:
 
 
 @dataclass
+class SessionCommandsHandlePendingCommandResult:
+    success: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionCommandsHandlePendingCommandResult':
+        assert isinstance(obj, dict)
+        success = from_bool(obj.get("success"))
+        return SessionCommandsHandlePendingCommandResult(success)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["success"] = from_bool(self.success)
+        return result
+
+
+@dataclass
+class SessionCommandsHandlePendingCommandParams:
+    request_id: str
+    """Request ID from the command invocation event"""
+
+    error: str | None = None
+    """Error message if the command handler failed"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionCommandsHandlePendingCommandParams':
+        assert isinstance(obj, dict)
+        request_id = from_str(obj.get("requestId"))
+        error = from_union([from_str, from_none], obj.get("error"))
+        return SessionCommandsHandlePendingCommandParams(request_id, error)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["requestId"] = from_str(self.request_id)
+        if self.error is not None:
+            result["error"] = from_union([from_str, from_none], self.error)
+        return result
+
+
+class Action(Enum):
+    """The user's response: accept (submitted), decline (rejected), or cancel (dismissed)"""
+
+    ACCEPT = "accept"
+    CANCEL = "cancel"
+    DECLINE = "decline"
+
+
+@dataclass
+class SessionUIElicitationResult:
+    action: Action
+    """The user's response: accept (submitted), decline (rejected), or cancel (dismissed)"""
+
+    content: dict[str, float | bool | list[str] | str] | None = None
+    """The form values submitted by the user (present when action is 'accept')"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionUIElicitationResult':
+        assert isinstance(obj, dict)
+        action = Action(obj.get("action"))
+        content = from_union([lambda x: from_dict(lambda x: from_union([from_float, from_bool, lambda x: from_list(from_str, x), from_str], x), x), from_none], obj.get("content"))
+        return SessionUIElicitationResult(action, content)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["action"] = to_enum(Action, self.action)
+        if self.content is not None:
+            result["content"] = from_union([lambda x: from_dict(lambda x: from_union([to_float, from_bool, lambda x: from_list(from_str, x), from_str], x), x), from_none], self.content)
+        return result
+
+
+class Format(Enum):
+    DATE = "date"
+    DATE_TIME = "date-time"
+    EMAIL = "email"
+    URI = "uri"
+
+
+@dataclass
+class AnyOf:
+    const: str
+    title: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'AnyOf':
+        assert isinstance(obj, dict)
+        const = from_str(obj.get("const"))
+        title = from_str(obj.get("title"))
+        return AnyOf(const, title)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["const"] = from_str(self.const)
+        result["title"] = from_str(self.title)
+        return result
+
+
+class ItemsType(Enum):
+    STRING = "string"
+
+
+@dataclass
+class Items:
+    enum: list[str] | None = None
+    type: ItemsType | None = None
+    any_of: list[AnyOf] | None = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'Items':
+        assert isinstance(obj, dict)
+        enum = from_union([lambda x: from_list(from_str, x), from_none], obj.get("enum"))
+        type = from_union([ItemsType, from_none], obj.get("type"))
+        any_of = from_union([lambda x: from_list(AnyOf.from_dict, x), from_none], obj.get("anyOf"))
+        return Items(enum, type, any_of)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.enum is not None:
+            result["enum"] = from_union([lambda x: from_list(from_str, x), from_none], self.enum)
+        if self.type is not None:
+            result["type"] = from_union([lambda x: to_enum(ItemsType, x), from_none], self.type)
+        if self.any_of is not None:
+            result["anyOf"] = from_union([lambda x: from_list(lambda x: to_class(AnyOf, x), x), from_none], self.any_of)
+        return result
+
+
+@dataclass
+class OneOf:
+    const: str
+    title: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'OneOf':
+        assert isinstance(obj, dict)
+        const = from_str(obj.get("const"))
+        title = from_str(obj.get("title"))
+        return OneOf(const, title)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["const"] = from_str(self.const)
+        result["title"] = from_str(self.title)
+        return result
+
+
+class PropertyType(Enum):
+    ARRAY = "array"
+    BOOLEAN = "boolean"
+    INTEGER = "integer"
+    NUMBER = "number"
+    STRING = "string"
+
+
+@dataclass
+class Property:
+    type: PropertyType
+    default: float | bool | list[str] | str | None = None
+    description: str | None = None
+    enum: list[str] | None = None
+    enum_names: list[str] | None = None
+    title: str | None = None
+    one_of: list[OneOf] | None = None
+    items: Items | None = None
+    max_items: float | None = None
+    min_items: float | None = None
+    format: Format | None = None
+    max_length: float | None = None
+    min_length: float | None = None
+    maximum: float | None = None
+    minimum: float | None = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'Property':
+        assert isinstance(obj, dict)
+        type = PropertyType(obj.get("type"))
+        default = from_union([from_float, from_bool, lambda x: from_list(from_str, x), from_str, from_none], obj.get("default"))
+        description = from_union([from_str, from_none], obj.get("description"))
+        enum = from_union([lambda x: from_list(from_str, x), from_none], obj.get("enum"))
+        enum_names = from_union([lambda x: from_list(from_str, x), from_none], obj.get("enumNames"))
+        title = from_union([from_str, from_none], obj.get("title"))
+        one_of = from_union([lambda x: from_list(OneOf.from_dict, x), from_none], obj.get("oneOf"))
+        items = from_union([Items.from_dict, from_none], obj.get("items"))
+        max_items = from_union([from_float, from_none], obj.get("maxItems"))
+        min_items = from_union([from_float, from_none], obj.get("minItems"))
+        format = from_union([Format, from_none], obj.get("format"))
+        max_length = from_union([from_float, from_none], obj.get("maxLength"))
+        min_length = from_union([from_float, from_none], obj.get("minLength"))
+        maximum = from_union([from_float, from_none], obj.get("maximum"))
+        minimum = from_union([from_float, from_none], obj.get("minimum"))
+        return Property(type, default, description, enum, enum_names, title, one_of, items, max_items, min_items, format, max_length, min_length, maximum, minimum)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["type"] = to_enum(PropertyType, self.type)
+        if self.default is not None:
+            result["default"] = from_union([to_float, from_bool, lambda x: from_list(from_str, x), from_str, from_none], self.default)
+        if self.description is not None:
+            result["description"] = from_union([from_str, from_none], self.description)
+        if self.enum is not None:
+            result["enum"] = from_union([lambda x: from_list(from_str, x), from_none], self.enum)
+        if self.enum_names is not None:
+            result["enumNames"] = from_union([lambda x: from_list(from_str, x), from_none], self.enum_names)
+        if self.title is not None:
+            result["title"] = from_union([from_str, from_none], self.title)
+        if self.one_of is not None:
+            result["oneOf"] = from_union([lambda x: from_list(lambda x: to_class(OneOf, x), x), from_none], self.one_of)
+        if self.items is not None:
+            result["items"] = from_union([lambda x: to_class(Items, x), from_none], self.items)
+        if self.max_items is not None:
+            result["maxItems"] = from_union([to_float, from_none], self.max_items)
+        if self.min_items is not None:
+            result["minItems"] = from_union([to_float, from_none], self.min_items)
+        if self.format is not None:
+            result["format"] = from_union([lambda x: to_enum(Format, x), from_none], self.format)
+        if self.max_length is not None:
+            result["maxLength"] = from_union([to_float, from_none], self.max_length)
+        if self.min_length is not None:
+            result["minLength"] = from_union([to_float, from_none], self.min_length)
+        if self.maximum is not None:
+            result["maximum"] = from_union([to_float, from_none], self.maximum)
+        if self.minimum is not None:
+            result["minimum"] = from_union([to_float, from_none], self.minimum)
+        return result
+
+
+class RequestedSchemaType(Enum):
+    OBJECT = "object"
+
+
+@dataclass
+class RequestedSchema:
+    """JSON Schema describing the form fields to present to the user"""
+
+    properties: dict[str, Property]
+    """Form field definitions, keyed by field name"""
+
+    type: RequestedSchemaType
+    """Schema type indicator (always 'object')"""
+
+    required: list[str] | None = None
+    """List of required field names"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'RequestedSchema':
+        assert isinstance(obj, dict)
+        properties = from_dict(Property.from_dict, obj.get("properties"))
+        type = RequestedSchemaType(obj.get("type"))
+        required = from_union([lambda x: from_list(from_str, x), from_none], obj.get("required"))
+        return RequestedSchema(properties, type, required)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["properties"] = from_dict(lambda x: to_class(Property, x), self.properties)
+        result["type"] = to_enum(RequestedSchemaType, self.type)
+        if self.required is not None:
+            result["required"] = from_union([lambda x: from_list(from_str, x), from_none], self.required)
+        return result
+
+
+@dataclass
+class SessionUIElicitationParams:
+    message: str
+    """Message describing what information is needed from the user"""
+
+    requested_schema: RequestedSchema
+    """JSON Schema describing the form fields to present to the user"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionUIElicitationParams':
+        assert isinstance(obj, dict)
+        message = from_str(obj.get("message"))
+        requested_schema = RequestedSchema.from_dict(obj.get("requestedSchema"))
+        return SessionUIElicitationParams(message, requested_schema)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["message"] = from_str(self.message)
+        result["requestedSchema"] = to_class(RequestedSchema, self.requested_schema)
+        return result
+
+
+@dataclass
+class SessionUIHandlePendingElicitationResult:
+    success: bool
+    """Whether the response was accepted. False if the request was already resolved by another
+    client.
+    """
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionUIHandlePendingElicitationResult':
+        assert isinstance(obj, dict)
+        success = from_bool(obj.get("success"))
+        return SessionUIHandlePendingElicitationResult(success)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["success"] = from_bool(self.success)
+        return result
+
+
+@dataclass
+class SessionUIHandlePendingElicitationParamsResult:
+    """The elicitation response (accept with form values, decline, or cancel)"""
+
+    action: Action
+    """The user's response: accept (submitted), decline (rejected), or cancel (dismissed)"""
+
+    content: dict[str, float | bool | list[str] | str] | None = None
+    """The form values submitted by the user (present when action is 'accept')"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionUIHandlePendingElicitationParamsResult':
+        assert isinstance(obj, dict)
+        action = Action(obj.get("action"))
+        content = from_union([lambda x: from_dict(lambda x: from_union([from_float, from_bool, lambda x: from_list(from_str, x), from_str], x), x), from_none], obj.get("content"))
+        return SessionUIHandlePendingElicitationParamsResult(action, content)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["action"] = to_enum(Action, self.action)
+        if self.content is not None:
+            result["content"] = from_union([lambda x: from_dict(lambda x: from_union([to_float, from_bool, lambda x: from_list(from_str, x), from_str], x), x), from_none], self.content)
+        return result
+
+
+@dataclass
+class SessionUIHandlePendingElicitationParams:
+    request_id: str
+    """The unique request ID from the elicitation.requested event"""
+
+    result: SessionUIHandlePendingElicitationParamsResult
+    """The elicitation response (accept with form values, decline, or cancel)"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionUIHandlePendingElicitationParams':
+        assert isinstance(obj, dict)
+        request_id = from_str(obj.get("requestId"))
+        result = SessionUIHandlePendingElicitationParamsResult.from_dict(obj.get("result"))
+        return SessionUIHandlePendingElicitationParams(request_id, result)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["requestId"] = from_str(self.request_id)
+        result["result"] = to_class(SessionUIHandlePendingElicitationParamsResult, self.result)
+        return result
+
+
+@dataclass
 class SessionPermissionsHandlePendingPermissionRequestResult:
     success: bool
+    """Whether the permission request was handled successfully"""
 
     @staticmethod
     def from_dict(obj: Any) -> 'SessionPermissionsHandlePendingPermissionRequestResult':
@@ -1062,6 +1960,162 @@ class SessionPermissionsHandlePendingPermissionRequestParams:
         result: dict = {}
         result["requestId"] = from_str(self.request_id)
         result["result"] = to_class(SessionPermissionsHandlePendingPermissionRequestParamsResult, self.result)
+        return result
+
+
+@dataclass
+class SessionLogResult:
+    event_id: UUID
+    """The unique identifier of the emitted session event"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionLogResult':
+        assert isinstance(obj, dict)
+        event_id = UUID(obj.get("eventId"))
+        return SessionLogResult(event_id)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["eventId"] = str(self.event_id)
+        return result
+
+
+class Level(Enum):
+    """Log severity level. Determines how the message is displayed in the timeline. Defaults to
+    "info".
+    """
+    ERROR = "error"
+    INFO = "info"
+    WARNING = "warning"
+
+
+@dataclass
+class SessionLogParams:
+    message: str
+    """Human-readable message"""
+
+    ephemeral: bool | None = None
+    """When true, the message is transient and not persisted to the session event log on disk"""
+
+    level: Level | None = None
+    """Log severity level. Determines how the message is displayed in the timeline. Defaults to
+    "info".
+    """
+    url: str | None = None
+    """Optional URL the user can open in their browser for more details"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionLogParams':
+        assert isinstance(obj, dict)
+        message = from_str(obj.get("message"))
+        ephemeral = from_union([from_bool, from_none], obj.get("ephemeral"))
+        level = from_union([Level, from_none], obj.get("level"))
+        url = from_union([from_str, from_none], obj.get("url"))
+        return SessionLogParams(message, ephemeral, level, url)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["message"] = from_str(self.message)
+        if self.ephemeral is not None:
+            result["ephemeral"] = from_union([from_bool, from_none], self.ephemeral)
+        if self.level is not None:
+            result["level"] = from_union([lambda x: to_enum(Level, x), from_none], self.level)
+        if self.url is not None:
+            result["url"] = from_union([from_str, from_none], self.url)
+        return result
+
+
+@dataclass
+class SessionShellExecResult:
+    process_id: str
+    """Unique identifier for tracking streamed output"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionShellExecResult':
+        assert isinstance(obj, dict)
+        process_id = from_str(obj.get("processId"))
+        return SessionShellExecResult(process_id)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["processId"] = from_str(self.process_id)
+        return result
+
+
+@dataclass
+class SessionShellExecParams:
+    command: str
+    """Shell command to execute"""
+
+    cwd: str | None = None
+    """Working directory (defaults to session working directory)"""
+
+    timeout: float | None = None
+    """Timeout in milliseconds (default: 30000)"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionShellExecParams':
+        assert isinstance(obj, dict)
+        command = from_str(obj.get("command"))
+        cwd = from_union([from_str, from_none], obj.get("cwd"))
+        timeout = from_union([from_float, from_none], obj.get("timeout"))
+        return SessionShellExecParams(command, cwd, timeout)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["command"] = from_str(self.command)
+        if self.cwd is not None:
+            result["cwd"] = from_union([from_str, from_none], self.cwd)
+        if self.timeout is not None:
+            result["timeout"] = from_union([to_float, from_none], self.timeout)
+        return result
+
+
+@dataclass
+class SessionShellKillResult:
+    killed: bool
+    """Whether the signal was sent successfully"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionShellKillResult':
+        assert isinstance(obj, dict)
+        killed = from_bool(obj.get("killed"))
+        return SessionShellKillResult(killed)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["killed"] = from_bool(self.killed)
+        return result
+
+
+class Signal(Enum):
+    """Signal to send (default: SIGTERM)"""
+
+    SIGINT = "SIGINT"
+    SIGKILL = "SIGKILL"
+    SIGTERM = "SIGTERM"
+
+
+@dataclass
+class SessionShellKillParams:
+    process_id: str
+    """Process identifier returned by shell.exec"""
+
+    signal: Signal | None = None
+    """Signal to send (default: SIGTERM)"""
+
+    @staticmethod
+    def from_dict(obj: Any) -> 'SessionShellKillParams':
+        assert isinstance(obj, dict)
+        process_id = from_str(obj.get("processId"))
+        signal = from_union([Signal, from_none], obj.get("signal"))
+        return SessionShellKillParams(process_id, signal)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["processId"] = from_str(self.process_id)
+        if self.signal is not None:
+            result["signal"] = from_union([lambda x: to_enum(Signal, x), from_none], self.signal)
         return result
 
 
@@ -1289,6 +2343,166 @@ def session_agent_deselect_result_to_dict(x: SessionAgentDeselectResult) -> Any:
     return to_class(SessionAgentDeselectResult, x)
 
 
+def session_agent_reload_result_from_dict(s: Any) -> SessionAgentReloadResult:
+    return SessionAgentReloadResult.from_dict(s)
+
+
+def session_agent_reload_result_to_dict(x: SessionAgentReloadResult) -> Any:
+    return to_class(SessionAgentReloadResult, x)
+
+
+def session_skills_list_result_from_dict(s: Any) -> SessionSkillsListResult:
+    return SessionSkillsListResult.from_dict(s)
+
+
+def session_skills_list_result_to_dict(x: SessionSkillsListResult) -> Any:
+    return to_class(SessionSkillsListResult, x)
+
+
+def session_skills_enable_result_from_dict(s: Any) -> SessionSkillsEnableResult:
+    return SessionSkillsEnableResult.from_dict(s)
+
+
+def session_skills_enable_result_to_dict(x: SessionSkillsEnableResult) -> Any:
+    return to_class(SessionSkillsEnableResult, x)
+
+
+def session_skills_enable_params_from_dict(s: Any) -> SessionSkillsEnableParams:
+    return SessionSkillsEnableParams.from_dict(s)
+
+
+def session_skills_enable_params_to_dict(x: SessionSkillsEnableParams) -> Any:
+    return to_class(SessionSkillsEnableParams, x)
+
+
+def session_skills_disable_result_from_dict(s: Any) -> SessionSkillsDisableResult:
+    return SessionSkillsDisableResult.from_dict(s)
+
+
+def session_skills_disable_result_to_dict(x: SessionSkillsDisableResult) -> Any:
+    return to_class(SessionSkillsDisableResult, x)
+
+
+def session_skills_disable_params_from_dict(s: Any) -> SessionSkillsDisableParams:
+    return SessionSkillsDisableParams.from_dict(s)
+
+
+def session_skills_disable_params_to_dict(x: SessionSkillsDisableParams) -> Any:
+    return to_class(SessionSkillsDisableParams, x)
+
+
+def session_skills_reload_result_from_dict(s: Any) -> SessionSkillsReloadResult:
+    return SessionSkillsReloadResult.from_dict(s)
+
+
+def session_skills_reload_result_to_dict(x: SessionSkillsReloadResult) -> Any:
+    return to_class(SessionSkillsReloadResult, x)
+
+
+def session_mcp_list_result_from_dict(s: Any) -> SessionMCPListResult:
+    return SessionMCPListResult.from_dict(s)
+
+
+def session_mcp_list_result_to_dict(x: SessionMCPListResult) -> Any:
+    return to_class(SessionMCPListResult, x)
+
+
+def session_mcp_enable_result_from_dict(s: Any) -> SessionMCPEnableResult:
+    return SessionMCPEnableResult.from_dict(s)
+
+
+def session_mcp_enable_result_to_dict(x: SessionMCPEnableResult) -> Any:
+    return to_class(SessionMCPEnableResult, x)
+
+
+def session_mcp_enable_params_from_dict(s: Any) -> SessionMCPEnableParams:
+    return SessionMCPEnableParams.from_dict(s)
+
+
+def session_mcp_enable_params_to_dict(x: SessionMCPEnableParams) -> Any:
+    return to_class(SessionMCPEnableParams, x)
+
+
+def session_mcp_disable_result_from_dict(s: Any) -> SessionMCPDisableResult:
+    return SessionMCPDisableResult.from_dict(s)
+
+
+def session_mcp_disable_result_to_dict(x: SessionMCPDisableResult) -> Any:
+    return to_class(SessionMCPDisableResult, x)
+
+
+def session_mcp_disable_params_from_dict(s: Any) -> SessionMCPDisableParams:
+    return SessionMCPDisableParams.from_dict(s)
+
+
+def session_mcp_disable_params_to_dict(x: SessionMCPDisableParams) -> Any:
+    return to_class(SessionMCPDisableParams, x)
+
+
+def session_mcp_reload_result_from_dict(s: Any) -> SessionMCPReloadResult:
+    return SessionMCPReloadResult.from_dict(s)
+
+
+def session_mcp_reload_result_to_dict(x: SessionMCPReloadResult) -> Any:
+    return to_class(SessionMCPReloadResult, x)
+
+
+def session_plugins_list_result_from_dict(s: Any) -> SessionPluginsListResult:
+    return SessionPluginsListResult.from_dict(s)
+
+
+def session_plugins_list_result_to_dict(x: SessionPluginsListResult) -> Any:
+    return to_class(SessionPluginsListResult, x)
+
+
+def session_extensions_list_result_from_dict(s: Any) -> SessionExtensionsListResult:
+    return SessionExtensionsListResult.from_dict(s)
+
+
+def session_extensions_list_result_to_dict(x: SessionExtensionsListResult) -> Any:
+    return to_class(SessionExtensionsListResult, x)
+
+
+def session_extensions_enable_result_from_dict(s: Any) -> SessionExtensionsEnableResult:
+    return SessionExtensionsEnableResult.from_dict(s)
+
+
+def session_extensions_enable_result_to_dict(x: SessionExtensionsEnableResult) -> Any:
+    return to_class(SessionExtensionsEnableResult, x)
+
+
+def session_extensions_enable_params_from_dict(s: Any) -> SessionExtensionsEnableParams:
+    return SessionExtensionsEnableParams.from_dict(s)
+
+
+def session_extensions_enable_params_to_dict(x: SessionExtensionsEnableParams) -> Any:
+    return to_class(SessionExtensionsEnableParams, x)
+
+
+def session_extensions_disable_result_from_dict(s: Any) -> SessionExtensionsDisableResult:
+    return SessionExtensionsDisableResult.from_dict(s)
+
+
+def session_extensions_disable_result_to_dict(x: SessionExtensionsDisableResult) -> Any:
+    return to_class(SessionExtensionsDisableResult, x)
+
+
+def session_extensions_disable_params_from_dict(s: Any) -> SessionExtensionsDisableParams:
+    return SessionExtensionsDisableParams.from_dict(s)
+
+
+def session_extensions_disable_params_to_dict(x: SessionExtensionsDisableParams) -> Any:
+    return to_class(SessionExtensionsDisableParams, x)
+
+
+def session_extensions_reload_result_from_dict(s: Any) -> SessionExtensionsReloadResult:
+    return SessionExtensionsReloadResult.from_dict(s)
+
+
+def session_extensions_reload_result_to_dict(x: SessionExtensionsReloadResult) -> Any:
+    return to_class(SessionExtensionsReloadResult, x)
+
+
 def session_compaction_compact_result_from_dict(s: Any) -> SessionCompactionCompactResult:
     return SessionCompactionCompactResult.from_dict(s)
 
@@ -1313,6 +2527,54 @@ def session_tools_handle_pending_tool_call_params_to_dict(x: SessionToolsHandleP
     return to_class(SessionToolsHandlePendingToolCallParams, x)
 
 
+def session_commands_handle_pending_command_result_from_dict(s: Any) -> SessionCommandsHandlePendingCommandResult:
+    return SessionCommandsHandlePendingCommandResult.from_dict(s)
+
+
+def session_commands_handle_pending_command_result_to_dict(x: SessionCommandsHandlePendingCommandResult) -> Any:
+    return to_class(SessionCommandsHandlePendingCommandResult, x)
+
+
+def session_commands_handle_pending_command_params_from_dict(s: Any) -> SessionCommandsHandlePendingCommandParams:
+    return SessionCommandsHandlePendingCommandParams.from_dict(s)
+
+
+def session_commands_handle_pending_command_params_to_dict(x: SessionCommandsHandlePendingCommandParams) -> Any:
+    return to_class(SessionCommandsHandlePendingCommandParams, x)
+
+
+def session_ui_elicitation_result_from_dict(s: Any) -> SessionUIElicitationResult:
+    return SessionUIElicitationResult.from_dict(s)
+
+
+def session_ui_elicitation_result_to_dict(x: SessionUIElicitationResult) -> Any:
+    return to_class(SessionUIElicitationResult, x)
+
+
+def session_ui_elicitation_params_from_dict(s: Any) -> SessionUIElicitationParams:
+    return SessionUIElicitationParams.from_dict(s)
+
+
+def session_ui_elicitation_params_to_dict(x: SessionUIElicitationParams) -> Any:
+    return to_class(SessionUIElicitationParams, x)
+
+
+def session_ui_handle_pending_elicitation_result_from_dict(s: Any) -> SessionUIHandlePendingElicitationResult:
+    return SessionUIHandlePendingElicitationResult.from_dict(s)
+
+
+def session_ui_handle_pending_elicitation_result_to_dict(x: SessionUIHandlePendingElicitationResult) -> Any:
+    return to_class(SessionUIHandlePendingElicitationResult, x)
+
+
+def session_ui_handle_pending_elicitation_params_from_dict(s: Any) -> SessionUIHandlePendingElicitationParams:
+    return SessionUIHandlePendingElicitationParams.from_dict(s)
+
+
+def session_ui_handle_pending_elicitation_params_to_dict(x: SessionUIHandlePendingElicitationParams) -> Any:
+    return to_class(SessionUIHandlePendingElicitationParams, x)
+
+
 def session_permissions_handle_pending_permission_request_result_from_dict(s: Any) -> SessionPermissionsHandlePendingPermissionRequestResult:
     return SessionPermissionsHandlePendingPermissionRequestResult.from_dict(s)
 
@@ -1327,6 +2589,54 @@ def session_permissions_handle_pending_permission_request_params_from_dict(s: An
 
 def session_permissions_handle_pending_permission_request_params_to_dict(x: SessionPermissionsHandlePendingPermissionRequestParams) -> Any:
     return to_class(SessionPermissionsHandlePendingPermissionRequestParams, x)
+
+
+def session_log_result_from_dict(s: Any) -> SessionLogResult:
+    return SessionLogResult.from_dict(s)
+
+
+def session_log_result_to_dict(x: SessionLogResult) -> Any:
+    return to_class(SessionLogResult, x)
+
+
+def session_log_params_from_dict(s: Any) -> SessionLogParams:
+    return SessionLogParams.from_dict(s)
+
+
+def session_log_params_to_dict(x: SessionLogParams) -> Any:
+    return to_class(SessionLogParams, x)
+
+
+def session_shell_exec_result_from_dict(s: Any) -> SessionShellExecResult:
+    return SessionShellExecResult.from_dict(s)
+
+
+def session_shell_exec_result_to_dict(x: SessionShellExecResult) -> Any:
+    return to_class(SessionShellExecResult, x)
+
+
+def session_shell_exec_params_from_dict(s: Any) -> SessionShellExecParams:
+    return SessionShellExecParams.from_dict(s)
+
+
+def session_shell_exec_params_to_dict(x: SessionShellExecParams) -> Any:
+    return to_class(SessionShellExecParams, x)
+
+
+def session_shell_kill_result_from_dict(s: Any) -> SessionShellKillResult:
+    return SessionShellKillResult.from_dict(s)
+
+
+def session_shell_kill_result_to_dict(x: SessionShellKillResult) -> Any:
+    return to_class(SessionShellKillResult, x)
+
+
+def session_shell_kill_params_from_dict(s: Any) -> SessionShellKillParams:
+    return SessionShellKillParams.from_dict(s)
+
+
+def session_shell_kill_params_to_dict(x: SessionShellKillParams) -> Any:
+    return to_class(SessionShellKillParams, x)
 
 
 def _timeout_kwargs(timeout: float | None) -> dict:
@@ -1438,6 +2748,7 @@ class WorkspaceApi:
         return SessionWorkspaceCreateFileResult.from_dict(await self._client.request("session.workspace.createFile", params_dict, **_timeout_kwargs(timeout)))
 
 
+# Experimental: this API group is experimental and may change or be removed.
 class FleetApi:
     def __init__(self, client: "JsonRpcClient", session_id: str):
         self._client = client
@@ -1449,6 +2760,7 @@ class FleetApi:
         return SessionFleetStartResult.from_dict(await self._client.request("session.fleet.start", params_dict, **_timeout_kwargs(timeout)))
 
 
+# Experimental: this API group is experimental and may change or be removed.
 class AgentApi:
     def __init__(self, client: "JsonRpcClient", session_id: str):
         self._client = client
@@ -1468,7 +2780,90 @@ class AgentApi:
     async def deselect(self, *, timeout: float | None = None) -> SessionAgentDeselectResult:
         return SessionAgentDeselectResult.from_dict(await self._client.request("session.agent.deselect", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
 
+    async def reload(self, *, timeout: float | None = None) -> SessionAgentReloadResult:
+        return SessionAgentReloadResult.from_dict(await self._client.request("session.agent.reload", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
 
+
+# Experimental: this API group is experimental and may change or be removed.
+class SkillsApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def list(self, *, timeout: float | None = None) -> SessionSkillsListResult:
+        return SessionSkillsListResult.from_dict(await self._client.request("session.skills.list", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
+
+    async def enable(self, params: SessionSkillsEnableParams, *, timeout: float | None = None) -> SessionSkillsEnableResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionSkillsEnableResult.from_dict(await self._client.request("session.skills.enable", params_dict, **_timeout_kwargs(timeout)))
+
+    async def disable(self, params: SessionSkillsDisableParams, *, timeout: float | None = None) -> SessionSkillsDisableResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionSkillsDisableResult.from_dict(await self._client.request("session.skills.disable", params_dict, **_timeout_kwargs(timeout)))
+
+    async def reload(self, *, timeout: float | None = None) -> SessionSkillsReloadResult:
+        return SessionSkillsReloadResult.from_dict(await self._client.request("session.skills.reload", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
+
+
+# Experimental: this API group is experimental and may change or be removed.
+class McpApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def list(self, *, timeout: float | None = None) -> SessionMCPListResult:
+        return SessionMCPListResult.from_dict(await self._client.request("session.mcp.list", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
+
+    async def enable(self, params: SessionMCPEnableParams, *, timeout: float | None = None) -> SessionMCPEnableResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionMCPEnableResult.from_dict(await self._client.request("session.mcp.enable", params_dict, **_timeout_kwargs(timeout)))
+
+    async def disable(self, params: SessionMCPDisableParams, *, timeout: float | None = None) -> SessionMCPDisableResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionMCPDisableResult.from_dict(await self._client.request("session.mcp.disable", params_dict, **_timeout_kwargs(timeout)))
+
+    async def reload(self, *, timeout: float | None = None) -> SessionMCPReloadResult:
+        return SessionMCPReloadResult.from_dict(await self._client.request("session.mcp.reload", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
+
+
+# Experimental: this API group is experimental and may change or be removed.
+class PluginsApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def list(self, *, timeout: float | None = None) -> SessionPluginsListResult:
+        return SessionPluginsListResult.from_dict(await self._client.request("session.plugins.list", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
+
+
+# Experimental: this API group is experimental and may change or be removed.
+class ExtensionsApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def list(self, *, timeout: float | None = None) -> SessionExtensionsListResult:
+        return SessionExtensionsListResult.from_dict(await self._client.request("session.extensions.list", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
+
+    async def enable(self, params: SessionExtensionsEnableParams, *, timeout: float | None = None) -> SessionExtensionsEnableResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionExtensionsEnableResult.from_dict(await self._client.request("session.extensions.enable", params_dict, **_timeout_kwargs(timeout)))
+
+    async def disable(self, params: SessionExtensionsDisableParams, *, timeout: float | None = None) -> SessionExtensionsDisableResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionExtensionsDisableResult.from_dict(await self._client.request("session.extensions.disable", params_dict, **_timeout_kwargs(timeout)))
+
+    async def reload(self, *, timeout: float | None = None) -> SessionExtensionsReloadResult:
+        return SessionExtensionsReloadResult.from_dict(await self._client.request("session.extensions.reload", {"sessionId": self._session_id}, **_timeout_kwargs(timeout)))
+
+
+# Experimental: this API group is experimental and may change or be removed.
 class CompactionApi:
     def __init__(self, client: "JsonRpcClient", session_id: str):
         self._client = client
@@ -1489,6 +2884,33 @@ class ToolsApi:
         return SessionToolsHandlePendingToolCallResult.from_dict(await self._client.request("session.tools.handlePendingToolCall", params_dict, **_timeout_kwargs(timeout)))
 
 
+class CommandsApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def handle_pending_command(self, params: SessionCommandsHandlePendingCommandParams, *, timeout: float | None = None) -> SessionCommandsHandlePendingCommandResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionCommandsHandlePendingCommandResult.from_dict(await self._client.request("session.commands.handlePendingCommand", params_dict, **_timeout_kwargs(timeout)))
+
+
+class UiApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def elicitation(self, params: SessionUIElicitationParams, *, timeout: float | None = None) -> SessionUIElicitationResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionUIElicitationResult.from_dict(await self._client.request("session.ui.elicitation", params_dict, **_timeout_kwargs(timeout)))
+
+    async def handle_pending_elicitation(self, params: SessionUIHandlePendingElicitationParams, *, timeout: float | None = None) -> SessionUIHandlePendingElicitationResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionUIHandlePendingElicitationResult.from_dict(await self._client.request("session.ui.handlePendingElicitation", params_dict, **_timeout_kwargs(timeout)))
+
+
 class PermissionsApi:
     def __init__(self, client: "JsonRpcClient", session_id: str):
         self._client = client
@@ -1498,6 +2920,22 @@ class PermissionsApi:
         params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
         params_dict["sessionId"] = self._session_id
         return SessionPermissionsHandlePendingPermissionRequestResult.from_dict(await self._client.request("session.permissions.handlePendingPermissionRequest", params_dict, **_timeout_kwargs(timeout)))
+
+
+class ShellApi:
+    def __init__(self, client: "JsonRpcClient", session_id: str):
+        self._client = client
+        self._session_id = session_id
+
+    async def exec(self, params: SessionShellExecParams, *, timeout: float | None = None) -> SessionShellExecResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionShellExecResult.from_dict(await self._client.request("session.shell.exec", params_dict, **_timeout_kwargs(timeout)))
+
+    async def kill(self, params: SessionShellKillParams, *, timeout: float | None = None) -> SessionShellKillResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionShellKillResult.from_dict(await self._client.request("session.shell.kill", params_dict, **_timeout_kwargs(timeout)))
 
 
 class SessionRpc:
@@ -1511,7 +2949,19 @@ class SessionRpc:
         self.workspace = WorkspaceApi(client, session_id)
         self.fleet = FleetApi(client, session_id)
         self.agent = AgentApi(client, session_id)
+        self.skills = SkillsApi(client, session_id)
+        self.mcp = McpApi(client, session_id)
+        self.plugins = PluginsApi(client, session_id)
+        self.extensions = ExtensionsApi(client, session_id)
         self.compaction = CompactionApi(client, session_id)
         self.tools = ToolsApi(client, session_id)
+        self.commands = CommandsApi(client, session_id)
+        self.ui = UiApi(client, session_id)
         self.permissions = PermissionsApi(client, session_id)
+        self.shell = ShellApi(client, session_id)
+
+    async def log(self, params: SessionLogParams, *, timeout: float | None = None) -> SessionLogResult:
+        params_dict = {k: v for k, v in params.to_dict().items() if v is not None}
+        params_dict["sessionId"] = self._session_id
+        return SessionLogResult.from_dict(await self._client.request("session.log", params_dict, **_timeout_kwargs(timeout)))
 

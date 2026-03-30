@@ -50,8 +50,10 @@ public class CopilotClientOptions
     {
         if (other is null) return;
 
-        AutoRestart = other.AutoRestart;
         AutoStart = other.AutoStart;
+#pragma warning disable CS0618 // Obsolete member
+        AutoRestart = other.AutoRestart;
+#pragma warning restore CS0618
         CliArgs = (string[]?)other.CliArgs?.Clone();
         CliPath = other.CliPath;
         CliUrl = other.CliUrl;
@@ -61,6 +63,7 @@ public class CopilotClientOptions
         Logger = other.Logger;
         LogLevel = other.LogLevel;
         Port = other.Port;
+        Telemetry = other.Telemetry;
         UseLoggedInUser = other.UseLoggedInUser;
         UseStdio = other.UseStdio;
         OnListModels = other.OnListModels;
@@ -99,9 +102,10 @@ public class CopilotClientOptions
     /// </summary>
     public bool AutoStart { get; set; } = true;
     /// <summary>
-    /// Whether to automatically restart the CLI server if it exits unexpectedly.
+    /// Obsolete. This option has no effect.
     /// </summary>
-    public bool AutoRestart { get; set; } = true;
+    [Obsolete("AutoRestart has no effect and will be removed in a future release.")]
+    public bool AutoRestart { get; set; }
     /// <summary>
     /// Environment variables to pass to the CLI process.
     /// </summary>
@@ -146,6 +150,12 @@ public class CopilotClientOptions
     public Func<CancellationToken, Task<List<ModelInfo>>>? OnListModels { get; set; }
 
     /// <summary>
+    /// OpenTelemetry configuration for the CLI server.
+    /// When set to a non-<see langword="null"/> instance, the CLI server is started with OpenTelemetry instrumentation enabled.
+    /// </summary>
+    public TelemetryConfig? Telemetry { get; set; }
+
+    /// <summary>
     /// Creates a shallow clone of this <see cref="CopilotClientOptions"/> instance.
     /// </summary>
     /// <remarks>
@@ -158,6 +168,52 @@ public class CopilotClientOptions
     {
         return new(this);
     }
+}
+
+/// <summary>
+/// OpenTelemetry configuration for the Copilot CLI server.
+/// </summary>
+public sealed class TelemetryConfig
+{
+    /// <summary>
+    /// OTLP exporter endpoint URL.
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> environment variable.
+    /// </remarks>
+    public string? OtlpEndpoint { get; set; }
+
+    /// <summary>
+    /// File path for the file exporter.
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>COPILOT_OTEL_FILE_EXPORTER_PATH</c> environment variable.
+    /// </remarks>
+    public string? FilePath { get; set; }
+
+    /// <summary>
+    /// Exporter type (<c>"otlp-http"</c> or <c>"file"</c>).
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>COPILOT_OTEL_EXPORTER_TYPE</c> environment variable.
+    /// </remarks>
+    public string? ExporterType { get; set; }
+
+    /// <summary>
+    /// Source name for telemetry spans.
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>COPILOT_OTEL_SOURCE_NAME</c> environment variable.
+    /// </remarks>
+    public string? SourceName { get; set; }
+
+    /// <summary>
+    /// Whether to capture message content as part of telemetry.
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT</c> environment variable.
+    /// </remarks>
+    public bool? CaptureContent { get; set; }
 }
 
 /// <summary>
@@ -266,38 +322,6 @@ public class ToolInvocation
 /// </summary>
 public delegate Task<object?> ToolHandler(ToolInvocation invocation);
 
-/// <summary>
-/// Represents a permission request from the server for a tool operation.
-/// </summary>
-public class PermissionRequest
-{
-    /// <summary>
-    /// Kind of permission being requested.
-    /// <list type="bullet">
-    /// <item><description><c>"shell"</c> — execute a shell command.</description></item>
-    /// <item><description><c>"write"</c> — write to a file.</description></item>
-    /// <item><description><c>"read"</c> — read a file.</description></item>
-    /// <item><description><c>"mcp"</c> — invoke an MCP server tool.</description></item>
-    /// <item><description><c>"url"</c> — access a URL.</description></item>
-    /// <item><description><c>"custom-tool"</c> — invoke a custom tool.</description></item>
-    /// </list>
-    /// </summary>
-    [JsonPropertyName("kind")]
-    public string Kind { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Identifier of the tool call that triggered the permission request.
-    /// </summary>
-    [JsonPropertyName("toolCallId")]
-    public string? ToolCallId { get; set; }
-
-    /// <summary>
-    /// Additional properties not explicitly modeled.
-    /// </summary>
-    [JsonExtensionData]
-    public Dictionary<string, object>? ExtensionData { get; set; }
-}
-
 /// <summary>Describes the kind of a permission request result.</summary>
 [JsonConverter(typeof(PermissionRequestResultKind.Converter))]
 [DebuggerDisplay("{Value,nq}")]
@@ -314,6 +338,9 @@ public readonly struct PermissionRequestResultKind : IEquatable<PermissionReques
 
     /// <summary>Gets the kind indicating the permission was denied interactively by the user.</summary>
     public static PermissionRequestResultKind DeniedInteractivelyByUser { get; } = new("denied-interactively-by-user");
+
+    /// <summary>Gets the kind indicating the permission was denied interactively by the user.</summary>
+    public static PermissionRequestResultKind NoResult { get; } = new("no-result");
 
     /// <summary>Gets the underlying string value of this <see cref="PermissionRequestResultKind"/>.</summary>
     public string Value => _value ?? string.Empty;
@@ -382,6 +409,7 @@ public class PermissionRequestResult
     /// <item><description><c>"denied-by-rules"</c> — denied by configured permission rules.</description></item>
     /// <item><description><c>"denied-interactively-by-user"</c> — the user explicitly denied the request.</description></item>
     /// <item><description><c>"denied-no-approval-rule-and-could-not-request-from-user"</c> — no rule matched and user approval was unavailable.</description></item>
+    /// <item><description><c>"no-result"</c> — leave the pending permission request unanswered.</description></item>
     /// </list>
     /// </summary>
     [JsonPropertyName("kind")]
@@ -940,7 +968,86 @@ public enum SystemMessageMode
     Append,
     /// <summary>Replace the default system message entirely.</summary>
     [JsonStringEnumMemberName("replace")]
-    Replace
+    Replace,
+    /// <summary>Override individual sections of the system prompt.</summary>
+    [JsonStringEnumMemberName("customize")]
+    Customize
+}
+
+/// <summary>
+/// Specifies the operation to perform on a system prompt section.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<SectionOverrideAction>))]
+public enum SectionOverrideAction
+{
+    /// <summary>Replace the section content entirely.</summary>
+    [JsonStringEnumMemberName("replace")]
+    Replace,
+    /// <summary>Remove the section from the prompt.</summary>
+    [JsonStringEnumMemberName("remove")]
+    Remove,
+    /// <summary>Append content after the existing section.</summary>
+    [JsonStringEnumMemberName("append")]
+    Append,
+    /// <summary>Prepend content before the existing section.</summary>
+    [JsonStringEnumMemberName("prepend")]
+    Prepend,
+    /// <summary>Transform the section content via a callback.</summary>
+    [JsonStringEnumMemberName("transform")]
+    Transform
+}
+
+/// <summary>
+/// Override operation for a single system prompt section.
+/// </summary>
+public class SectionOverride
+{
+    /// <summary>
+    /// The operation to perform on this section. Ignored when Transform is set.
+    /// </summary>
+    [JsonPropertyName("action")]
+    public SectionOverrideAction? Action { get; set; }
+
+    /// <summary>
+    /// Content for the override. Optional for all actions. Ignored for remove.
+    /// </summary>
+    [JsonPropertyName("content")]
+    public string? Content { get; set; }
+
+    /// <summary>
+    /// Transform callback. When set, takes precedence over Action.
+    /// Receives current section content, returns transformed content.
+    /// Not serialized — the SDK handles this locally.
+    /// </summary>
+    [JsonIgnore]
+    public Func<string, Task<string>>? Transform { get; set; }
+}
+
+/// <summary>
+/// Known system prompt section identifiers for the "customize" mode.
+/// </summary>
+public static class SystemPromptSections
+{
+    /// <summary>Agent identity preamble and mode statement.</summary>
+    public const string Identity = "identity";
+    /// <summary>Response style, conciseness rules, output formatting preferences.</summary>
+    public const string Tone = "tone";
+    /// <summary>Tool usage patterns, parallel calling, batching guidelines.</summary>
+    public const string ToolEfficiency = "tool_efficiency";
+    /// <summary>CWD, OS, git root, directory listing, available tools.</summary>
+    public const string EnvironmentContext = "environment_context";
+    /// <summary>Coding rules, linting/testing, ecosystem tools, style.</summary>
+    public const string CodeChangeRules = "code_change_rules";
+    /// <summary>Tips, behavioral best practices, behavioral guidelines.</summary>
+    public const string Guidelines = "guidelines";
+    /// <summary>Environment limitations, prohibited actions, security policies.</summary>
+    public const string Safety = "safety";
+    /// <summary>Per-tool usage instructions.</summary>
+    public const string ToolInstructions = "tool_instructions";
+    /// <summary>Repository and organization custom instructions.</summary>
+    public const string CustomInstructions = "custom_instructions";
+    /// <summary>End-of-prompt instructions: parallel tool calling, persistence, task completion.</summary>
+    public const string LastInstructions = "last_instructions";
 }
 
 /// <summary>
@@ -949,13 +1056,21 @@ public enum SystemMessageMode
 public class SystemMessageConfig
 {
     /// <summary>
-    /// How the system message is applied (append or replace).
+    /// How the system message is applied (append, replace, or customize).
     /// </summary>
     public SystemMessageMode? Mode { get; set; }
+
     /// <summary>
-    /// Content of the system message.
+    /// Content of the system message. Used by append and replace modes.
+    /// In customize mode, additional content appended after all sections.
     /// </summary>
     public string? Content { get; set; }
+
+    /// <summary>
+    /// Section-level overrides for customize mode.
+    /// Keys are section identifiers (see <see cref="SystemPromptSections"/>).
+    /// </summary>
+    public Dictionary<string, SectionOverride>? Sections { get; set; }
 }
 
 /// <summary>
@@ -1215,6 +1330,7 @@ public class SessionConfig
             ? new Dictionary<string, object>(other.McpServers, other.McpServers.Comparer)
             : null;
         Model = other.Model;
+        OnEvent = other.OnEvent;
         OnPermissionRequest = other.OnPermissionRequest;
         OnUserInputRequest = other.OnUserInputRequest;
         Provider = other.Provider;
@@ -1340,6 +1456,18 @@ public class SessionConfig
     public InfiniteSessionConfig? InfiniteSessions { get; set; }
 
     /// <summary>
+    /// Optional event handler that is registered on the session before the
+    /// session.create RPC is issued.
+    /// </summary>
+    /// <remarks>
+    /// Equivalent to calling <see cref="CopilotSession.On"/> immediately
+    /// after creation, but executes earlier in the lifecycle so no events are missed.
+    /// Using this property rather than <see cref="CopilotSession.On"/> guarantees that early events emitted 
+    /// by the CLI during session creation (e.g. session.start) are delivered to the handler.
+    /// </remarks>
+    public SessionEventHandler? OnEvent { get; set; }
+
+    /// <summary>
     /// Creates a shallow clone of this <see cref="SessionConfig"/> instance.
     /// </summary>
     /// <remarks>
@@ -1387,6 +1515,7 @@ public class ResumeSessionConfig
             ? new Dictionary<string, object>(other.McpServers, other.McpServers.Comparer)
             : null;
         Model = other.Model;
+        OnEvent = other.OnEvent;
         OnPermissionRequest = other.OnPermissionRequest;
         OnUserInputRequest = other.OnUserInputRequest;
         Provider = other.Provider;
@@ -1513,6 +1642,12 @@ public class ResumeSessionConfig
     /// Infinite session configuration for persistent workspaces and automatic compaction.
     /// </summary>
     public InfiniteSessionConfig? InfiniteSessions { get; set; }
+
+    /// <summary>
+    /// Optional event handler registered before the session.resume RPC is issued,
+    /// ensuring early events are delivered. See <see cref="SessionConfig.OnEvent"/>.
+    /// </summary>
+    public SessionEventHandler? OnEvent { get; set; }
 
     /// <summary>
     /// Creates a shallow clone of this <see cref="ResumeSessionConfig"/> instance.
@@ -1984,6 +2119,30 @@ public class SetForegroundSessionResponse
     public string? Error { get; set; }
 }
 
+/// <summary>
+/// Content data for a single system prompt section in a transform RPC call.
+/// </summary>
+public class SystemMessageTransformSection
+{
+    /// <summary>
+    /// The content of the section.
+    /// </summary>
+    [JsonPropertyName("content")]
+    public string? Content { get; set; }
+}
+
+/// <summary>
+/// Response to a systemMessage.transform RPC call.
+/// </summary>
+public class SystemMessageTransformRpcResponse
+{
+    /// <summary>
+    /// The transformed sections keyed by section identifier.
+    /// </summary>
+    [JsonPropertyName("sections")]
+    public Dictionary<string, SystemMessageTransformSection>? Sections { get; set; }
+}
+
 [JsonSourceGenerationOptions(
     JsonSerializerDefaults.Web,
     AllowOutOfOrderMetadataProperties = true,
@@ -2005,7 +2164,6 @@ public class SetForegroundSessionResponse
 [JsonSerializable(typeof(ModelPolicy))]
 [JsonSerializable(typeof(ModelSupports))]
 [JsonSerializable(typeof(ModelVisionLimits))]
-[JsonSerializable(typeof(PermissionRequest))]
 [JsonSerializable(typeof(PermissionRequestResult))]
 [JsonSerializable(typeof(PingRequest))]
 [JsonSerializable(typeof(PingResponse))]
@@ -2014,6 +2172,7 @@ public class SetForegroundSessionResponse
 [JsonSerializable(typeof(SessionLifecycleEvent))]
 [JsonSerializable(typeof(SessionLifecycleEventMetadata))]
 [JsonSerializable(typeof(SessionListFilter))]
+[JsonSerializable(typeof(SectionOverride))]
 [JsonSerializable(typeof(SessionMetadata))]
 [JsonSerializable(typeof(SetForegroundSessionResponse))]
 [JsonSerializable(typeof(SystemMessageConfig))]
