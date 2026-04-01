@@ -26,6 +26,38 @@ describe("CopilotClient", () => {
         );
     });
 
+    it("does not respond to v3 permission requests when handler returns no-result", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const session = await client.createSession({
+            onPermissionRequest: () => ({ kind: "no-result" }),
+        });
+        const spy = vi.spyOn(session.rpc.permissions, "handlePendingPermissionRequest");
+
+        await (session as any)._executePermissionAndRespond("request-1", { kind: "write" });
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("throws when a v2 permission handler returns no-result", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const session = await client.createSession({
+            onPermissionRequest: () => ({ kind: "no-result" }),
+        });
+
+        await expect(
+            (client as any).handlePermissionRequestV2({
+                sessionId: session.sessionId,
+                permissionRequest: { kind: "write" },
+            })
+        ).rejects.toThrow(/protocol v2 server/);
+    });
+
     it("forwards clientName in session.create request", async () => {
         const client = new CopilotClient();
         await client.start();
@@ -86,6 +118,31 @@ describe("CopilotClient", () => {
         expect(spy).toHaveBeenCalledWith("session.model.switchTo", {
             sessionId: session.sessionId,
             modelId: "gpt-4.1",
+        });
+
+        spy.mockRestore();
+    });
+
+    it("sends reasoningEffort with session.model.switchTo when provided", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const session = await client.createSession({ onPermissionRequest: approveAll });
+
+        const spy = vi
+            .spyOn((client as any).connection!, "sendRequest")
+            .mockImplementation(async (method: string, _params: any) => {
+                if (method === "session.model.switchTo") return {};
+                throw new Error(`Unexpected method: ${method}`);
+            });
+
+        await session.setModel("claude-sonnet-4.6", { reasoningEffort: "high" });
+
+        expect(spy).toHaveBeenCalledWith("session.model.switchTo", {
+            sessionId: session.sessionId,
+            modelId: "claude-sonnet-4.6",
+            reasoningEffort: "high",
         });
 
         spy.mockRestore();
@@ -209,6 +266,15 @@ describe("CopilotClient", () => {
             });
 
             expect((client as any).isExternalServer).toBe(true);
+        });
+
+        it("should not resolve cliPath when cliUrl is provided", () => {
+            const client = new CopilotClient({
+                cliUrl: "localhost:8080",
+                logLevel: "error",
+            });
+
+            expect(client["options"].cliPath).toBeUndefined();
         });
     });
 
@@ -501,6 +567,442 @@ describe("CopilotClient", () => {
             const models = await client.listModels();
             expect(handler).toHaveBeenCalledTimes(1);
             expect(models).toEqual(customModels);
+        });
+    });
+
+    describe("unexpected disconnection", () => {
+        it("transitions to disconnected when child process is killed", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            expect(client.getState()).toBe("connected");
+
+            // Kill the child process to simulate unexpected termination
+            const proc = (client as any).cliProcess as import("node:child_process").ChildProcess;
+            proc.kill();
+
+            // Wait for the connection.onClose handler to fire
+            await vi.waitFor(() => {
+                expect(client.getState()).toBe("disconnected");
+            });
+        });
+    });
+
+    describe("onGetTraceContext", () => {
+        it("includes trace context from callback in session.create request", async () => {
+            const traceContext = {
+                traceparent: "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01",
+                tracestate: "vendor=opaque",
+            };
+            const provider = vi.fn().mockReturnValue(traceContext);
+            const client = new CopilotClient({ onGetTraceContext: provider });
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const spy = vi.spyOn((client as any).connection!, "sendRequest");
+            await client.createSession({ onPermissionRequest: approveAll });
+
+            expect(provider).toHaveBeenCalled();
+            expect(spy).toHaveBeenCalledWith(
+                "session.create",
+                expect.objectContaining({
+                    traceparent: "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01",
+                    tracestate: "vendor=opaque",
+                })
+            );
+        });
+
+        it("includes trace context from callback in session.resume request", async () => {
+            const traceContext = {
+                traceparent: "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01",
+            };
+            const provider = vi.fn().mockReturnValue(traceContext);
+            const client = new CopilotClient({ onGetTraceContext: provider });
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({ onPermissionRequest: approveAll });
+            const spy = vi
+                .spyOn((client as any).connection!, "sendRequest")
+                .mockImplementation(async (method: string, params: any) => {
+                    if (method === "session.resume") return { sessionId: params.sessionId };
+                    throw new Error(`Unexpected method: ${method}`);
+                });
+            await client.resumeSession(session.sessionId, { onPermissionRequest: approveAll });
+
+            expect(spy).toHaveBeenCalledWith(
+                "session.resume",
+                expect.objectContaining({
+                    traceparent: "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01",
+                })
+            );
+        });
+
+        it("includes trace context from callback in session.send request", async () => {
+            const traceContext = {
+                traceparent: "00-fedcba0987654321fedcba0987654321-abcdef1234567890-01",
+            };
+            const provider = vi.fn().mockReturnValue(traceContext);
+            const client = new CopilotClient({ onGetTraceContext: provider });
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({ onPermissionRequest: approveAll });
+            const spy = vi
+                .spyOn((client as any).connection!, "sendRequest")
+                .mockImplementation(async (method: string) => {
+                    if (method === "session.send") return { responseId: "r1" };
+                    throw new Error(`Unexpected method: ${method}`);
+                });
+            await session.send({ prompt: "hello" });
+
+            expect(spy).toHaveBeenCalledWith(
+                "session.send",
+                expect.objectContaining({
+                    traceparent: "00-fedcba0987654321fedcba0987654321-abcdef1234567890-01",
+                })
+            );
+        });
+
+        it("does not include trace context when no callback is provided", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const spy = vi.spyOn((client as any).connection!, "sendRequest");
+            await client.createSession({ onPermissionRequest: approveAll });
+
+            const [, params] = spy.mock.calls.find(([method]) => method === "session.create")!;
+            expect(params.traceparent).toBeUndefined();
+            expect(params.tracestate).toBeUndefined();
+        });
+    });
+
+    describe("commands", () => {
+        it("forwards commands in session.create RPC", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const spy = vi.spyOn((client as any).connection!, "sendRequest");
+            await client.createSession({
+                onPermissionRequest: approveAll,
+                commands: [
+                    { name: "deploy", description: "Deploy the app", handler: async () => {} },
+                    { name: "rollback", handler: async () => {} },
+                ],
+            });
+
+            const payload = spy.mock.calls.find((c) => c[0] === "session.create")![1] as any;
+            expect(payload.commands).toEqual([
+                { name: "deploy", description: "Deploy the app" },
+                { name: "rollback", description: undefined },
+            ]);
+        });
+
+        it("forwards commands in session.resume RPC", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({ onPermissionRequest: approveAll });
+            const spy = vi
+                .spyOn((client as any).connection!, "sendRequest")
+                .mockImplementation(async (method: string, params: any) => {
+                    if (method === "session.resume") return { sessionId: params.sessionId };
+                    throw new Error(`Unexpected method: ${method}`);
+                });
+            await client.resumeSession(session.sessionId, {
+                onPermissionRequest: approveAll,
+                commands: [{ name: "deploy", description: "Deploy", handler: async () => {} }],
+            });
+
+            const payload = spy.mock.calls.find((c) => c[0] === "session.resume")![1] as any;
+            expect(payload.commands).toEqual([{ name: "deploy", description: "Deploy" }]);
+            spy.mockRestore();
+        });
+
+        it("routes command.execute event to the correct handler", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const handler = vi.fn();
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                commands: [{ name: "deploy", handler }],
+            });
+
+            // Mock the RPC response so handlePendingCommand doesn't fail
+            const rpcSpy = vi
+                .spyOn((client as any).connection!, "sendRequest")
+                .mockImplementation(async (method: string) => {
+                    if (method === "session.commands.handlePendingCommand")
+                        return { success: true };
+                    throw new Error(`Unexpected method: ${method}`);
+                });
+
+            // Simulate a command.execute event
+            (session as any)._dispatchEvent({
+                id: "evt-1",
+                timestamp: new Date().toISOString(),
+                parentId: null,
+                ephemeral: true,
+                type: "command.execute",
+                data: {
+                    requestId: "req-1",
+                    command: "/deploy production",
+                    commandName: "deploy",
+                    args: "production",
+                },
+            });
+
+            // Wait for the async handler to complete
+            await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+            expect(handler).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    sessionId: session.sessionId,
+                    command: "/deploy production",
+                    commandName: "deploy",
+                    args: "production",
+                })
+            );
+
+            // Verify handlePendingCommand was called with the requestId
+            expect(rpcSpy).toHaveBeenCalledWith(
+                "session.commands.handlePendingCommand",
+                expect.objectContaining({ requestId: "req-1" })
+            );
+            rpcSpy.mockRestore();
+        });
+
+        it("sends error when command handler throws", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                commands: [
+                    {
+                        name: "fail",
+                        handler: () => {
+                            throw new Error("deploy failed");
+                        },
+                    },
+                ],
+            });
+
+            const rpcSpy = vi
+                .spyOn((client as any).connection!, "sendRequest")
+                .mockImplementation(async (method: string) => {
+                    if (method === "session.commands.handlePendingCommand")
+                        return { success: true };
+                    throw new Error(`Unexpected method: ${method}`);
+                });
+
+            (session as any)._dispatchEvent({
+                id: "evt-2",
+                timestamp: new Date().toISOString(),
+                parentId: null,
+                ephemeral: true,
+                type: "command.execute",
+                data: {
+                    requestId: "req-2",
+                    command: "/fail",
+                    commandName: "fail",
+                    args: "",
+                },
+            });
+
+            await vi.waitFor(() =>
+                expect(rpcSpy).toHaveBeenCalledWith(
+                    "session.commands.handlePendingCommand",
+                    expect.objectContaining({ requestId: "req-2", error: "deploy failed" })
+                )
+            );
+            rpcSpy.mockRestore();
+        });
+
+        it("sends error for unknown command", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                commands: [{ name: "deploy", handler: async () => {} }],
+            });
+
+            const rpcSpy = vi
+                .spyOn((client as any).connection!, "sendRequest")
+                .mockImplementation(async (method: string) => {
+                    if (method === "session.commands.handlePendingCommand")
+                        return { success: true };
+                    throw new Error(`Unexpected method: ${method}`);
+                });
+
+            (session as any)._dispatchEvent({
+                id: "evt-3",
+                timestamp: new Date().toISOString(),
+                parentId: null,
+                ephemeral: true,
+                type: "command.execute",
+                data: {
+                    requestId: "req-3",
+                    command: "/unknown",
+                    commandName: "unknown",
+                    args: "",
+                },
+            });
+
+            await vi.waitFor(() =>
+                expect(rpcSpy).toHaveBeenCalledWith(
+                    "session.commands.handlePendingCommand",
+                    expect.objectContaining({
+                        requestId: "req-3",
+                        error: expect.stringContaining("Unknown command"),
+                    })
+                )
+            );
+            rpcSpy.mockRestore();
+        });
+    });
+
+    describe("ui elicitation", () => {
+        it("reads capabilities from session.create response", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            // Intercept session.create to inject capabilities
+            const origSendRequest = (client as any).connection!.sendRequest.bind(
+                (client as any).connection
+            );
+            vi.spyOn((client as any).connection!, "sendRequest").mockImplementation(
+                async (method: string, params: any) => {
+                    if (method === "session.create") {
+                        const result = await origSendRequest(method, params);
+                        return {
+                            ...result,
+                            capabilities: { ui: { elicitation: true } },
+                        };
+                    }
+                    return origSendRequest(method, params);
+                }
+            );
+
+            const session = await client.createSession({ onPermissionRequest: approveAll });
+            expect(session.capabilities).toEqual({ ui: { elicitation: true } });
+        });
+
+        it("defaults capabilities when not injected", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({ onPermissionRequest: approveAll });
+            // CLI returns actual capabilities (elicitation false in headless mode)
+            expect(session.capabilities.ui?.elicitation).toBe(false);
+        });
+
+        it("elicitation throws when capability is missing", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({ onPermissionRequest: approveAll });
+
+            await expect(
+                session.ui.elicitation({
+                    message: "Enter name",
+                    requestedSchema: {
+                        type: "object",
+                        properties: { name: { type: "string", minLength: 1 } },
+                        required: ["name"],
+                    },
+                })
+            ).rejects.toThrow(/not supported/);
+        });
+
+        it("sends requestElicitation flag when onElicitationRequest is provided", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const rpcSpy = vi.spyOn((client as any).connection!, "sendRequest");
+
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                onElicitationRequest: async () => ({
+                    action: "accept" as const,
+                    content: {},
+                }),
+            });
+            expect(session).toBeDefined();
+
+            const createCall = rpcSpy.mock.calls.find((c) => c[0] === "session.create");
+            expect(createCall).toBeDefined();
+            expect(createCall![1]).toEqual(
+                expect.objectContaining({
+                    requestElicitation: true,
+                })
+            );
+            rpcSpy.mockRestore();
+        });
+
+        it("does not send requestElicitation when no handler provided", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const rpcSpy = vi.spyOn((client as any).connection!, "sendRequest");
+
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+            });
+            expect(session).toBeDefined();
+
+            const createCall = rpcSpy.mock.calls.find((c) => c[0] === "session.create");
+            expect(createCall).toBeDefined();
+            expect(createCall![1]).toEqual(
+                expect.objectContaining({
+                    requestElicitation: false,
+                })
+            );
+            rpcSpy.mockRestore();
+        });
+
+        it("sends cancel when elicitation handler throws", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                onElicitationRequest: async () => {
+                    throw new Error("handler exploded");
+                },
+            });
+
+            const rpcSpy = vi.spyOn((client as any).connection!, "sendRequest");
+
+            await session._handleElicitationRequest({ message: "Pick a color" }, "req-123");
+
+            const cancelCall = rpcSpy.mock.calls.find(
+                (c) =>
+                    c[0] === "session.ui.handlePendingElicitation" &&
+                    (c[1] as any)?.result?.action === "cancel"
+            );
+            expect(cancelCall).toBeDefined();
+            expect(cancelCall![1]).toEqual(
+                expect.objectContaining({
+                    requestId: "req-123",
+                    result: { action: "cancel" },
+                })
+            );
+            rpcSpy.mockRestore();
         });
     });
 });
