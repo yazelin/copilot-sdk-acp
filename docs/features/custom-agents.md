@@ -65,14 +65,15 @@ const session = await client.createSession({
 
 ```python
 from copilot import CopilotClient
-from copilot.types import PermissionRequestResult
+from copilot.session import PermissionRequestResult
 
 client = CopilotClient()
 await client.start()
 
-session = await client.create_session({
-    "model": "gpt-4.1",
-    "custom_agents": [
+session = await client.create_session(
+    on_permission_request=lambda req, inv: PermissionRequestResult(kind="approved"),
+    model="gpt-4.1",
+    custom_agents=[
         {
             "name": "researcher",
             "display_name": "Research Agent",
@@ -88,8 +89,7 @@ session = await client.create_session({
             "prompt": "You are a code editor. Make minimal, surgical changes to files as requested.",
         },
     ],
-    "on_permission_request": lambda req, inv: PermissionRequestResult(kind="approved"),
-})
+)
 ```
 
 </details>
@@ -205,6 +205,41 @@ await using var session = await client.CreateSessionAsync(new SessionConfig
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+try (var client = new CopilotClient()) {
+    client.start().get();
+
+    var session = client.createSession(
+        new SessionConfig()
+            .setModel("gpt-4.1")
+            .setCustomAgents(List.of(
+                new CustomAgentConfig()
+                    .setName("researcher")
+                    .setDisplayName("Research Agent")
+                    .setDescription("Explores codebases and answers questions using read-only tools")
+                    .setTools(List.of("grep", "glob", "view"))
+                    .setPrompt("You are a research assistant. Analyze code and answer questions. Do not modify any files."),
+                new CustomAgentConfig()
+                    .setName("editor")
+                    .setDisplayName("Editor Agent")
+                    .setDescription("Makes targeted code changes")
+                    .setTools(List.of("view", "edit", "bash"))
+                    .setPrompt("You are a code editor. Make minimal, surgical changes to files as requested.")
+            ))
+            .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    ).get();
+}
+```
+
+</details>
+
 ## Configuration Reference
 
 | Property | Type | Required | Description |
@@ -258,8 +293,9 @@ const session = await client.createSession({
 
 <!-- docs-validate: skip -->
 ```python
-session = await client.create_session({
-    "custom_agents": [
+session = await client.create_session(
+    on_permission_request=PermissionHandler.approve_all,
+    custom_agents=[
         {
             "name": "researcher",
             "prompt": "You are a research assistant. Analyze code and answer questions.",
@@ -269,8 +305,8 @@ session = await client.create_session({
             "prompt": "You are a code editor. Make minimal, surgical changes.",
         },
     ],
-    "agent": "researcher",  # Pre-select the researcher agent
-})
+    agent="researcher",  # Pre-select the researcher agent
+)
 ```
 
 </details>
@@ -311,6 +347,28 @@ var session = await client.CreateSessionAsync(new SessionConfig
     },
     Agent = "researcher", // Pre-select the researcher agent
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+<!-- docs-validate: skip -->
+```java
+var session = client.createSession(
+    new SessionConfig()
+        .setCustomAgents(List.of(
+            new CustomAgentConfig()
+                .setName("researcher")
+                .setPrompt("You are a research assistant. Analyze code and answer questions."),
+            new CustomAgentConfig()
+                .setName("editor")
+                .setPrompt("You are a code editor. Make minimal, surgical changes.")
+        ))
+        .setAgent("researcher") // Pre-select the researcher agent
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+).get();
 ```
 
 </details>
@@ -413,9 +471,7 @@ def handle_event(event):
 
 unsubscribe = session.on(handle_event)
 
-response = await session.send_and_wait({
-    "prompt": "Research how authentication works in this codebase"
-})
+response = await session.send_and_wait("Research how authentication works in this codebase")
 ```
 
 </details>
@@ -558,6 +614,34 @@ await session.SendAndWaitAsync(new MessageOptions
 {
     Prompt = "Research how authentication works in this codebase"
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+session.on(event -> {
+    if (event instanceof SubagentStartedEvent e) {
+        System.out.println("▶ Sub-agent started: " + e.getData().agentDisplayName());
+        System.out.println("  Description: " + e.getData().agentDescription());
+        System.out.println("  Tool call ID: " + e.getData().toolCallId());
+    } else if (event instanceof SubagentCompletedEvent e) {
+        System.out.println("✅ Sub-agent completed: " + e.getData().agentName());
+    } else if (event instanceof SubagentFailedEvent e) {
+        System.out.println("❌ Sub-agent failed: " + e.getData().agentName());
+        System.out.println("  Error: " + e.getData().error());
+    } else if (event instanceof SubagentSelectedEvent e) {
+        System.out.println("🎯 Agent selected: " + e.getData().agentDisplayName());
+    } else if (event instanceof SubagentDeselectedEvent e) {
+        System.out.println("↩ Agent deselected, returning to parent");
+    }
+});
+
+var response = session.sendAndWait(
+    new MessageOptions().setPrompt("Research how authentication works in this codebase")
+).get();
 ```
 
 </details>

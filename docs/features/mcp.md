@@ -60,37 +60,33 @@ const session = await client.createSession({
 ```python
 import asyncio
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 async def main():
     client = CopilotClient()
     await client.start()
 
-    session = await client.create_session({
-        "model": "gpt-5",
-        "mcp_servers": {
-            # Local MCP server (stdio)
-            "my-local-server": {
-                "type": "local",
-                "command": "python",
-                "args": ["./mcp_server.py"],
-                "env": {"DEBUG": "true"},
-                "cwd": "./servers",
-                "tools": ["*"],
-                "timeout": 30000,
-            },
-            # Remote MCP server (HTTP)
-            "github": {
-                "type": "http",
-                "url": "https://api.githubcopilot.com/mcp/",
-                "headers": {"Authorization": "Bearer ${TOKEN}"},
-                "tools": ["*"],
-            },
+    session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-5", mcp_servers={
+        # Local MCP server (stdio)
+        "my-local-server": {
+            "type": "local",
+            "command": "python",
+            "args": ["./mcp_server.py"],
+            "env": {"DEBUG": "true"},
+            "cwd": "./servers",
+            "tools": ["*"],
+            "timeout": 30000,
+        },
+        # Remote MCP server (HTTP)
+        "github": {
+            "type": "http",
+            "url": "https://api.githubcopilot.com/mcp/",
+            "headers": {"Authorization": "Bearer ${TOKEN}"},
+            "tools": ["*"],
         },
     })
 
-    response = await session.send_and_wait({
-        "prompt": "List my recent GitHub notifications"
-    })
+    response = await session.send_and_wait("List my recent GitHub notifications")
     print(response.data.content)
 
     await client.stop()
@@ -159,6 +155,47 @@ await using var session = await client.CreateSessionAsync(new SessionConfig
     },
 });
 ```
+
+## Tool Configuration
+
+You can control which tools are available to an MCP server using the `tools` field.
+
+### Allow all tools
+
+Use `"*"` to enable all tools provided by the MCP server:
+
+```typescript
+tools: ["*"]
+```
+
+---
+
+### Allow specific tools
+
+Provide a list of tool names to restrict access:
+
+```typescript
+tools: ["bash", "edit"]
+```
+
+Only the listed tools will be available to the agent.
+
+---
+
+### Disable all tools
+
+Use an empty array to disable all tools:
+
+```typescript
+tools: []
+```
+
+---
+
+### Notes
+
+- The `tools` field defines which tools are allowed.
+- There is no separate `allow` or `disallow` configuration — tool access is controlled directly through this list.
 
 ## Quick Start: Filesystem MCP Server
 

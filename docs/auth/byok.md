@@ -24,6 +24,7 @@ Azure AI Foundry (formerly Azure OpenAI) is a common BYOK deployment target for 
 import asyncio
 import os
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 FOUNDRY_MODEL_URL = "https://your-resource.openai.azure.com/openai/v1/"
 # Set FOUNDRY_API_KEY environment variable
@@ -32,14 +33,11 @@ async def main():
     client = CopilotClient()
     await client.start()
 
-    session = await client.create_session({
-        "model": "gpt-5.2-codex",  # Your deployment name
-        "provider": {
-            "type": "openai",
-            "base_url": FOUNDRY_MODEL_URL,
-            "wire_api": "responses",  # Use "completions" for older models
-            "api_key": os.environ["FOUNDRY_API_KEY"],
-        },
+    session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-5.2-codex", provider={
+        "type": "openai",
+        "base_url": FOUNDRY_MODEL_URL,
+        "wire_api": "responses",  # Use "completions" for older models
+        "api_key": os.environ["FOUNDRY_API_KEY"],
     })
 
     done = asyncio.Event()
@@ -162,6 +160,36 @@ var response = await session.SendAndWaitAsync(new MessageOptions
     Prompt = "What is 2+2?",
 });
 Console.WriteLine(response?.Data.Content);
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+var client = new CopilotClient();
+client.start().get();
+
+var session = client.createSession(new SessionConfig()
+    .setModel("gpt-5.2-codex")  // Your deployment name
+    .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    .setProvider(new ProviderConfig()
+        .setType("openai")
+        .setBaseUrl("https://your-resource.openai.azure.com/openai/v1/")
+        .setWireApi("responses")  // Use "completions" for older models
+        .setApiKey(System.getenv("FOUNDRY_API_KEY")))
+).get();
+
+var response = session.sendAndWait(new MessageOptions()
+    .setPrompt("What is 2+2?")).get();
+System.out.println(response.getData().content());
+
+client.stop().get();
 ```
 
 </details>
@@ -338,7 +366,7 @@ const client = new CopilotClient({
 
 ```python
 from copilot import CopilotClient
-from copilot.types import ModelInfo, ModelCapabilities, ModelSupports, ModelLimits
+from copilot.client import ModelInfo, ModelCapabilities, ModelSupports, ModelLimits
 
 client = CopilotClient({
     "on_list_models": lambda: [
@@ -410,6 +438,28 @@ var client = new CopilotClient(new CopilotClientOptions
         }
     })
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.json.*;
+import java.util.concurrent.CompletableFuture;
+
+var client = new CopilotClient(new CopilotClientOptions()
+    .setOnListModels(() -> CompletableFuture.completedFuture(List.of(
+        new ModelInfo()
+            .setId("my-custom-model")
+            .setName("My Custom Model")
+            .setCapabilities(new ModelCapabilities()
+                .setSupports(new ModelSupports().setVision(false).setReasoningEffort(false))
+                .setLimits(new ModelLimits().setMaxContextWindowTokens(128000)))
+    )))
+);
 ```
 
 </details>

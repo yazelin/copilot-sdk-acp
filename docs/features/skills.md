@@ -43,23 +43,23 @@ await session.sendAndWait({ prompt: "Review this code for security issues" });
 
 ```python
 from copilot import CopilotClient
-from copilot.types import PermissionRequestResult
+from copilot.session import PermissionRequestResult
 
 async def main():
     client = CopilotClient()
     await client.start()
 
-    session = await client.create_session({
-        "model": "gpt-4.1",
-        "skill_directories": [
+    session = await client.create_session(
+        on_permission_request=lambda req, inv: {"kind": "approved"},
+        model="gpt-4.1",
+        skill_directories=[
             "./skills/code-review",
             "./skills/documentation",
         ],
-        "on_permission_request": lambda req, inv: PermissionRequestResult(kind="approved"),
-    })
+    )
 
     # Copilot now has access to skills in those directories
-    await session.send_and_wait({"prompt": "Review this code for security issues"})
+    await session.send_and_wait("Review this code for security issues")
 
     await client.stop()
 ```
@@ -140,6 +140,36 @@ await session.SendAndWaitAsync(new MessageOptions
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+try (var client = new CopilotClient()) {
+    client.start().get();
+
+    var session = client.createSession(
+        new SessionConfig()
+            .setModel("gpt-4.1")
+            .setSkillDirectories(List.of(
+                "./skills/code-review",
+                "./skills/documentation"
+            ))
+            .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    ).get();
+
+    // Copilot now has access to skills in those directories
+    session.sendAndWait(new MessageOptions()
+        .setPrompt("Review this code for security issues")
+    ).get();
+}
+```
+
+</details>
+
 ## Disabling Skills
 
 Disable specific skills while keeping others active:
@@ -160,10 +190,13 @@ const session = await client.createSession({
 <summary><strong>Python</strong></summary>
 
 ```python
-session = await client.create_session({
-    "skill_directories": ["./skills"],
-    "disabled_skills": ["experimental-feature", "deprecated-tool"],
-})
+from copilot.session import PermissionHandler
+
+session = await client.create_session(
+    on_permission_request=PermissionHandler.approve_all,
+    skill_directories=["./skills"],
+    disabled_skills=["experimental-feature", "deprecated-tool"],
+)
 ```
 
 </details>
@@ -236,6 +269,20 @@ var session = await client.CreateSessionAsync(new SessionConfig
     SkillDirectories = new List<string> { "./skills" },
     DisabledSkills = new List<string> { "experimental-feature", "deprecated-tool" },
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+var session = client.createSession(
+    new SessionConfig()
+        .setSkillDirectories(List.of("./skills"))
+        .setDisabledSkills(List.of("experimental-feature", "deprecated-tool"))
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+).get();
 ```
 
 </details>

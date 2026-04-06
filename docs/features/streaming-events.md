@@ -191,6 +191,21 @@ session.On(evt =>
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+// All events
+session.on(event -> System.out.println(event.getType()));
+
+// Specific event type — data is narrowed to the matching class
+session.on(AssistantMessageDeltaEvent.class, event ->
+    System.out.print(event.getData().deltaContent())
+);
+```
+
+</details>
+
 > **Tip (Python / Go):** These SDKs use a single `Data` class/struct with all possible fields as optional/nullable. Only the fields listed in the tables below are populated for each event type — the rest will be `None` / `nil`.
 >
 > **Tip (.NET):** The .NET SDK uses separate, strongly-typed data classes per event (e.g., `AssistantMessageDeltaData`), so only the relevant fields exist on each type.
@@ -639,7 +654,7 @@ The user sent a message. Recorded for the session timeline.
 |------------|------|----------|-------------|
 | `content` | `string` | ✅ | The user's message text |
 | `transformedContent` | `string` | | Transformed version after preprocessing |
-| `attachments` | `Attachment[]` | | File, directory, selection, or GitHub reference attachments |
+| `attachments` | `Attachment[]` | | File, directory, selection, blob, or GitHub reference attachments |
 | `source` | `string` | | Message source identifier |
 | `agentMode` | `string` | | Agent mode: `"interactive"`, `"plan"`, `"autopilot"`, or `"shell"` |
 | `interactionId` | `string` | | CAPI interaction ID |
