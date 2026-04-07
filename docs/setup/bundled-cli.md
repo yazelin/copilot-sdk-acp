@@ -86,6 +86,7 @@ await client.stop();
 
 ```python
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 from pathlib import Path
 
 client = CopilotClient({
@@ -93,8 +94,8 @@ client = CopilotClient({
 })
 await client.start()
 
-session = await client.create_session({"model": "gpt-4.1"})
-response = await session.send_and_wait({"prompt": "Hello!"})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-4.1")
+response = await session.send_and_wait("Hello!")
 print(response.data.content)
 
 await client.stop()
@@ -129,7 +130,9 @@ func main() {
 
 	session, _ := client.CreateSession(ctx, &copilot.SessionConfig{Model: "gpt-4.1"})
 	response, _ := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: "Hello!"})
-	fmt.Println(*response.Data.Content)
+	if d, ok := response.Data.(*copilot.AssistantMessageData); ok {
+		fmt.Println(d.Content)
+	}
 }
 ```
 <!-- /docs-validate: hidden -->
@@ -145,7 +148,9 @@ defer client.Stop()
 
 session, _ := client.CreateSession(ctx, &copilot.SessionConfig{Model: "gpt-4.1"})
 response, _ := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: "Hello!"})
-fmt.Println(*response.Data.Content)
+if d, ok := response.Data.(*copilot.AssistantMessageData); ok {
+    fmt.Println(d.Content)
+}
 ```
 
 </details>
@@ -165,6 +170,36 @@ await using var session = await client.CreateSessionAsync(
 var response = await session.SendAndWaitAsync(
     new MessageOptions { Prompt = "Hello!" });
 Console.WriteLine(response?.Data.Content);
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+> **Note:** The Java SDK does not bundle or embed the Copilot CLI. You must install the CLI separately and configure its path via `cliPath` or the `COPILOT_CLI_PATH` environment variable.
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+var client = new CopilotClient(new CopilotClientOptions()
+    // Point to the CLI binary installed on the system
+    .setCliPath("/path/to/vendor/copilot")
+);
+client.start().get();
+
+var session = client.createSession(new SessionConfig()
+    .setModel("gpt-4.1")
+    .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+).get();
+
+var response = session.sendAndWait(new MessageOptions()
+    .setPrompt("Hello!")).get();
+System.out.println(response.getData().content());
+
+client.stop().get();
 ```
 
 </details>
