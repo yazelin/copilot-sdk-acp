@@ -146,6 +146,7 @@ const response = await session.sendAndWait({ prompt: "Hello!" });
 
 ```python
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 def create_client_for_user(user_token: str) -> CopilotClient:
     return CopilotClient({
@@ -157,12 +158,9 @@ def create_client_for_user(user_token: str) -> CopilotClient:
 client = create_client_for_user("gho_user_access_token")
 await client.start()
 
-session = await client.create_session({
-    "session_id": f"user-{user_id}-session",
-    "model": "gpt-4.1",
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-4.1", session_id=f"user-{user_id}-session")
 
-response = await session.send_and_wait({"prompt": "Hello!"})
+response = await session.send_and_wait("Hello!")
 ```
 
 </details>
@@ -273,6 +271,39 @@ await using var session = await client.CreateSessionAsync(new SessionConfig
 
 var response = await session.SendAndWaitAsync(
     new MessageOptions { Prompt = "Hello!" });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+CopilotClient createClientForUser(String userToken) throws Exception {
+    var client = new CopilotClient(new CopilotClientOptions()
+        .setGitHubToken(userToken)
+        .setUseLoggedInUser(false)
+    );
+    client.start().get();
+    return client;
+}
+
+// Usage — use try-with-resources to ensure cleanup
+var userId = "user1";
+try (var client = createClientForUser("gho_user_access_token")) {
+    var session = client.createSession(new SessionConfig()
+        .setSessionId(String.format("user-%s-session", userId))
+        .setModel("gpt-4.1")
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    ).get();
+
+    var response = session.sendAndWait(new MessageOptions()
+        .setPrompt("Hello!")).get();
+}
 ```
 
 </details>

@@ -9,12 +9,60 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Callable
-from typing import Any, TypeVar, get_type_hints, overload
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any, Literal, TypeVar, get_type_hints, overload
 
 from pydantic import BaseModel
 
-from .types import Tool, ToolInvocation, ToolResult
+ToolResultType = Literal["success", "failure", "rejected", "denied", "timeout"]
+
+
+@dataclass
+class ToolBinaryResult:
+    """Binary content returned by a tool."""
+
+    data: str = ""
+    mime_type: str = ""
+    type: str = ""
+    description: str = ""
+
+
+@dataclass
+class ToolResult:
+    """Result of a tool invocation."""
+
+    text_result_for_llm: str = ""
+    result_type: ToolResultType = "success"
+    error: str | None = None
+    binary_results_for_llm: list[ToolBinaryResult] | None = None
+    session_log: str | None = None
+    tool_telemetry: dict[str, Any] | None = None
+    _from_exception: bool = field(default=False, repr=False)
+
+
+@dataclass
+class ToolInvocation:
+    """Context passed to a tool handler when invoked."""
+
+    session_id: str = ""
+    tool_call_id: str = ""
+    tool_name: str = ""
+    arguments: Any = None
+
+
+ToolHandler = Callable[[ToolInvocation], ToolResult | Awaitable[ToolResult]]
+
+
+@dataclass
+class Tool:
+    name: str
+    description: str
+    handler: ToolHandler
+    parameters: dict[str, Any] | None = None
+    overrides_built_in_tool: bool = False
+    skip_permission: bool = False
+
 
 T = TypeVar("T", bound=BaseModel)
 R = TypeVar("R")
@@ -26,6 +74,7 @@ def define_tool(
     *,
     description: str | None = None,
     overrides_built_in_tool: bool = False,
+    skip_permission: bool = False,
 ) -> Callable[[Callable[..., Any]], Tool]: ...
 
 
@@ -37,6 +86,7 @@ def define_tool(
     handler: Callable[[T, ToolInvocation], R],
     params_type: type[T],
     overrides_built_in_tool: bool = False,
+    skip_permission: bool = False,
 ) -> Tool: ...
 
 
@@ -47,6 +97,7 @@ def define_tool(
     handler: Callable[[Any, ToolInvocation], Any] | None = None,
     params_type: type[BaseModel] | None = None,
     overrides_built_in_tool: bool = False,
+    skip_permission: bool = False,
 ) -> Tool | Callable[[Callable[[Any, ToolInvocation], Any]], Tool]:
     """
     Define a tool with automatic JSON schema generation from Pydantic models.
@@ -79,6 +130,10 @@ def define_tool(
         handler: Optional handler function (if not using as decorator)
         params_type: Optional Pydantic model type for parameters (inferred from
                     type hints when using as decorator)
+        overrides_built_in_tool: When True, explicitly indicates this tool is intended
+                    to override a built-in tool of the same name. If not set and the
+                    name clashes with a built-in tool, the runtime will return an error.
+        skip_permission: When True, the tool can execute without a permission prompt.
 
     Returns:
         A Tool instance
@@ -141,11 +196,14 @@ def define_tool(
                 # Don't expose detailed error information to the LLM for security reasons.
                 # The actual error is stored in the 'error' field for debugging.
                 return ToolResult(
-                    text_result_for_llm="Invoking this tool produced an error. "
-                    "Detailed information is not available.",
+                    text_result_for_llm=(
+                        "Invoking this tool produced an error. "
+                        "Detailed information is not available."
+                    ),
                     result_type="failure",
                     error=str(exc),
                     tool_telemetry={},
+                    _from_exception=True,
                 )
 
         return Tool(
@@ -154,6 +212,7 @@ def define_tool(
             parameters=schema,
             handler=wrapped_handler,
             overrides_built_in_tool=overrides_built_in_tool,
+            skip_permission=skip_permission,
         )
 
     # If handler is provided, call decorator immediately
