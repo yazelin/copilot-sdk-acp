@@ -1,12 +1,12 @@
 # Local CLI Setup
 
-Use the Copilot SDK with the CLI already signed in on your machine. This is the simplest configuration — zero auth code, zero infrastructure.
+Use the Copilot SDK with a Copilot CLI instance signed in on your machine. Depending on the SDK, this may be a bundled CLI (included automatically) or a system-installed CLI available in your PATH. This is the simplest configuration — zero auth code, zero infrastructure.
 
 **Best for:** Personal projects, prototyping, local development, learning the SDK.
 
 ## How It Works
 
-When you install the Copilot CLI and sign in, your credentials are stored in the system keychain. The SDK automatically starts the CLI as a child process and uses those stored credentials.
+When a Copilot CLI instance is available (either bundled with the SDK or installed on your system) and signed in, credentials are stored in the system keychain. The SDK automatically starts the CLI as a child process and uses those stored credentials.
 
 ```mermaid
 flowchart LR
@@ -21,7 +21,7 @@ flowchart LR
 ```
 
 **Key characteristics:**
-- CLI is spawned automatically by the SDK (no setup needed)
+- CLI is spawned automatically by the SDK (using a bundled CLI or a system-installed CLI if available)
 - Authentication uses the signed-in user's credentials from the system keychain
 - Communication happens over stdio (stdin/stdout) — no network ports
 - Sessions are local to your machine
@@ -52,12 +52,13 @@ await client.stop();
 
 ```python
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 client = CopilotClient()
 await client.start()
 
-session = await client.create_session({"model": "gpt-4.1"})
-response = await session.send_and_wait({"prompt": "Hello!"})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-4.1")
+response = await session.send_and_wait("Hello!")
 print(response.data.content)
 
 await client.stop()
@@ -90,7 +91,9 @@ func main() {
 
 	session, _ := client.CreateSession(ctx, &copilot.SessionConfig{Model: "gpt-4.1"})
 	response, _ := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: "Hello!"})
-	fmt.Println(*response.Data.Content)
+	if d, ok := response.Data.(*copilot.AssistantMessageData); ok {
+		fmt.Println(d.Content)
+	}
 }
 ```
 <!-- /docs-validate: hidden -->
@@ -104,7 +107,9 @@ defer client.Stop()
 
 session, _ := client.CreateSession(ctx, &copilot.SessionConfig{Model: "gpt-4.1"})
 response, _ := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: "Hello!"})
-fmt.Println(*response.Data.Content)
+if d, ok := response.Data.(*copilot.AssistantMessageData); ok {
+    fmt.Println(d.Content)
+}
 ```
 
 </details>
@@ -120,6 +125,30 @@ await using var session = await client.CreateSessionAsync(
 var response = await session.SendAndWaitAsync(
     new MessageOptions { Prompt = "Hello!" });
 Console.WriteLine(response?.Data.Content);
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+var client = new CopilotClient();
+client.start().get();
+
+var session = client.createSession(new SessionConfig()
+    .setModel("gpt-4.1")
+    .setOnPermissionRequest(request -> PermissionDecision.allow())).get();
+
+var response = session.sendAndWait(new MessageOptions()
+    .setPrompt("Hello!")).get();
+System.out.println(response.getData().content());
+
+client.stop().get();
 ```
 
 </details>
@@ -160,20 +189,17 @@ While defaults work great, you can customize the local setup:
 
 ```typescript
 const client = new CopilotClient({
-    // Override CLI location (default: bundled with @github/copilot)
+    // Override CLI location (by default, the SDK uses a bundled CLI or resolves one from your system)
     cliPath: "/usr/local/bin/copilot",
 
     // Set log level for debugging
     logLevel: "debug",
 
-    // Pass extra CLI arguments
-    cliArgs: ["--disable-telemetry"],
+    // Pass extra CLI arguments (example: set a custom log directory)
+    cliArgs: ["--log-dir=/tmp/copilot-logs"],
 
     // Set working directory
     cwd: "/path/to/project",
-
-    // Auto-restart CLI if it crashes (default: true)
-    autoRestart: true,
 });
 ```
 
