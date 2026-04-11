@@ -137,8 +137,8 @@ func main() {
 	})
 
 	session.On(func(event copilot.SessionEvent) {
-		if event.Type == "assistant.message_delta" {
-			fmt.Print(*event.Data.DeltaContent)
+		if d, ok := event.Data.(*copilot.AssistantMessageDeltaData); ok {
+			fmt.Print(d.DeltaContent)
 		}
 	})
 	_ = session
@@ -148,8 +148,8 @@ func main() {
 
 ```go
 session.On(func(event copilot.SessionEvent) {
-    if event.Type == "assistant.message_delta" {
-        fmt.Print(*event.Data.DeltaContent)
+    if d, ok := event.Data.(*copilot.AssistantMessageDeltaData); ok {
+        fmt.Print(d.DeltaContent)
     }
 })
 ```
@@ -187,6 +187,21 @@ session.On(evt =>
         Console.Write(delta.Data.DeltaContent);
     }
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+// All events
+session.on(event -> System.out.println(event.getType()));
+
+// Specific event type — data is narrowed to the matching class
+session.on(AssistantMessageDeltaEvent.class, event ->
+    System.out.print(event.getData().deltaContent())
+);
 ```
 
 </details>
@@ -639,7 +654,7 @@ The user sent a message. Recorded for the session timeline.
 |------------|------|----------|-------------|
 | `content` | `string` | ✅ | The user's message text |
 | `transformedContent` | `string` | | Transformed version after preprocessing |
-| `attachments` | `Attachment[]` | | File, directory, selection, or GitHub reference attachments |
+| `attachments` | `Attachment[]` | | File, directory, selection, blob, or GitHub reference attachments |
 | `source` | `string` | | Message source identifier |
 | `agentMode` | `string` | | Agent mode: `"interactive"`, `"plan"`, `"autopilot"`, or `"shell"` |
 | `interactionId` | `string` | | CAPI interaction ID |
