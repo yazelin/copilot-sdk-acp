@@ -30,10 +30,10 @@ func main() {
 		if argsStr := os.Getenv("MCP_SERVER_ARGS"); argsStr != "" {
 			args = strings.Split(argsStr, " ")
 		}
-		mcpServers["example"] = copilot.MCPServerConfig{
-			"type":    "stdio",
-			"command": cmd,
-			"args":    args,
+		mcpServers["example"] = copilot.MCPStdioServerConfig{
+			Command: cmd,
+			Args:    args,
+			Tools:   []string{"*"},
 		}
 	}
 
@@ -62,9 +62,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if response != nil && response.Data.Content != nil {
-		fmt.Println(*response.Data.Content)
-	}
+	if response != nil {
+if d, ok := response.Data.(*copilot.AssistantMessageData); ok {
+fmt.Println(d.Content)
+}
+}
 
 	if len(mcpServers) > 0 {
 		keys := make([]string, 0, len(mcpServers))

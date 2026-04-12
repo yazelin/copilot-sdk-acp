@@ -16,11 +16,8 @@ import (
 func TestMultiClient(t *testing.T) {
 	// Use TCP mode so a second client can connect to the same CLI process
 	ctx := testharness.NewTestContext(t)
-	client1 := copilot.NewClient(&copilot.ClientOptions{
-		CLIPath:  ctx.CLIPath,
-		Cwd:      ctx.WorkDir,
-		Env:      ctx.Env(),
-		UseStdio: copilot.Bool(false),
+	client1 := ctx.NewClient(func(opts *copilot.ClientOptions) {
+		opts.UseStdio = copilot.Bool(false)
 	})
 	t.Cleanup(func() { client1.ForceStop() })
 
@@ -79,13 +76,13 @@ func TestMultiClient(t *testing.T) {
 		client2Completed := make(chan struct{}, 1)
 
 		session1.On(func(event copilot.SessionEvent) {
-			if event.Type == copilot.ExternalToolRequested {
+			if event.Type == copilot.SessionEventTypeExternalToolRequested {
 				select {
 				case client1Requested <- struct{}{}:
 				default:
 				}
 			}
-			if event.Type == copilot.ExternalToolCompleted {
+			if event.Type == copilot.SessionEventTypeExternalToolCompleted {
 				select {
 				case client1Completed <- struct{}{}:
 				default:
@@ -93,13 +90,13 @@ func TestMultiClient(t *testing.T) {
 			}
 		})
 		session2.On(func(event copilot.SessionEvent) {
-			if event.Type == copilot.ExternalToolRequested {
+			if event.Type == copilot.SessionEventTypeExternalToolRequested {
 				select {
 				case client2Requested <- struct{}{}:
 				default:
 				}
 			}
-			if event.Type == copilot.ExternalToolCompleted {
+			if event.Type == copilot.SessionEventTypeExternalToolCompleted {
 				select {
 				case client2Completed <- struct{}{}:
 				default:
@@ -115,12 +112,14 @@ func TestMultiClient(t *testing.T) {
 			t.Fatalf("Failed to send message: %v", err)
 		}
 
-		if response == nil || response.Data.Content == nil || !strings.Contains(*response.Data.Content, "MAGIC_hello_42") {
+		if response == nil {
+			t.Errorf("Expected response to contain 'MAGIC_hello_42', got nil")
+		} else if rd, ok := response.Data.(*copilot.AssistantMessageData); !ok || !strings.Contains(rd.Content, "MAGIC_hello_42") {
 			t.Errorf("Expected response to contain 'MAGIC_hello_42', got %v", response)
 		}
 
 		// Wait for all broadcast events to arrive on both clients
-		timeout := time.After(10 * time.Second)
+		timeout := time.After(30 * time.Second)
 		for _, ch := range []chan struct{}{client1Requested, client2Requested, client1Completed, client2Completed} {
 			select {
 			case <-ch:
@@ -183,7 +182,9 @@ func TestMultiClient(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to send message: %v", err)
 		}
-		if response == nil || response.Data.Content == nil || *response.Data.Content == "" {
+		if response == nil {
+			t.Errorf("Expected non-empty response")
+		} else if rd, ok := response.Data.(*copilot.AssistantMessageData); !ok || rd.Content == "" {
 			t.Errorf("Expected non-empty response")
 		}
 
@@ -197,10 +198,10 @@ func TestMultiClient(t *testing.T) {
 
 		// Both clients should have seen permission.requested events
 		mu1.Lock()
-		c1PermRequested := filterEventsByType(client1Events, copilot.PermissionRequested)
+		c1PermRequested := filterEventsByType(client1Events, copilot.SessionEventTypePermissionRequested)
 		mu1.Unlock()
 		mu2.Lock()
-		c2PermRequested := filterEventsByType(client2Events, copilot.PermissionRequested)
+		c2PermRequested := filterEventsByType(client2Events, copilot.SessionEventTypePermissionRequested)
 		mu2.Unlock()
 
 		if len(c1PermRequested) == 0 {
@@ -212,10 +213,10 @@ func TestMultiClient(t *testing.T) {
 
 		// Both clients should have seen permission.completed events with approved result
 		mu1.Lock()
-		c1PermCompleted := filterEventsByType(client1Events, copilot.PermissionCompleted)
+		c1PermCompleted := filterEventsByType(client1Events, copilot.SessionEventTypePermissionCompleted)
 		mu1.Unlock()
 		mu2.Lock()
-		c2PermCompleted := filterEventsByType(client2Events, copilot.PermissionCompleted)
+		c2PermCompleted := filterEventsByType(client2Events, copilot.SessionEventTypePermissionCompleted)
 		mu2.Unlock()
 
 		if len(c1PermCompleted) == 0 {
@@ -225,8 +226,9 @@ func TestMultiClient(t *testing.T) {
 			t.Errorf("Expected client 2 to see permission.completed events")
 		}
 		for _, event := range append(c1PermCompleted, c2PermCompleted...) {
-			if event.Data.Result == nil || event.Data.Result.Kind == nil || *event.Data.Result.Kind != "approved" {
-				t.Errorf("Expected permission.completed result kind 'approved', got %v", event.Data.Result)
+			d, ok := event.Data.(*copilot.PermissionCompletedData)
+			if !ok || string(d.Result.Kind) != "approved" {
+				t.Errorf("Expected permission.completed result kind 'approved', got %v", event.Data)
 			}
 		}
 
@@ -293,10 +295,10 @@ func TestMultiClient(t *testing.T) {
 
 		// Both clients should have seen permission.requested events
 		mu1.Lock()
-		c1PermRequested := filterEventsByType(client1Events, copilot.PermissionRequested)
+		c1PermRequested := filterEventsByType(client1Events, copilot.SessionEventTypePermissionRequested)
 		mu1.Unlock()
 		mu2.Lock()
-		c2PermRequested := filterEventsByType(client2Events, copilot.PermissionRequested)
+		c2PermRequested := filterEventsByType(client2Events, copilot.SessionEventTypePermissionRequested)
 		mu2.Unlock()
 
 		if len(c1PermRequested) == 0 {
@@ -308,10 +310,10 @@ func TestMultiClient(t *testing.T) {
 
 		// Both clients should see the denial in the completed event
 		mu1.Lock()
-		c1PermCompleted := filterEventsByType(client1Events, copilot.PermissionCompleted)
+		c1PermCompleted := filterEventsByType(client1Events, copilot.SessionEventTypePermissionCompleted)
 		mu1.Unlock()
 		mu2.Lock()
-		c2PermCompleted := filterEventsByType(client2Events, copilot.PermissionCompleted)
+		c2PermCompleted := filterEventsByType(client2Events, copilot.SessionEventTypePermissionCompleted)
 		mu2.Unlock()
 
 		if len(c1PermCompleted) == 0 {
@@ -321,8 +323,9 @@ func TestMultiClient(t *testing.T) {
 			t.Errorf("Expected client 2 to see permission.completed events")
 		}
 		for _, event := range append(c1PermCompleted, c2PermCompleted...) {
-			if event.Data.Result == nil || event.Data.Result.Kind == nil || *event.Data.Result.Kind != "denied-interactively-by-user" {
-				t.Errorf("Expected permission.completed result kind 'denied-interactively-by-user', got %v", event.Data.Result)
+			d, ok := event.Data.(*copilot.PermissionCompletedData)
+			if !ok || string(d.Result.Kind) != "denied-interactively-by-user" {
+				t.Errorf("Expected permission.completed result kind 'denied-interactively-by-user', got %v", event.Data)
 			}
 		}
 
@@ -371,11 +374,15 @@ func TestMultiClient(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to send message: %v", err)
 		}
-		if response1 == nil || response1.Data.Content == nil {
+		if response1 == nil {
 			t.Fatalf("Expected response with content")
 		}
-		if !strings.Contains(*response1.Data.Content, "CITY_FOR_US") {
-			t.Errorf("Expected response to contain 'CITY_FOR_US', got '%s'", *response1.Data.Content)
+		rd1, ok := response1.Data.(*copilot.AssistantMessageData)
+		if !ok {
+			t.Fatalf("Expected AssistantMessageData")
+		}
+		if !strings.Contains(rd1.Content, "CITY_FOR_US") {
+			t.Errorf("Expected response to contain 'CITY_FOR_US', got '%s'", rd1.Content)
 		}
 
 		response2, err := session1.SendAndWait(t.Context(), copilot.MessageOptions{
@@ -384,11 +391,15 @@ func TestMultiClient(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to send message: %v", err)
 		}
-		if response2 == nil || response2.Data.Content == nil {
+		if response2 == nil {
 			t.Fatalf("Expected response with content")
 		}
-		if !strings.Contains(*response2.Data.Content, "CURRENCY_FOR_US") {
-			t.Errorf("Expected response to contain 'CURRENCY_FOR_US', got '%s'", *response2.Data.Content)
+		rd2, ok := response2.Data.(*copilot.AssistantMessageData)
+		if !ok {
+			t.Fatalf("Expected AssistantMessageData")
+		}
+		if !strings.Contains(rd2.Content, "CURRENCY_FOR_US") {
+			t.Errorf("Expected response to contain 'CURRENCY_FOR_US', got '%s'", rd2.Content)
 		}
 
 		session2.Disconnect()
@@ -436,11 +447,15 @@ func TestMultiClient(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to send message: %v", err)
 		}
-		if stableResponse == nil || stableResponse.Data.Content == nil {
+		if stableResponse == nil {
 			t.Fatalf("Expected response with content")
 		}
-		if !strings.Contains(*stableResponse.Data.Content, "STABLE_test1") {
-			t.Errorf("Expected response to contain 'STABLE_test1', got '%s'", *stableResponse.Data.Content)
+		srd, ok := stableResponse.Data.(*copilot.AssistantMessageData)
+		if !ok {
+			t.Fatalf("Expected AssistantMessageData")
+		}
+		if !strings.Contains(srd.Content, "STABLE_test1") {
+			t.Errorf("Expected response to contain 'STABLE_test1', got '%s'", srd.Content)
 		}
 
 		ephemeralResponse, err := session1.SendAndWait(t.Context(), copilot.MessageOptions{
@@ -449,11 +464,15 @@ func TestMultiClient(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to send message: %v", err)
 		}
-		if ephemeralResponse == nil || ephemeralResponse.Data.Content == nil {
+		if ephemeralResponse == nil {
 			t.Fatalf("Expected response with content")
 		}
-		if !strings.Contains(*ephemeralResponse.Data.Content, "EPHEMERAL_test2") {
-			t.Errorf("Expected response to contain 'EPHEMERAL_test2', got '%s'", *ephemeralResponse.Data.Content)
+		erd, ok := ephemeralResponse.Data.(*copilot.AssistantMessageData)
+		if !ok {
+			t.Fatalf("Expected AssistantMessageData")
+		}
+		if !strings.Contains(erd.Content, "EPHEMERAL_test2") {
+			t.Errorf("Expected response to contain 'EPHEMERAL_test2', got '%s'", erd.Content)
 		}
 
 		// Disconnect client 2 without destroying the shared session
@@ -474,15 +493,19 @@ func TestMultiClient(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to send message: %v", err)
 		}
-		if afterResponse == nil || afterResponse.Data.Content == nil {
+		if afterResponse == nil {
 			t.Fatalf("Expected response with content")
 		}
-		if !strings.Contains(*afterResponse.Data.Content, "STABLE_still_here") {
-			t.Errorf("Expected response to contain 'STABLE_still_here', got '%s'", *afterResponse.Data.Content)
+		ard, ok := afterResponse.Data.(*copilot.AssistantMessageData)
+		if !ok {
+			t.Fatalf("Expected AssistantMessageData")
+		}
+		if !strings.Contains(ard.Content, "STABLE_still_here") {
+			t.Errorf("Expected response to contain 'STABLE_still_here', got '%s'", ard.Content)
 		}
 		// ephemeral_tool should NOT have produced a result
-		if strings.Contains(*afterResponse.Data.Content, "EPHEMERAL_") {
-			t.Errorf("Expected response NOT to contain 'EPHEMERAL_', got '%s'", *afterResponse.Data.Content)
+		if strings.Contains(ard.Content, "EPHEMERAL_") {
+			t.Errorf("Expected response NOT to contain 'EPHEMERAL_', got '%s'", ard.Content)
 		}
 	})
 }

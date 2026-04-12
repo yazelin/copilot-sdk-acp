@@ -125,14 +125,31 @@ export async function writeGeneratedFile(relativePath: string, content: string):
 export interface RpcMethod {
     rpcMethod: string;
     params: JSONSchema7 | null;
-    result: JSONSchema7;
+    result: JSONSchema7 | null;
+    stability?: string;
 }
 
 export interface ApiSchema {
     server?: Record<string, unknown>;
     session?: Record<string, unknown>;
+    clientSession?: Record<string, unknown>;
 }
 
 export function isRpcMethod(node: unknown): node is RpcMethod {
     return typeof node === "object" && node !== null && "rpcMethod" in node;
+}
+
+/** Returns true when every leaf RPC method inside `node` is marked experimental. */
+export function isNodeFullyExperimental(node: Record<string, unknown>): boolean {
+    const methods: RpcMethod[] = [];
+    (function collect(n: Record<string, unknown>) {
+        for (const value of Object.values(n)) {
+            if (isRpcMethod(value)) {
+                methods.push(value);
+            } else if (typeof value === "object" && value !== null) {
+                collect(value as Record<string, unknown>);
+            }
+        }
+    })(node);
+    return methods.length > 0 && methods.every(m => m.stability === "experimental");
 }
