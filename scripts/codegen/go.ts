@@ -8,15 +8,17 @@
 
 import { execFile } from "child_process";
 import fs from "fs/promises";
-import { promisify } from "util";
 import type { JSONSchema7 } from "json-schema";
 import { FetchingJSONSchemaStore, InputData, JSONSchemaInput, quicktype } from "quicktype-core";
+import { promisify } from "util";
 import {
-    getSessionEventsSchemaPath,
+    EXCLUDED_EVENT_TYPES,
     getApiSchemaPath,
+    getSessionEventsSchemaPath,
+    isNodeFullyExperimental,
+    isRpcMethod,
     postProcessSchema,
     writeGeneratedFile,
-    isRpcMethod,
     type ApiSchema,
     type RpcMethod,
 } from "./utils.js";
@@ -26,7 +28,7 @@ const execFileAsync = promisify(execFile);
 // ── Utilities ───────────────────────────────────────────────────────────────
 
 // Go initialisms that should be all-caps
-const goInitialisms = new Set(["id", "url", "api", "http", "https", "json", "xml", "html", "css", "sql", "ssh", "tcp", "udp", "ip", "rpc"]);
+const goInitialisms = new Set(["id", "ui", "uri", "url", "api", "http", "https", "json", "xml", "html", "css", "sql", "ssh", "tcp", "udp", "ip", "rpc", "mime"]);
 
 function toPascalCase(s: string): string {
     return s
@@ -42,6 +44,77 @@ function toGoFieldName(jsonName: string): string {
         .split("_")
         .map((w) => goInitialisms.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
         .join("");
+}
+
+/**
+ * Post-process Go enum constants so every constant follows the canonical
+ * Go `TypeNameValue` convention.  quicktype disambiguates collisions with
+ * whimsical prefixes (Purple, Fluffy, …) that we replace.
+ */
+function postProcessEnumConstants(code: string): string {
+    const renames = new Map<string, string>();
+
+    // Match constant declarations inside const ( … ) blocks.
+    const constLineRe = /^\s+(\w+)\s+(\w+)\s*=\s*"([^"]+)"/gm;
+    let m;
+    while ((m = constLineRe.exec(code)) !== null) {
+        const [, constName, typeName, value] = m;
+        if (constName.startsWith(typeName)) continue;
+
+        // Use the same initialism logic as toPascalCase so "url" → "URL", "mcp" → "MCP", etc.
+        const valuePascal = value
+            .split(/[._-]/)
+            .map((w) => goInitialisms.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))
+            .join("");
+        const desired = typeName + valuePascal;
+        if (constName !== desired) {
+            renames.set(constName, desired);
+        }
+    }
+
+    // Replace each const block in place, then fix switch-case references
+    // in marshal/unmarshal functions. This avoids renaming struct fields.
+
+    // Phase 1: Rename inside const ( … ) blocks
+    code = code.replace(/^(const \([\s\S]*?\n\))/gm, (block) => {
+        let b = block;
+        for (const [oldName, newName] of renames) {
+            b = b.replace(new RegExp(`\\b${oldName}\\b`, "g"), newName);
+        }
+        return b;
+    });
+
+    // Phase 2: Rename inside func bodies (marshal/unmarshal helpers use case statements)
+    code = code.replace(/^(func \([\s\S]*?\n\})/gm, (funcBlock) => {
+        let b = funcBlock;
+        for (const [oldName, newName] of renames) {
+            b = b.replace(new RegExp(`\\b${oldName}\\b`, "g"), newName);
+        }
+        return b;
+    });
+
+    return code;
+}
+
+/**
+ * Extract a mapping from (structName, jsonFieldName) → goFieldName
+ * so the wrapper code references the actual quicktype-generated field names.
+ */
+function extractFieldNames(qtCode: string): Map<string, Map<string, string>> {
+    const result = new Map<string, Map<string, string>>();
+    const structRe = /^type\s+(\w+)\s+struct\s*\{([^}]*)\}/gm;
+    let sm;
+    while ((sm = structRe.exec(qtCode)) !== null) {
+        const [, structName, body] = sm;
+        const fields = new Map<string, string>();
+        const fieldRe = /^\s+(\w+)\s+[^`\n]+`json:"([^",]+)/gm;
+        let fm;
+        while ((fm = fieldRe.exec(body)) !== null) {
+            fields.set(fm[2], fm[1]);
+        }
+        result.set(structName, fields);
+    }
+    return result;
 }
 
 async function formatGoFile(filePath: string): Promise<void> {
@@ -65,34 +138,651 @@ function collectRpcMethods(node: Record<string, unknown>): RpcMethod[] {
     return results;
 }
 
-// ── Session Events ──────────────────────────────────────────────────────────
+// ── Session Events (custom codegen — per-event-type data structs) ───────────
+
+interface GoEventVariant {
+    typeName: string;
+    dataClassName: string;
+    dataSchema: JSONSchema7;
+    dataDescription?: string;
+}
+
+interface GoCodegenCtx {
+    structs: string[];
+    enums: string[];
+    enumsByValues: Map<string, string>; // sorted-values-key → enumName
+    generatedNames: Set<string>;
+}
+
+function extractGoEventVariants(schema: JSONSchema7): GoEventVariant[] {
+    const sessionEvent = schema.definitions?.SessionEvent as JSONSchema7;
+    if (!sessionEvent?.anyOf) throw new Error("Schema must have SessionEvent definition with anyOf");
+
+    return (sessionEvent.anyOf as JSONSchema7[])
+        .map((variant) => {
+            if (typeof variant !== "object" || !variant.properties) throw new Error("Invalid variant");
+            const typeSchema = variant.properties.type as JSONSchema7;
+            const typeName = typeSchema?.const as string;
+            if (!typeName) throw new Error("Variant must have type.const");
+            const dataSchema = (variant.properties.data as JSONSchema7) || {};
+            return {
+                typeName,
+                dataClassName: `${toPascalCase(typeName)}Data`,
+                dataSchema,
+                dataDescription: dataSchema.description,
+            };
+        })
+        .filter((v) => !EXCLUDED_EVENT_TYPES.has(v.typeName));
+}
+
+/**
+ * Find a const-valued discriminator property shared by all anyOf variants.
+ */
+function findGoDiscriminator(
+    variants: JSONSchema7[]
+): { property: string; mapping: Map<string, JSONSchema7> } | null {
+    if (variants.length === 0) return null;
+    const firstVariant = variants[0];
+    if (!firstVariant.properties) return null;
+
+    for (const [propName, propSchema] of Object.entries(firstVariant.properties)) {
+        if (typeof propSchema !== "object") continue;
+        if ((propSchema as JSONSchema7).const === undefined) continue;
+
+        const mapping = new Map<string, JSONSchema7>();
+        let valid = true;
+        for (const variant of variants) {
+            if (!variant.properties) { valid = false; break; }
+            const vp = variant.properties[propName];
+            if (typeof vp !== "object" || (vp as JSONSchema7).const === undefined) { valid = false; break; }
+            mapping.set(String((vp as JSONSchema7).const), variant);
+        }
+        if (valid && mapping.size === variants.length) {
+            return { property: propName, mapping };
+        }
+    }
+    return null;
+}
+
+/**
+ * Get or create a Go enum type, deduplicating by value set.
+ */
+function getOrCreateGoEnum(
+    enumName: string,
+    values: string[],
+    ctx: GoCodegenCtx,
+    description?: string
+): string {
+    const valuesKey = [...values].sort().join("|");
+    const existing = ctx.enumsByValues.get(valuesKey);
+    if (existing) return existing;
+
+    const lines: string[] = [];
+    if (description) {
+        for (const line of description.split(/\r?\n/)) {
+            lines.push(`// ${line}`);
+        }
+    }
+    lines.push(`type ${enumName} string`);
+    lines.push(``);
+    lines.push(`const (`);
+    for (const value of values) {
+        const constSuffix = value
+            .split(/[-_.]/)
+            .map((w) =>
+                goInitialisms.has(w.toLowerCase())
+                    ? w.toUpperCase()
+                    : w.charAt(0).toUpperCase() + w.slice(1)
+            )
+            .join("");
+        lines.push(`\t${enumName}${constSuffix} ${enumName} = "${value}"`);
+    }
+    lines.push(`)`);
+
+    ctx.enumsByValues.set(valuesKey, enumName);
+    ctx.enums.push(lines.join("\n"));
+    return enumName;
+}
+
+/**
+ * Resolve a JSON Schema property to a Go type string.
+ * Emits nested struct/enum definitions into ctx as a side effect.
+ */
+function resolveGoPropertyType(
+    propSchema: JSONSchema7,
+    parentTypeName: string,
+    jsonPropName: string,
+    isRequired: boolean,
+    ctx: GoCodegenCtx
+): string {
+    const nestedName = parentTypeName + toGoFieldName(jsonPropName);
+
+    // Handle anyOf
+    if (propSchema.anyOf) {
+        const nonNull = (propSchema.anyOf as JSONSchema7[]).filter((s) => s.type !== "null");
+        const hasNull = (propSchema.anyOf as JSONSchema7[]).some((s) => s.type === "null");
+
+        if (nonNull.length === 1) {
+            // anyOf [T, null] → nullable T
+            const innerType = resolveGoPropertyType(nonNull[0], parentTypeName, jsonPropName, true, ctx);
+            if (isRequired && !hasNull) return innerType;
+            // Pointer-wrap if not already a pointer, slice, or map
+            if (innerType.startsWith("*") || innerType.startsWith("[]") || innerType.startsWith("map[")) {
+                return innerType;
+            }
+            return `*${innerType}`;
+        }
+
+        if (nonNull.length > 1) {
+            // Check for discriminated union
+            const disc = findGoDiscriminator(nonNull);
+            if (disc) {
+                emitGoFlatDiscriminatedUnion(nestedName, disc.property, disc.mapping, ctx, propSchema.description);
+                return isRequired && !hasNull ? nestedName : `*${nestedName}`;
+            }
+            // Non-discriminated multi-type union → any
+            return "any";
+        }
+    }
+
+    // Handle enum
+    if (propSchema.enum && Array.isArray(propSchema.enum)) {
+        const enumType = getOrCreateGoEnum(nestedName, propSchema.enum as string[], ctx, propSchema.description);
+        return isRequired ? enumType : `*${enumType}`;
+    }
+
+    // Handle const (discriminator markers) — just use string
+    if (propSchema.const !== undefined) {
+        return isRequired ? "string" : "*string";
+    }
+
+    const type = propSchema.type;
+    const format = propSchema.format;
+
+    // Handle type arrays like ["string", "null"]
+    if (Array.isArray(type)) {
+        const nonNullTypes = (type as string[]).filter((t) => t !== "null");
+        if (nonNullTypes.length === 1) {
+            const inner = resolveGoPropertyType(
+                { ...propSchema, type: nonNullTypes[0] as JSONSchema7["type"] },
+                parentTypeName,
+                jsonPropName,
+                true,
+                ctx
+            );
+            if (inner.startsWith("*") || inner.startsWith("[]") || inner.startsWith("map[")) return inner;
+            return `*${inner}`;
+        }
+    }
+
+    // Simple types
+    if (type === "string") {
+        if (format === "date-time") {
+            return isRequired ? "time.Time" : "*time.Time";
+        }
+        return isRequired ? "string" : "*string";
+    }
+    if (type === "number") return isRequired ? "float64" : "*float64";
+    if (type === "integer") return isRequired ? "int64" : "*int64";
+    if (type === "boolean") return isRequired ? "bool" : "*bool";
+
+    // Array type
+    if (type === "array") {
+        const items = propSchema.items as JSONSchema7 | undefined;
+        if (items) {
+            // Discriminated union items
+            if (items.anyOf) {
+                const itemVariants = (items.anyOf as JSONSchema7[]).filter((v) => v.type !== "null");
+                const disc = findGoDiscriminator(itemVariants);
+                if (disc) {
+                    const itemTypeName = nestedName + "Item";
+                    emitGoFlatDiscriminatedUnion(itemTypeName, disc.property, disc.mapping, ctx, items.description);
+                    return `[]${itemTypeName}`;
+                }
+            }
+            const itemType = resolveGoPropertyType(items, parentTypeName, jsonPropName + "Item", true, ctx);
+            return `[]${itemType}`;
+        }
+        return "[]any";
+    }
+
+    // Object type
+    if (type === "object" || (propSchema.properties && !type)) {
+        if (propSchema.properties && Object.keys(propSchema.properties).length > 0) {
+            emitGoStruct(nestedName, propSchema, ctx);
+            return isRequired ? nestedName : `*${nestedName}`;
+        }
+        if (propSchema.additionalProperties) {
+            if (
+                typeof propSchema.additionalProperties === "object" &&
+                Object.keys(propSchema.additionalProperties as Record<string, unknown>).length > 0
+            ) {
+                const ap = propSchema.additionalProperties as JSONSchema7;
+                if (ap.type === "object" && ap.properties) {
+                    emitGoStruct(nestedName + "Value", ap, ctx);
+                    return `map[string]${nestedName}Value`;
+                }
+                const valueType = resolveGoPropertyType(ap, parentTypeName, jsonPropName + "Value", true, ctx);
+                return `map[string]${valueType}`;
+            }
+            return "map[string]any";
+        }
+        // Empty object or untyped
+        return "any";
+    }
+
+    return "any";
+}
+
+/**
+ * Emit a Go struct definition from an object schema.
+ */
+function emitGoStruct(
+    typeName: string,
+    schema: JSONSchema7,
+    ctx: GoCodegenCtx,
+    description?: string
+): void {
+    if (ctx.generatedNames.has(typeName)) return;
+    ctx.generatedNames.add(typeName);
+
+    const required = new Set(schema.required || []);
+    const lines: string[] = [];
+    const desc = description || schema.description;
+    if (desc) {
+        for (const line of desc.split(/\r?\n/)) {
+            lines.push(`// ${line}`);
+        }
+    }
+    lines.push(`type ${typeName} struct {`);
+
+    for (const [propName, propSchema] of Object.entries(schema.properties || {})) {
+        if (typeof propSchema !== "object") continue;
+        const prop = propSchema as JSONSchema7;
+        const isReq = required.has(propName);
+        const goName = toGoFieldName(propName);
+        const goType = resolveGoPropertyType(prop, typeName, propName, isReq, ctx);
+        const omit = isReq ? "" : ",omitempty";
+
+        if (prop.description) {
+            lines.push(`\t// ${prop.description}`);
+        }
+        lines.push(`\t${goName} ${goType} \`json:"${propName}${omit}"\``);
+    }
+
+    lines.push(`}`);
+    ctx.structs.push(lines.join("\n"));
+}
+
+/**
+ * Emit a flat Go struct for a discriminated union (anyOf with const discriminator).
+ * Merges all variant properties into a single struct.
+ */
+function emitGoFlatDiscriminatedUnion(
+    typeName: string,
+    discriminatorProp: string,
+    mapping: Map<string, JSONSchema7>,
+    ctx: GoCodegenCtx,
+    description?: string
+): void {
+    if (ctx.generatedNames.has(typeName)) return;
+    ctx.generatedNames.add(typeName);
+
+    // Collect all properties across variants, determining which are required in all
+    const allProps = new Map<
+        string,
+        { schema: JSONSchema7; requiredInAll: boolean }
+    >();
+
+    for (const [, variant] of mapping) {
+        const required = new Set(variant.required || []);
+        for (const [propName, propSchema] of Object.entries(variant.properties || {})) {
+            if (typeof propSchema !== "object") continue;
+            if (!allProps.has(propName)) {
+                allProps.set(propName, {
+                    schema: propSchema as JSONSchema7,
+                    requiredInAll: required.has(propName),
+                });
+            } else {
+                const existing = allProps.get(propName)!;
+                if (!required.has(propName)) {
+                    existing.requiredInAll = false;
+                }
+            }
+        }
+    }
+
+    // Properties not present in all variants must be optional
+    const variantCount = mapping.size;
+    for (const [propName, info] of allProps) {
+        let presentCount = 0;
+        for (const [, variant] of mapping) {
+            if (variant.properties && propName in variant.properties) {
+                presentCount++;
+            }
+        }
+        if (presentCount < variantCount) {
+            info.requiredInAll = false;
+        }
+    }
+
+    // Discriminator field: generate an enum from the const values
+    const discGoName = toGoFieldName(discriminatorProp);
+    const discValues = [...mapping.keys()];
+    const discEnumName = getOrCreateGoEnum(
+        typeName + discGoName,
+        discValues,
+        ctx,
+        `${discGoName} discriminator for ${typeName}.`
+    );
+
+    const lines: string[] = [];
+    if (description) {
+        for (const line of description.split(/\r?\n/)) {
+            lines.push(`// ${line}`);
+        }
+    }
+    lines.push(`type ${typeName} struct {`);
+
+    // Emit discriminator field first
+    lines.push(`\t// ${discGoName} discriminator`);
+    lines.push(`\t${discGoName} ${discEnumName} \`json:"${discriminatorProp}"\``);
+
+    // Emit remaining fields
+    for (const [propName, info] of allProps) {
+        if (propName === discriminatorProp) continue;
+        const goName = toGoFieldName(propName);
+        const goType = resolveGoPropertyType(info.schema, typeName, propName, info.requiredInAll, ctx);
+        const omit = info.requiredInAll ? "" : ",omitempty";
+        if (info.schema.description) {
+            lines.push(`\t// ${info.schema.description}`);
+        }
+        lines.push(`\t${goName} ${goType} \`json:"${propName}${omit}"\``);
+    }
+
+    lines.push(`}`);
+    ctx.structs.push(lines.join("\n"));
+}
+
+/**
+ * Generate the complete Go session-events file content.
+ */
+function generateGoSessionEventsCode(schema: JSONSchema7): string {
+    const variants = extractGoEventVariants(schema);
+    const ctx: GoCodegenCtx = {
+        structs: [],
+        enums: [],
+        enumsByValues: new Map(),
+        generatedNames: new Set(),
+    };
+
+    // Generate per-event data structs
+    const dataStructs: string[] = [];
+    for (const variant of variants) {
+        const required = new Set(variant.dataSchema.required || []);
+        const lines: string[] = [];
+
+        if (variant.dataDescription) {
+            for (const line of variant.dataDescription.split(/\r?\n/)) {
+                lines.push(`// ${line}`);
+            }
+        } else {
+            lines.push(`// ${variant.dataClassName} holds the payload for ${variant.typeName} events.`);
+        }
+        lines.push(`type ${variant.dataClassName} struct {`);
+
+        for (const [propName, propSchema] of Object.entries(variant.dataSchema.properties || {})) {
+            if (typeof propSchema !== "object") continue;
+            const prop = propSchema as JSONSchema7;
+            const isReq = required.has(propName);
+            const goName = toGoFieldName(propName);
+            const goType = resolveGoPropertyType(prop, variant.dataClassName, propName, isReq, ctx);
+            const omit = isReq ? "" : ",omitempty";
+
+            if (prop.description) {
+                lines.push(`\t// ${prop.description}`);
+            }
+            lines.push(`\t${goName} ${goType} \`json:"${propName}${omit}"\``);
+        }
+
+        lines.push(`}`);
+        lines.push(``);
+        lines.push(`func (*${variant.dataClassName}) sessionEventData() {}`);
+
+        dataStructs.push(lines.join("\n"));
+    }
+
+    // Generate SessionEventType enum
+    const eventTypeEnum: string[] = [];
+    eventTypeEnum.push(`// SessionEventType identifies the kind of session event.`);
+    eventTypeEnum.push(`type SessionEventType string`);
+    eventTypeEnum.push(``);
+    eventTypeEnum.push(`const (`);
+    for (const variant of variants) {
+        const constName =
+            "SessionEventType" +
+            variant.typeName
+                .split(/[._]/)
+                .map((w) =>
+                    goInitialisms.has(w.toLowerCase())
+                        ? w.toUpperCase()
+                        : w.charAt(0).toUpperCase() + w.slice(1)
+                )
+                .join("");
+        eventTypeEnum.push(`\t${constName} SessionEventType = "${variant.typeName}"`);
+    }
+    eventTypeEnum.push(`)`);
+
+    // Assemble file
+    const out: string[] = [];
+    out.push(`// AUTO-GENERATED FILE - DO NOT EDIT`);
+    out.push(`// Generated from: session-events.schema.json`);
+    out.push(``);
+    out.push(`package copilot`);
+    out.push(``);
+
+    // Imports — time is always needed for SessionEvent.Timestamp
+    out.push(`import (`);
+    out.push(`\t"encoding/json"`);
+    out.push(`\t"time"`);
+    out.push(`)`);
+    out.push(``);
+
+    // SessionEventData interface
+    out.push(`// SessionEventData is the interface implemented by all per-event data types.`);
+    out.push(`type SessionEventData interface {`);
+    out.push(`\tsessionEventData()`);
+    out.push(`}`);
+    out.push(``);
+
+    // RawSessionEventData for unknown event types
+    out.push(`// RawSessionEventData holds unparsed JSON data for unrecognized event types.`);
+    out.push(`type RawSessionEventData struct {`);
+    out.push(`\tRaw json.RawMessage`);
+    out.push(`}`);
+    out.push(``);
+    out.push(`func (RawSessionEventData) sessionEventData() {}`);
+    out.push(``);
+    out.push(`// MarshalJSON returns the original raw JSON so round-tripping preserves the payload.`);
+    out.push(`func (r RawSessionEventData) MarshalJSON() ([]byte, error) { return r.Raw, nil }`);
+    out.push(``);
+
+    // SessionEvent struct
+    out.push(`// SessionEvent represents a single session event with a typed data payload.`);
+    out.push(`type SessionEvent struct {`);
+    out.push(`\t// Unique event identifier (UUID v4), generated when the event is emitted.`);
+    out.push(`\tID string \`json:"id"\``);
+    out.push(`\t// ISO 8601 timestamp when the event was created.`);
+    out.push(`\tTimestamp time.Time \`json:"timestamp"\``);
+    // parentId: string or null
+    out.push(`\t// ID of the preceding event in the session. Null for the first event.`);
+    out.push(`\tParentID *string \`json:"parentId"\``);
+    out.push(`\t// When true, the event is transient and not persisted.`);
+    out.push(`\tEphemeral *bool \`json:"ephemeral,omitempty"\``);
+    out.push(`\t// The event type discriminator.`);
+    out.push(`\tType SessionEventType \`json:"type"\``);
+    out.push(`\t// Typed event payload. Use a type switch to access per-event fields.`);
+    out.push(`\tData SessionEventData \`json:"-"\``);
+    out.push(`}`);
+    out.push(``);
+
+    // UnmarshalSessionEvent
+    out.push(`// UnmarshalSessionEvent parses JSON bytes into a SessionEvent.`);
+    out.push(`func UnmarshalSessionEvent(data []byte) (SessionEvent, error) {`);
+    out.push(`\tvar r SessionEvent`);
+    out.push(`\terr := json.Unmarshal(data, &r)`);
+    out.push(`\treturn r, err`);
+    out.push(`}`);
+    out.push(``);
+
+    // Marshal
+    out.push(`// Marshal serializes the SessionEvent to JSON.`);
+    out.push(`func (r *SessionEvent) Marshal() ([]byte, error) {`);
+    out.push(`\treturn json.Marshal(r)`);
+    out.push(`}`);
+    out.push(``);
+
+    // Custom UnmarshalJSON
+    out.push(`func (e *SessionEvent) UnmarshalJSON(data []byte) error {`);
+    out.push(`\ttype rawEvent struct {`);
+    out.push(`\t\tID        string           \`json:"id"\``);
+    out.push(`\t\tTimestamp time.Time        \`json:"timestamp"\``);
+    out.push(`\t\tParentID  *string          \`json:"parentId"\``);
+    out.push(`\t\tEphemeral *bool            \`json:"ephemeral,omitempty"\``);
+    out.push(`\t\tType      SessionEventType \`json:"type"\``);
+    out.push(`\t\tData      json.RawMessage  \`json:"data"\``);
+    out.push(`\t}`);
+    out.push(`\tvar raw rawEvent`);
+    out.push(`\tif err := json.Unmarshal(data, &raw); err != nil {`);
+    out.push(`\t\treturn err`);
+    out.push(`\t}`);
+    out.push(`\te.ID = raw.ID`);
+    out.push(`\te.Timestamp = raw.Timestamp`);
+    out.push(`\te.ParentID = raw.ParentID`);
+    out.push(`\te.Ephemeral = raw.Ephemeral`);
+    out.push(`\te.Type = raw.Type`);
+    out.push(``);
+    out.push(`\tswitch raw.Type {`);
+    for (const variant of variants) {
+        const constName =
+            "SessionEventType" +
+            variant.typeName
+                .split(/[._]/)
+                .map((w) =>
+                    goInitialisms.has(w.toLowerCase())
+                        ? w.toUpperCase()
+                        : w.charAt(0).toUpperCase() + w.slice(1)
+                )
+                .join("");
+        out.push(`\tcase ${constName}:`);
+        out.push(`\t\tvar d ${variant.dataClassName}`);
+        out.push(`\t\tif err := json.Unmarshal(raw.Data, &d); err != nil {`);
+        out.push(`\t\t\treturn err`);
+        out.push(`\t\t}`);
+        out.push(`\t\te.Data = &d`);
+    }
+    out.push(`\tdefault:`);
+    out.push(`\t\te.Data = &RawSessionEventData{Raw: raw.Data}`);
+    out.push(`\t}`);
+    out.push(`\treturn nil`);
+    out.push(`}`);
+    out.push(``);
+
+    // Custom MarshalJSON
+    out.push(`func (e SessionEvent) MarshalJSON() ([]byte, error) {`);
+    out.push(`\ttype rawEvent struct {`);
+    out.push(`\t\tID        string           \`json:"id"\``);
+    out.push(`\t\tTimestamp time.Time        \`json:"timestamp"\``);
+    out.push(`\t\tParentID  *string          \`json:"parentId"\``);
+    out.push(`\t\tEphemeral *bool            \`json:"ephemeral,omitempty"\``);
+    out.push(`\t\tType      SessionEventType \`json:"type"\``);
+    out.push(`\t\tData      any              \`json:"data"\``);
+    out.push(`\t}`);
+    out.push(`\treturn json.Marshal(rawEvent{`);
+    out.push(`\t\tID:        e.ID,`);
+    out.push(`\t\tTimestamp: e.Timestamp,`);
+    out.push(`\t\tParentID:  e.ParentID,`);
+    out.push(`\t\tEphemeral: e.Ephemeral,`);
+    out.push(`\t\tType:      e.Type,`);
+    out.push(`\t\tData:      e.Data,`);
+    out.push(`\t})`);
+    out.push(`}`);
+    out.push(``);
+
+    // Event type enum
+    out.push(eventTypeEnum.join("\n"));
+    out.push(``);
+
+    // Per-event data structs
+    for (const ds of dataStructs) {
+        out.push(ds);
+        out.push(``);
+    }
+
+    // Nested structs
+    for (const s of ctx.structs) {
+        out.push(s);
+        out.push(``);
+    }
+
+    // Enums
+    for (const e of ctx.enums) {
+        out.push(e);
+        out.push(``);
+    }
+
+    // Type aliases for types referenced by non-generated SDK code under their short names.
+    const TYPE_ALIASES: Record<string, string> = {
+        PermissionRequest: "PermissionRequestedDataPermissionRequest",
+        PermissionRequestKind: "PermissionRequestedDataPermissionRequestKind",
+        PermissionRequestCommand: "PermissionRequestedDataPermissionRequestCommandsItem",
+        PossibleURL: "PermissionRequestedDataPermissionRequestPossibleUrlsItem",
+        Attachment: "UserMessageDataAttachmentsItem",
+        AttachmentType: "UserMessageDataAttachmentsItemType",
+    };
+    const CONST_ALIASES: Record<string, string> = {
+        AttachmentTypeFile: "UserMessageDataAttachmentsItemTypeFile",
+        AttachmentTypeDirectory: "UserMessageDataAttachmentsItemTypeDirectory",
+        AttachmentTypeSelection: "UserMessageDataAttachmentsItemTypeSelection",
+        AttachmentTypeGithubReference: "UserMessageDataAttachmentsItemTypeGithubReference",
+        AttachmentTypeBlob: "UserMessageDataAttachmentsItemTypeBlob",
+        PermissionRequestKindShell: "PermissionRequestedDataPermissionRequestKindShell",
+        PermissionRequestKindWrite: "PermissionRequestedDataPermissionRequestKindWrite",
+        PermissionRequestKindRead: "PermissionRequestedDataPermissionRequestKindRead",
+        PermissionRequestKindMcp: "PermissionRequestedDataPermissionRequestKindMcp",
+        PermissionRequestKindURL: "PermissionRequestedDataPermissionRequestKindURL",
+        PermissionRequestKindMemory: "PermissionRequestedDataPermissionRequestKindMemory",
+        PermissionRequestKindCustomTool: "PermissionRequestedDataPermissionRequestKindCustomTool",
+        PermissionRequestKindHook: "PermissionRequestedDataPermissionRequestKindHook",
+    };
+    out.push(`// Type aliases for convenience.`);
+    out.push(`type (`);
+    for (const [alias, target] of Object.entries(TYPE_ALIASES)) {
+        out.push(`\t${alias} = ${target}`);
+    }
+    out.push(`)`);
+    out.push(``);
+    out.push(`// Constant aliases for convenience.`);
+    out.push(`const (`);
+    for (const [alias, target] of Object.entries(CONST_ALIASES)) {
+        out.push(`\t${alias} = ${target}`);
+    }
+    out.push(`)`);
+    out.push(``);
+
+    return out.join("\n");
+}
 
 async function generateSessionEvents(schemaPath?: string): Promise<void> {
     console.log("Go: generating session-events...");
 
     const resolvedPath = schemaPath ?? (await getSessionEventsSchemaPath());
     const schema = JSON.parse(await fs.readFile(resolvedPath, "utf-8")) as JSONSchema7;
-    const resolvedSchema = (schema.definitions?.SessionEvent as JSONSchema7) || schema;
-    const processed = postProcessSchema(resolvedSchema);
+    const processed = postProcessSchema(schema);
 
-    const schemaInput = new JSONSchemaInput(new FetchingJSONSchemaStore());
-    await schemaInput.addSource({ name: "SessionEvent", schema: JSON.stringify(processed) });
+    const code = generateGoSessionEventsCode(processed);
 
-    const inputData = new InputData();
-    inputData.addInput(schemaInput);
-
-    const result = await quicktype({
-        inputData,
-        lang: "go",
-        rendererOptions: { package: "copilot" },
-    });
-
-    const banner = `// AUTO-GENERATED FILE - DO NOT EDIT
-// Generated from: session-events.schema.json
-
-`;
-
-    const outPath = await writeGeneratedFile("go/generated_session_events.go", banner + result.lines.join("\n"));
+    const outPath = await writeGeneratedFile("go/generated_session_events.go", code);
     console.log(`  ✓ ${outPath}`);
 
     await formatGoFile(outPath);
@@ -106,7 +796,11 @@ async function generateRpc(schemaPath?: string): Promise<void> {
     const resolvedPath = schemaPath ?? (await getApiSchemaPath());
     const schema = JSON.parse(await fs.readFile(resolvedPath, "utf-8")) as ApiSchema;
 
-    const allMethods = [...collectRpcMethods(schema.server || {}), ...collectRpcMethods(schema.session || {})];
+    const allMethods = [
+        ...collectRpcMethods(schema.server || {}),
+        ...collectRpcMethods(schema.session || {}),
+        ...collectRpcMethods(schema.clientSession || {}),
+    ];
 
     // Build a combined schema for quicktype - prefix types to avoid conflicts
     const combinedSchema: JSONSchema7 = {
@@ -153,6 +847,45 @@ async function generateRpc(schemaPath?: string): Promise<void> {
         rendererOptions: { package: "copilot", "just-types": "true" },
     });
 
+    // Post-process quicktype output: fix enum constant names
+    let qtCode = qtResult.lines.filter((l) => !l.startsWith("package ")).join("\n");
+    qtCode = postProcessEnumConstants(qtCode);
+    // Strip trailing whitespace from quicktype output (gofmt requirement)
+    qtCode = qtCode.replace(/[ \t]+$/gm, "");
+
+    // Extract actual type names generated by quicktype (may differ from toPascalCase)
+    const actualTypeNames = new Map<string, string>();
+    const structRe = /^type\s+(\w+)\s+struct\b/gm;
+    let sm;
+    while ((sm = structRe.exec(qtCode)) !== null) {
+        actualTypeNames.set(sm[1].toLowerCase(), sm[1]);
+    }
+    const resolveType = (name: string): string => actualTypeNames.get(name.toLowerCase()) ?? name;
+
+    // Extract field name mappings (quicktype may rename fields to avoid Go keyword conflicts)
+    const fieldNames = extractFieldNames(qtCode);
+
+    // Annotate experimental data types
+    const experimentalTypeNames = new Set<string>();
+    for (const method of allMethods) {
+        if (method.stability !== "experimental") continue;
+        experimentalTypeNames.add(toPascalCase(method.rpcMethod) + "Result");
+        const baseName = toPascalCase(method.rpcMethod);
+        if (combinedSchema.definitions![baseName + "Params"]) {
+            experimentalTypeNames.add(baseName + "Params");
+        }
+    }
+    for (const typeName of experimentalTypeNames) {
+        qtCode = qtCode.replace(
+            new RegExp(`^(type ${typeName} struct)`, "m"),
+            `// Experimental: ${typeName} is part of an experimental API and may change or be removed.\n$1`
+        );
+    }
+    // Remove trailing blank lines from quicktype output before appending
+    qtCode = qtCode.replace(/\n+$/, "");
+    // Replace interface{} with any (quicktype emits the pre-1.18 form)
+    qtCode = qtCode.replace(/\binterface\{\}/g, "any");
+
     // Build method wrappers
     const lines: string[] = [];
     lines.push(`// AUTO-GENERATED FILE - DO NOT EDIT`);
@@ -160,27 +893,34 @@ async function generateRpc(schemaPath?: string): Promise<void> {
     lines.push(``);
     lines.push(`package rpc`);
     lines.push(``);
+    const imports = [`"context"`, `"encoding/json"`];
+    if (schema.clientSession) {
+        imports.push(`"errors"`, `"fmt"`);
+    }
+    imports.push(`"github.com/github/copilot-sdk/go/internal/jsonrpc2"`);
+
     lines.push(`import (`);
-    lines.push(`    "context"`);
-    lines.push(`    "encoding/json"`);
-    lines.push(``);
-    lines.push(`    "github.com/github/copilot-sdk/go/internal/jsonrpc2"`);
+    for (const imp of imports) {
+        lines.push(`\t${imp}`);
+    }
     lines.push(`)`);
     lines.push(``);
 
-    // Add quicktype-generated types (skip package line)
-    const qtLines = qtResult.lines.filter((l) => !l.startsWith("package "));
-    lines.push(...qtLines);
+    lines.push(qtCode);
     lines.push(``);
 
     // Emit ServerRpc
     if (schema.server) {
-        emitRpcWrapper(lines, schema.server, false);
+        emitRpcWrapper(lines, schema.server, false, resolveType, fieldNames);
     }
 
     // Emit SessionRpc
     if (schema.session) {
-        emitRpcWrapper(lines, schema.session, true);
+        emitRpcWrapper(lines, schema.session, true, resolveType, fieldNames);
+    }
+
+    if (schema.clientSession) {
+        emitClientSessionApiRegistration(lines, schema.clientSession, resolveType);
     }
 
     const outPath = await writeGeneratedFile("go/rpc/generated_rpc.go", lines.join("\n"));
@@ -189,71 +929,96 @@ async function generateRpc(schemaPath?: string): Promise<void> {
     await formatGoFile(outPath);
 }
 
-function emitRpcWrapper(lines: string[], node: Record<string, unknown>, isSession: boolean): void {
+function emitRpcWrapper(lines: string[], node: Record<string, unknown>, isSession: boolean, resolveType: (name: string) => string, fieldNames: Map<string, Map<string, string>>): void {
     const groups = Object.entries(node).filter(([, v]) => typeof v === "object" && v !== null && !isRpcMethod(v));
     const topLevelMethods = Object.entries(node).filter(([, v]) => isRpcMethod(v));
 
     const wrapperName = isSession ? "SessionRpc" : "ServerRpc";
-    const apiSuffix = "RpcApi";
+    const apiSuffix = "Api";
+    const serviceName = isSession ? "sessionApi" : "serverApi";
 
-    // Emit API structs for groups
+    // Emit the common service struct (unexported, shared by all API groups via type cast)
+    lines.push(`type ${serviceName} struct {`);
+    lines.push(`\tclient *jsonrpc2.Client`);
+    if (isSession) lines.push(`\tsessionID string`);
+    lines.push(`}`);
+    lines.push(``);
+
+    // Emit API types for groups
     for (const [groupName, groupNode] of groups) {
         const prefix = isSession ? "" : "Server";
         const apiName = prefix + toPascalCase(groupName) + apiSuffix;
-        const fields = isSession ? "client *jsonrpc2.Client; sessionID string" : "client *jsonrpc2.Client";
-        lines.push(`type ${apiName} struct { ${fields} }`);
+        const groupExperimental = isNodeFullyExperimental(groupNode as Record<string, unknown>);
+        if (groupExperimental) {
+            lines.push(`// Experimental: ${apiName} contains experimental APIs that may change or be removed.`);
+        }
+        lines.push(`type ${apiName} ${serviceName}`);
         lines.push(``);
         for (const [key, value] of Object.entries(groupNode as Record<string, unknown>)) {
             if (!isRpcMethod(value)) continue;
-            emitMethod(lines, apiName, key, value, isSession);
+            emitMethod(lines, apiName, key, value, isSession, resolveType, fieldNames, groupExperimental);
         }
     }
+
+    // Compute field name lengths for gofmt-compatible column alignment
+    const groupPascalNames = groups.map(([g]) => toPascalCase(g));
+    const allFieldNames = isSession ? ["common", ...groupPascalNames] : ["common", ...groupPascalNames];
+    const maxFieldLen = Math.max(...allFieldNames.map((n) => n.length));
+    const pad = (name: string) => name.padEnd(maxFieldLen);
 
     // Emit wrapper struct
     lines.push(`// ${wrapperName} provides typed ${isSession ? "session" : "server"}-scoped RPC methods.`);
     lines.push(`type ${wrapperName} struct {`);
-    lines.push(`    client *jsonrpc2.Client`);
-    if (isSession) lines.push(`    sessionID string`);
+    lines.push(`\t${pad("common")} ${serviceName} // Reuse a single struct instead of allocating one for each service on the heap.`);
+    lines.push(``);
     for (const [groupName] of groups) {
         const prefix = isSession ? "" : "Server";
-        lines.push(`    ${toPascalCase(groupName)} *${prefix}${toPascalCase(groupName)}${apiSuffix}`);
+        lines.push(`\t${pad(toPascalCase(groupName))} *${prefix}${toPascalCase(groupName)}${apiSuffix}`);
     }
     lines.push(`}`);
     lines.push(``);
 
-    // Top-level methods (server only)
+    // Top-level methods on the wrapper use the common service fields
     for (const [key, value] of topLevelMethods) {
         if (!isRpcMethod(value)) continue;
-        emitMethod(lines, wrapperName, key, value, isSession);
+        emitMethod(lines, wrapperName, key, value, isSession, resolveType, fieldNames, false, true);
     }
 
     // Constructor
     const ctorParams = isSession ? "client *jsonrpc2.Client, sessionID string" : "client *jsonrpc2.Client";
-    const ctorFields = isSession ? "client: client, sessionID: sessionID," : "client: client,";
     lines.push(`func New${wrapperName}(${ctorParams}) *${wrapperName} {`);
-    lines.push(`    return &${wrapperName}{${ctorFields}`);
+    lines.push(`\tr := &${wrapperName}{}`);
+    if (isSession) {
+        lines.push(`\tr.common = ${serviceName}{client: client, sessionID: sessionID}`);
+    } else {
+        lines.push(`\tr.common = ${serviceName}{client: client}`);
+    }
     for (const [groupName] of groups) {
         const prefix = isSession ? "" : "Server";
-        const apiInit = isSession
-            ? `&${toPascalCase(groupName)}${apiSuffix}{client: client, sessionID: sessionID}`
-            : `&${prefix}${toPascalCase(groupName)}${apiSuffix}{client: client}`;
-        lines.push(`        ${toPascalCase(groupName)}: ${apiInit},`);
+        lines.push(`\tr.${toPascalCase(groupName)} = (*${prefix}${toPascalCase(groupName)}${apiSuffix})(&r.common)`);
     }
-    lines.push(`    }`);
+    lines.push(`\treturn r`);
     lines.push(`}`);
     lines.push(``);
 }
 
-function emitMethod(lines: string[], receiver: string, name: string, method: RpcMethod, isSession: boolean): void {
+function emitMethod(lines: string[], receiver: string, name: string, method: RpcMethod, isSession: boolean, resolveType: (name: string) => string, fieldNames: Map<string, Map<string, string>>, groupExperimental = false, isWrapper = false): void {
     const methodName = toPascalCase(name);
-    const resultType = toPascalCase(method.rpcMethod) + "Result";
+    const resultType = resolveType(toPascalCase(method.rpcMethod) + "Result");
 
     const paramProps = method.params?.properties || {};
     const requiredParams = new Set(method.params?.required || []);
     const nonSessionParams = Object.keys(paramProps).filter((k) => k !== "sessionId");
     const hasParams = isSession ? nonSessionParams.length > 0 : Object.keys(paramProps).length > 0;
-    const paramsType = hasParams ? toPascalCase(method.rpcMethod) + "Params" : "";
+    const paramsType = hasParams ? resolveType(toPascalCase(method.rpcMethod) + "Params") : "";
 
+    // For wrapper-level methods, access fields through a.common; for service type aliases, use a directly
+    const clientRef = isWrapper ? "a.common.client" : "a.client";
+    const sessionIDRef = isWrapper ? "a.common.sessionID" : "a.sessionID";
+
+    if (method.stability === "experimental" && !groupExperimental) {
+        lines.push(`// Experimental: ${methodName} is an experimental API and may change or be removed in future versions.`);
+    }
     const sig = hasParams
         ? `func (a *${receiver}) ${methodName}(ctx context.Context, params *${paramsType}) (*${resultType}, error)`
         : `func (a *${receiver}) ${methodName}(ctx context.Context) (*${resultType}, error)`;
@@ -261,33 +1026,149 @@ function emitMethod(lines: string[], receiver: string, name: string, method: Rpc
     lines.push(sig + ` {`);
 
     if (isSession) {
-        lines.push(`    req := map[string]interface{}{"sessionId": a.sessionID}`);
+        lines.push(`\treq := map[string]any{"sessionId": ${sessionIDRef}}`);
         if (hasParams) {
-            lines.push(`    if params != nil {`);
+            lines.push(`\tif params != nil {`);
             for (const pName of nonSessionParams) {
-                const goField = toGoFieldName(pName);
+                const goField = fieldNames.get(paramsType)?.get(pName) ?? toGoFieldName(pName);
                 const isOptional = !requiredParams.has(pName);
                 if (isOptional) {
                     // Optional fields are pointers - only add when non-nil and dereference
-                    lines.push(`        if params.${goField} != nil {`);
-                    lines.push(`            req["${pName}"] = *params.${goField}`);
-                    lines.push(`        }`);
+                    lines.push(`\t\tif params.${goField} != nil {`);
+                    lines.push(`\t\t\treq["${pName}"] = *params.${goField}`);
+                    lines.push(`\t\t}`);
                 } else {
-                    lines.push(`        req["${pName}"] = params.${goField}`);
+                    lines.push(`\t\treq["${pName}"] = params.${goField}`);
                 }
             }
-            lines.push(`    }`);
+            lines.push(`\t}`);
         }
-        lines.push(`    raw, err := a.client.Request("${method.rpcMethod}", req)`);
+        lines.push(`\traw, err := ${clientRef}.Request("${method.rpcMethod}", req)`);
     } else {
-        const arg = hasParams ? "params" : "map[string]interface{}{}";
-        lines.push(`    raw, err := a.client.Request("${method.rpcMethod}", ${arg})`);
+        const arg = hasParams ? "params" : "nil";
+        lines.push(`\traw, err := ${clientRef}.Request("${method.rpcMethod}", ${arg})`);
     }
 
-    lines.push(`    if err != nil { return nil, err }`);
-    lines.push(`    var result ${resultType}`);
-    lines.push(`    if err := json.Unmarshal(raw, &result); err != nil { return nil, err }`);
-    lines.push(`    return &result, nil`);
+    lines.push(`\tif err != nil {`);
+    lines.push(`\t\treturn nil, err`);
+    lines.push(`\t}`);
+    lines.push(`\tvar result ${resultType}`);
+    lines.push(`\tif err := json.Unmarshal(raw, &result); err != nil {`);
+    lines.push(`\t\treturn nil, err`);
+    lines.push(`\t}`);
+    lines.push(`\treturn &result, nil`);
+    lines.push(`}`);
+    lines.push(``);
+}
+
+interface ClientGroup {
+    groupName: string;
+    groupNode: Record<string, unknown>;
+    methods: RpcMethod[];
+}
+
+function collectClientGroups(node: Record<string, unknown>): ClientGroup[] {
+    const groups: ClientGroup[] = [];
+    for (const [groupName, groupNode] of Object.entries(node)) {
+        if (typeof groupNode === "object" && groupNode !== null) {
+            groups.push({
+                groupName,
+                groupNode: groupNode as Record<string, unknown>,
+                methods: collectRpcMethods(groupNode as Record<string, unknown>),
+            });
+        }
+    }
+    return groups;
+}
+
+function clientHandlerInterfaceName(groupName: string): string {
+    return `${toPascalCase(groupName)}Handler`;
+}
+
+function clientHandlerMethodName(rpcMethod: string): string {
+    return toPascalCase(rpcMethod.split(".").at(-1)!);
+}
+
+function emitClientSessionApiRegistration(lines: string[], clientSchema: Record<string, unknown>, resolveType: (name: string) => string): void {
+    const groups = collectClientGroups(clientSchema);
+
+    for (const { groupName, groupNode, methods } of groups) {
+        const interfaceName = clientHandlerInterfaceName(groupName);
+        const groupExperimental = isNodeFullyExperimental(groupNode);
+        if (groupExperimental) {
+            lines.push(`// Experimental: ${interfaceName} contains experimental APIs that may change or be removed.`);
+        }
+        lines.push(`type ${interfaceName} interface {`);
+        for (const method of methods) {
+            if (method.stability === "experimental" && !groupExperimental) {
+                lines.push(`\t// Experimental: ${clientHandlerMethodName(method.rpcMethod)} is an experimental API and may change or be removed in future versions.`);
+            }
+            const paramsType = resolveType(toPascalCase(method.rpcMethod) + "Params");
+            if (method.result) {
+                const resultType = resolveType(toPascalCase(method.rpcMethod) + "Result");
+                lines.push(`\t${clientHandlerMethodName(method.rpcMethod)}(request *${paramsType}) (*${resultType}, error)`);
+            } else {
+                lines.push(`\t${clientHandlerMethodName(method.rpcMethod)}(request *${paramsType}) error`);
+            }
+        }
+        lines.push(`}`);
+        lines.push(``);
+    }
+
+    lines.push(`// ClientSessionApiHandlers provides all client session API handler groups for a session.`);
+    lines.push(`type ClientSessionApiHandlers struct {`);
+    for (const { groupName } of groups) {
+        lines.push(`\t${toPascalCase(groupName)} ${clientHandlerInterfaceName(groupName)}`);
+    }
+    lines.push(`}`);
+    lines.push(``);
+
+    lines.push(`func clientSessionHandlerError(err error) *jsonrpc2.Error {`);
+    lines.push(`\tif err == nil {`);
+    lines.push(`\t\treturn nil`);
+    lines.push(`\t}`);
+    lines.push(`\tvar rpcErr *jsonrpc2.Error`);
+    lines.push(`\tif errors.As(err, &rpcErr) {`);
+    lines.push(`\t\treturn rpcErr`);
+    lines.push(`\t}`);
+    lines.push(`\treturn &jsonrpc2.Error{Code: -32603, Message: err.Error()}`);
+    lines.push(`}`);
+    lines.push(``);
+
+    lines.push(`// RegisterClientSessionApiHandlers registers handlers for server-to-client session API calls.`);
+    lines.push(`func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(sessionID string) *ClientSessionApiHandlers) {`);
+    for (const { groupName, methods } of groups) {
+        const handlerField = toPascalCase(groupName);
+        for (const method of methods) {
+            const paramsType = resolveType(toPascalCase(method.rpcMethod) + "Params");
+            lines.push(`\tclient.SetRequestHandler("${method.rpcMethod}", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {`);
+            lines.push(`\t\tvar request ${paramsType}`);
+            lines.push(`\t\tif err := json.Unmarshal(params, &request); err != nil {`);
+            lines.push(`\t\t\treturn nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}`);
+            lines.push(`\t\t}`);
+            lines.push(`\t\thandlers := getHandlers(request.SessionID)`);
+            lines.push(`\t\tif handlers == nil || handlers.${handlerField} == nil {`);
+            lines.push(`\t\t\treturn nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No ${groupName} handler registered for session: %s", request.SessionID)}`);
+            lines.push(`\t\t}`);
+            if (method.result) {
+                lines.push(`\t\tresult, err := handlers.${handlerField}.${clientHandlerMethodName(method.rpcMethod)}(&request)`);
+                lines.push(`\t\tif err != nil {`);
+                lines.push(`\t\t\treturn nil, clientSessionHandlerError(err)`);
+                lines.push(`\t\t}`);
+                lines.push(`\t\traw, err := json.Marshal(result)`);
+                lines.push(`\t\tif err != nil {`);
+                lines.push(`\t\t\treturn nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}`);
+                lines.push(`\t\t}`);
+                lines.push(`\t\treturn raw, nil`);
+            } else {
+                lines.push(`\t\tif err := handlers.${handlerField}.${clientHandlerMethodName(method.rpcMethod)}(&request); err != nil {`);
+                lines.push(`\t\t\treturn nil, clientSessionHandlerError(err)`);
+                lines.push(`\t\t}`);
+                lines.push(`\t\treturn json.RawMessage("null"), nil`);
+            }
+            lines.push(`\t})`);
+        }
+    }
     lines.push(`}`);
     lines.push(``);
 }
