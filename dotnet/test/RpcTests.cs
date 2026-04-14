@@ -72,8 +72,8 @@ public class RpcTests(E2ETestFixture fixture, ITestOutputHelper output) : E2ETes
         var before = await session.Rpc.Model.GetCurrentAsync();
         Assert.NotNull(before.ModelId);
 
-        // Switch to a different model
-        var result = await session.Rpc.Model.SwitchToAsync(modelId: "gpt-4.1");
+        // Switch to a different model with reasoning effort
+        var result = await session.Rpc.Model.SwitchToAsync(modelId: "gpt-4.1", reasoningEffort: "high");
         Assert.Equal("gpt-4.1", result.ModelId);
 
         // Verify the switch persisted
@@ -88,19 +88,17 @@ public class RpcTests(E2ETestFixture fixture, ITestOutputHelper output) : E2ETes
 
         // Get initial mode (default should be interactive)
         var initial = await session.Rpc.Mode.GetAsync();
-        Assert.Equal(SessionModeGetResultMode.Interactive, initial.Mode);
+        Assert.Equal(SessionMode.Interactive, initial);
 
         // Switch to plan mode
-        var planResult = await session.Rpc.Mode.SetAsync(SessionModeGetResultMode.Plan);
-        Assert.Equal(SessionModeGetResultMode.Plan, planResult.Mode);
+        await session.Rpc.Mode.SetAsync(SessionMode.Plan);
 
         // Verify mode persisted
         var afterPlan = await session.Rpc.Mode.GetAsync();
-        Assert.Equal(SessionModeGetResultMode.Plan, afterPlan.Mode);
+        Assert.Equal(SessionMode.Plan, afterPlan);
 
         // Switch back to interactive
-        var interactiveResult = await session.Rpc.Mode.SetAsync(SessionModeGetResultMode.Interactive);
-        Assert.Equal(SessionModeGetResultMode.Interactive, interactiveResult.Mode);
+        await session.Rpc.Mode.SetAsync(SessionMode.Interactive);
     }
 
     [Fact]
