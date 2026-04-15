@@ -35,18 +35,18 @@ type PreToolUseHandler = (
 
 <!-- docs-validate: hidden -->
 ```python
-from copilot.types import PreToolUseHookInput, HookInvocation, PreToolUseHookOutput
+from copilot.session import PreToolUseHookInput, PreToolUseHookOutput
 from typing import Callable, Awaitable
 
 PreToolUseHandler = Callable[
-    [PreToolUseHookInput, HookInvocation],
+    [PreToolUseHookInput, dict[str, str]],
     Awaitable[PreToolUseHookOutput | None]
 ]
 ```
 <!-- /docs-validate: hidden -->
 ```python
 PreToolUseHandler = Callable[
-    [PreToolUseHookInput, HookInvocation],
+    [PreToolUseHookInput, dict[str, str]],
     Awaitable[PreToolUseHookOutput | None]
 ]
 ```
@@ -95,6 +95,17 @@ public delegate Task<PreToolUseHookOutput?> PreToolUseHandler(
 public delegate Task<PreToolUseHookOutput?> PreToolUseHandler(
     PreToolUseHookInput input,
     HookInvocation invocation);
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.json.*;
+
+PreToolUseHandler preToolUseHandler;
 ```
 
 </details>
@@ -153,14 +164,14 @@ const session = await client.createSession({
 <summary><strong>Python</strong></summary>
 
 ```python
+from copilot.session import PermissionHandler
+
 async def on_pre_tool_use(input_data, invocation):
     print(f"[{invocation['session_id']}] Calling {input_data['toolName']}")
     print(f"  Args: {input_data['toolArgs']}")
     return {"permissionDecision": "allow"}
 
-session = await client.create_session({
-    "hooks": {"on_pre_tool_use": on_pre_tool_use}
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, hooks={"on_pre_tool_use": on_pre_tool_use})
 ```
 
 </details>
@@ -257,6 +268,30 @@ var session = await client.CreateSessionAsync(new SessionConfig
         },
     },
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.*;
+import com.github.copilot.sdk.json.*;
+import java.util.concurrent.CompletableFuture;
+
+var hooks = new SessionHooks()
+    .setOnPreToolUse((input, invocation) -> {
+        System.out.println("[" + invocation.getSessionId() + "] Calling " + input.getToolName());
+        System.out.println("  Args: " + input.getToolArgs());
+        return CompletableFuture.completedFuture(PreToolUseHookOutput.allow());
+    });
+
+var session = client.createSession(
+    new SessionConfig()
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+        .setHooks(hooks)
+).get();
 ```
 
 </details>

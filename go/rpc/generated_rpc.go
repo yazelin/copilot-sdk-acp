@@ -6,34 +6,36 @@ package rpc
 import (
 	"context"
 	"encoding/json"
-
+	"errors"
+	"fmt"
 	"github.com/github/copilot-sdk/go/internal/jsonrpc2"
+	"time"
 )
 
 type PingResult struct {
 	// Echoed message (or default greeting)
 	Message string `json:"message"`
 	// Server protocol version number
-	ProtocolVersion float64 `json:"protocolVersion"`
+	ProtocolVersion int64 `json:"protocolVersion"`
 	// Server timestamp in milliseconds
-	Timestamp float64 `json:"timestamp"`
+	Timestamp int64 `json:"timestamp"`
 }
 
-type PingParams struct {
+type PingRequest struct {
 	// Optional message to echo back
 	Message *string `json:"message,omitempty"`
 }
 
-type ModelsListResult struct {
+type ModelList struct {
 	// List of available models with full metadata
 	Models []Model `json:"models"`
 }
 
 type Model struct {
 	// Billing information
-	Billing *Billing `json:"billing,omitempty"`
+	Billing *ModelBilling `json:"billing,omitempty"`
 	// Model capabilities and limits
-	Capabilities Capabilities `json:"capabilities"`
+	Capabilities ModelCapabilities `json:"capabilities"`
 	// Default reasoning effort level (only present if model supports reasoning effort)
 	DefaultReasoningEffort *string `json:"defaultReasoningEffort,omitempty"`
 	// Model identifier (e.g., "claude-sonnet-4.5")
@@ -41,41 +43,64 @@ type Model struct {
 	// Display name
 	Name string `json:"name"`
 	// Policy state (if applicable)
-	Policy *Policy `json:"policy,omitempty"`
+	Policy *ModelPolicy `json:"policy,omitempty"`
 	// Supported reasoning effort levels (only present if model supports reasoning effort)
 	SupportedReasoningEfforts []string `json:"supportedReasoningEfforts,omitempty"`
 }
 
 // Billing information
-type Billing struct {
+type ModelBilling struct {
+	// Billing cost multiplier relative to the base rate
 	Multiplier float64 `json:"multiplier"`
 }
 
 // Model capabilities and limits
-type Capabilities struct {
-	Limits   Limits   `json:"limits"`
-	Supports Supports `json:"supports"`
+type ModelCapabilities struct {
+	// Token limits for prompts, outputs, and context window
+	Limits ModelCapabilitiesLimits `json:"limits"`
+	// Feature flags indicating what the model supports
+	Supports ModelCapabilitiesSupports `json:"supports"`
 }
 
-type Limits struct {
-	MaxContextWindowTokens float64  `json:"max_context_window_tokens"`
-	MaxOutputTokens        *float64 `json:"max_output_tokens,omitempty"`
-	MaxPromptTokens        *float64 `json:"max_prompt_tokens,omitempty"`
+// Token limits for prompts, outputs, and context window
+type ModelCapabilitiesLimits struct {
+	// Maximum total context window size in tokens
+	MaxContextWindowTokens int64 `json:"max_context_window_tokens"`
+	// Maximum number of output/completion tokens
+	MaxOutputTokens *int64 `json:"max_output_tokens,omitempty"`
+	// Maximum number of prompt/input tokens
+	MaxPromptTokens *int64 `json:"max_prompt_tokens,omitempty"`
+	// Vision-specific limits
+	Vision *ModelCapabilitiesLimitsVision `json:"vision,omitempty"`
 }
 
-type Supports struct {
+// Vision-specific limits
+type ModelCapabilitiesLimitsVision struct {
+	// Maximum image size in bytes
+	MaxPromptImageSize int64 `json:"max_prompt_image_size"`
+	// Maximum number of images per prompt
+	MaxPromptImages int64 `json:"max_prompt_images"`
+	// MIME types the model accepts
+	SupportedMediaTypes []string `json:"supported_media_types"`
+}
+
+// Feature flags indicating what the model supports
+type ModelCapabilitiesSupports struct {
 	// Whether this model supports reasoning effort configuration
 	ReasoningEffort *bool `json:"reasoningEffort,omitempty"`
-	Vision          *bool `json:"vision,omitempty"`
+	// Whether this model supports vision/image input
+	Vision *bool `json:"vision,omitempty"`
 }
 
 // Policy state (if applicable)
-type Policy struct {
+type ModelPolicy struct {
+	// Current policy state for this model
 	State string `json:"state"`
+	// Usage terms or conditions for this model
 	Terms string `json:"terms"`
 }
 
-type ToolsListResult struct {
+type ToolList struct {
 	// List of available built-in tools with metadata
 	Tools []Tool `json:"tools"`
 }
@@ -91,10 +116,10 @@ type Tool struct {
 	// tools)
 	NamespacedName *string `json:"namespacedName,omitempty"`
 	// JSON Schema for the tool's input parameters
-	Parameters map[string]interface{} `json:"parameters,omitempty"`
+	Parameters map[string]any `json:"parameters,omitempty"`
 }
 
-type ToolsListParams struct {
+type ToolsListRequest struct {
 	// Optional model ID — when provided, the returned tool list reflects model-specific
 	// overrides
 	Model *string `json:"model,omitempty"`
@@ -102,52 +127,237 @@ type ToolsListParams struct {
 
 type AccountGetQuotaResult struct {
 	// Quota snapshots keyed by type (e.g., chat, completions, premium_interactions)
-	QuotaSnapshots map[string]QuotaSnapshot `json:"quotaSnapshots"`
+	QuotaSnapshots map[string]AccountQuotaSnapshot `json:"quotaSnapshots"`
 }
 
-type QuotaSnapshot struct {
+type AccountQuotaSnapshot struct {
 	// Number of requests included in the entitlement
-	EntitlementRequests float64 `json:"entitlementRequests"`
+	EntitlementRequests int64 `json:"entitlementRequests"`
 	// Number of overage requests made this period
-	Overage float64 `json:"overage"`
+	Overage int64 `json:"overage"`
 	// Whether pay-per-request usage is allowed when quota is exhausted
 	OverageAllowedWithExhaustedQuota bool `json:"overageAllowedWithExhaustedQuota"`
 	// Percentage of entitlement remaining
 	RemainingPercentage float64 `json:"remainingPercentage"`
 	// Date when the quota resets (ISO 8601)
-	ResetDate *string `json:"resetDate,omitempty"`
+	ResetDate *time.Time `json:"resetDate,omitempty"`
 	// Number of requests used so far this period
-	UsedRequests float64 `json:"usedRequests"`
+	UsedRequests int64 `json:"usedRequests"`
 }
 
-type SessionModelGetCurrentResult struct {
+type MCPConfigList struct {
+	// All MCP servers from user config, keyed by name
+	Servers map[string]MCPConfigServer `json:"servers"`
+}
+
+// MCP server configuration (local/stdio or remote/http)
+type MCPConfigServer struct {
+	Args            []string                `json:"args,omitempty"`
+	Command         *string                 `json:"command,omitempty"`
+	Cwd             *string                 `json:"cwd,omitempty"`
+	Env             map[string]string       `json:"env,omitempty"`
+	FilterMapping   *MCPConfigFilterMapping `json:"filterMapping"`
+	IsDefaultServer *bool                   `json:"isDefaultServer,omitempty"`
+	// Timeout in milliseconds for tool calls to this server.
+	Timeout *int64 `json:"timeout,omitempty"`
+	// Tools to include. Defaults to all tools if not specified.
+	Tools             []string          `json:"tools,omitempty"`
+	Type              *MCPConfigType    `json:"type,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	OauthClientID     *string           `json:"oauthClientId,omitempty"`
+	OauthPublicClient *bool             `json:"oauthPublicClient,omitempty"`
+	URL               *string           `json:"url,omitempty"`
+}
+
+type MCPConfigAddResult struct {
+}
+
+type MCPConfigAddRequest struct {
+	// MCP server configuration (local/stdio or remote/http)
+	Config MCPConfigAddConfig `json:"config"`
+	// Unique name for the MCP server
+	Name string `json:"name"`
+}
+
+// MCP server configuration (local/stdio or remote/http)
+type MCPConfigAddConfig struct {
+	Args            []string                `json:"args,omitempty"`
+	Command         *string                 `json:"command,omitempty"`
+	Cwd             *string                 `json:"cwd,omitempty"`
+	Env             map[string]string       `json:"env,omitempty"`
+	FilterMapping   *MCPConfigFilterMapping `json:"filterMapping"`
+	IsDefaultServer *bool                   `json:"isDefaultServer,omitempty"`
+	// Timeout in milliseconds for tool calls to this server.
+	Timeout *int64 `json:"timeout,omitempty"`
+	// Tools to include. Defaults to all tools if not specified.
+	Tools             []string          `json:"tools,omitempty"`
+	Type              *MCPConfigType    `json:"type,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	OauthClientID     *string           `json:"oauthClientId,omitempty"`
+	OauthPublicClient *bool             `json:"oauthPublicClient,omitempty"`
+	URL               *string           `json:"url,omitempty"`
+}
+
+type MCPConfigUpdateResult struct {
+}
+
+type MCPConfigUpdateRequest struct {
+	// MCP server configuration (local/stdio or remote/http)
+	Config MCPConfigUpdateConfig `json:"config"`
+	// Name of the MCP server to update
+	Name string `json:"name"`
+}
+
+// MCP server configuration (local/stdio or remote/http)
+type MCPConfigUpdateConfig struct {
+	Args            []string                `json:"args,omitempty"`
+	Command         *string                 `json:"command,omitempty"`
+	Cwd             *string                 `json:"cwd,omitempty"`
+	Env             map[string]string       `json:"env,omitempty"`
+	FilterMapping   *MCPConfigFilterMapping `json:"filterMapping"`
+	IsDefaultServer *bool                   `json:"isDefaultServer,omitempty"`
+	// Timeout in milliseconds for tool calls to this server.
+	Timeout *int64 `json:"timeout,omitempty"`
+	// Tools to include. Defaults to all tools if not specified.
+	Tools             []string          `json:"tools,omitempty"`
+	Type              *MCPConfigType    `json:"type,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	OauthClientID     *string           `json:"oauthClientId,omitempty"`
+	OauthPublicClient *bool             `json:"oauthPublicClient,omitempty"`
+	URL               *string           `json:"url,omitempty"`
+}
+
+type MCPConfigRemoveResult struct {
+}
+
+type MCPConfigRemoveRequest struct {
+	// Name of the MCP server to remove
+	Name string `json:"name"`
+}
+
+type MCPDiscoverResult struct {
+	// MCP servers discovered from all sources
+	Servers []DiscoveredMCPServer `json:"servers"`
+}
+
+type DiscoveredMCPServer struct {
+	// Whether the server is enabled (not in the disabled list)
+	Enabled bool `json:"enabled"`
+	// Server name (config key)
+	Name string `json:"name"`
+	// Configuration source
+	Source MCPServerSource `json:"source"`
+	// Server transport type: stdio, http, sse, or memory (local configs are normalized to stdio)
+	Type *DiscoveredMCPServerType `json:"type,omitempty"`
+}
+
+type MCPDiscoverRequest struct {
+	// Working directory used as context for discovery (e.g., plugin resolution)
+	WorkingDirectory *string `json:"workingDirectory,omitempty"`
+}
+
+type SessionFSSetProviderResult struct {
+	// Whether the provider was set successfully
+	Success bool `json:"success"`
+}
+
+type SessionFSSetProviderRequest struct {
+	// Path conventions used by this filesystem
+	Conventions SessionFSSetProviderConventions `json:"conventions"`
+	// Initial working directory for sessions
+	InitialCwd string `json:"initialCwd"`
+	// Path within each session's SessionFs where the runtime stores files for that session
+	SessionStatePath string `json:"sessionStatePath"`
+}
+
+// Experimental: SessionsForkResult is part of an experimental API and may change or be removed.
+type SessionsForkResult struct {
+	// The new forked session's ID
+	SessionID string `json:"sessionId"`
+}
+
+// Experimental: SessionsForkRequest is part of an experimental API and may change or be removed.
+type SessionsForkRequest struct {
+	// Source session ID to fork from
+	SessionID string `json:"sessionId"`
+	// Optional event ID boundary. When provided, the fork includes only events before this ID
+	// (exclusive). When omitted, all events are included.
+	ToEventID *string `json:"toEventId,omitempty"`
+}
+
+type CurrentModel struct {
+	// Currently active model identifier
 	ModelID *string `json:"modelId,omitempty"`
 }
 
-type SessionModelSwitchToResult struct {
+type ModelSwitchToResult struct {
+	// Currently active model identifier after the switch
 	ModelID *string `json:"modelId,omitempty"`
 }
 
-type SessionModelSwitchToParams struct {
+type ModelSwitchToRequest struct {
+	// Override individual model capabilities resolved by the runtime
+	ModelCapabilities *ModelCapabilitiesOverride `json:"modelCapabilities,omitempty"`
+	// Model identifier to switch to
 	ModelID string `json:"modelId"`
+	// Reasoning effort level to use for the model
+	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 }
 
-type SessionModeGetResult struct {
-	// The current agent mode.
-	Mode Mode `json:"mode"`
+// Override individual model capabilities resolved by the runtime
+type ModelCapabilitiesOverride struct {
+	// Token limits for prompts, outputs, and context window
+	Limits *ModelCapabilitiesOverrideLimits `json:"limits,omitempty"`
+	// Feature flags indicating what the model supports
+	Supports *ModelCapabilitiesOverrideSupports `json:"supports,omitempty"`
 }
 
-type SessionModeSetResult struct {
-	// The agent mode after switching.
-	Mode Mode `json:"mode"`
+// Token limits for prompts, outputs, and context window
+type ModelCapabilitiesOverrideLimits struct {
+	// Maximum total context window size in tokens
+	MaxContextWindowTokens *int64                                 `json:"max_context_window_tokens,omitempty"`
+	MaxOutputTokens        *int64                                 `json:"max_output_tokens,omitempty"`
+	MaxPromptTokens        *int64                                 `json:"max_prompt_tokens,omitempty"`
+	Vision                 *ModelCapabilitiesOverrideLimitsVision `json:"vision,omitempty"`
 }
 
-type SessionModeSetParams struct {
-	// The mode to switch to. Valid values: "interactive", "plan", "autopilot".
-	Mode Mode `json:"mode"`
+type ModelCapabilitiesOverrideLimitsVision struct {
+	// Maximum image size in bytes
+	MaxPromptImageSize *int64 `json:"max_prompt_image_size,omitempty"`
+	// Maximum number of images per prompt
+	MaxPromptImages *int64 `json:"max_prompt_images,omitempty"`
+	// MIME types the model accepts
+	SupportedMediaTypes []string `json:"supported_media_types,omitempty"`
 }
 
-type SessionPlanReadResult struct {
+// Feature flags indicating what the model supports
+type ModelCapabilitiesOverrideSupports struct {
+	ReasoningEffort *bool `json:"reasoningEffort,omitempty"`
+	Vision          *bool `json:"vision,omitempty"`
+}
+
+type ModeSetResult struct {
+}
+
+type ModeSetRequest struct {
+	// The agent mode. Valid values: "interactive", "plan", "autopilot".
+	Mode SessionMode `json:"mode"`
+}
+
+type NameGetResult struct {
+	// The session name, falling back to the auto-generated summary, or null if neither exists
+	Name *string `json:"name"`
+}
+
+type NameSetResult struct {
+}
+
+type NameSetRequest struct {
+	// New session name (1–100 characters, trimmed of leading/trailing whitespace)
+	Name string `json:"name"`
+}
+
+type PlanReadResult struct {
 	// The content of the plan file, or null if it does not exist
 	Content *string `json:"content"`
 	// Whether the plan file exists in the workspace
@@ -156,58 +366,84 @@ type SessionPlanReadResult struct {
 	Path *string `json:"path"`
 }
 
-type SessionPlanUpdateResult struct {
+type PlanUpdateResult struct {
 }
 
-type SessionPlanUpdateParams struct {
+type PlanUpdateRequest struct {
 	// The new content for the plan file
 	Content string `json:"content"`
 }
 
-type SessionPlanDeleteResult struct {
+type PlanDeleteResult struct {
 }
 
-type SessionWorkspaceListFilesResult struct {
+type WorkspacesGetWorkspaceResult struct {
+	// Current workspace metadata, or null if not available
+	Workspace *WorkspaceClass `json:"workspace"`
+}
+
+type WorkspaceClass struct {
+	Branch           *string           `json:"branch,omitempty"`
+	CreatedAt        *time.Time        `json:"created_at,omitempty"`
+	Cwd              *string           `json:"cwd,omitempty"`
+	GitRoot          *string           `json:"git_root,omitempty"`
+	HostType         *HostType         `json:"host_type,omitempty"`
+	ID               string            `json:"id"`
+	McLastEventID    *string           `json:"mc_last_event_id,omitempty"`
+	McSessionID      *string           `json:"mc_session_id,omitempty"`
+	McTaskID         *string           `json:"mc_task_id,omitempty"`
+	Name             *string           `json:"name,omitempty"`
+	Repository       *string           `json:"repository,omitempty"`
+	SessionSyncLevel *SessionSyncLevel `json:"session_sync_level,omitempty"`
+	Summary          *string           `json:"summary,omitempty"`
+	SummaryCount     *int64            `json:"summary_count,omitempty"`
+	UpdatedAt        *time.Time        `json:"updated_at,omitempty"`
+}
+
+type WorkspacesListFilesResult struct {
 	// Relative file paths in the workspace files directory
 	Files []string `json:"files"`
 }
 
-type SessionWorkspaceReadFileResult struct {
+type WorkspacesReadFileResult struct {
 	// File content as a UTF-8 string
 	Content string `json:"content"`
 }
 
-type SessionWorkspaceReadFileParams struct {
+type WorkspacesReadFileRequest struct {
 	// Relative path within the workspace files directory
 	Path string `json:"path"`
 }
 
-type SessionWorkspaceCreateFileResult struct {
+type WorkspacesCreateFileResult struct {
 }
 
-type SessionWorkspaceCreateFileParams struct {
+type WorkspacesCreateFileRequest struct {
 	// File content to write as a UTF-8 string
 	Content string `json:"content"`
 	// Relative path within the workspace files directory
 	Path string `json:"path"`
 }
 
-type SessionFleetStartResult struct {
+// Experimental: FleetStartResult is part of an experimental API and may change or be removed.
+type FleetStartResult struct {
 	// Whether fleet mode was successfully activated
 	Started bool `json:"started"`
 }
 
-type SessionFleetStartParams struct {
+// Experimental: FleetStartRequest is part of an experimental API and may change or be removed.
+type FleetStartRequest struct {
 	// Optional user prompt to combine with fleet instructions
 	Prompt *string `json:"prompt,omitempty"`
 }
 
-type SessionAgentListResult struct {
+// Experimental: AgentList is part of an experimental API and may change or be removed.
+type AgentList struct {
 	// Available custom agents
-	Agents []AgentElement `json:"agents"`
+	Agents []Agent `json:"agents"`
 }
 
-type AgentElement struct {
+type Agent struct {
 	// Description of the agent's purpose
 	Description string `json:"description"`
 	// Human-readable display name
@@ -216,12 +452,13 @@ type AgentElement struct {
 	Name string `json:"name"`
 }
 
-type SessionAgentGetCurrentResult struct {
+// Experimental: AgentGetCurrentResult is part of an experimental API and may change or be removed.
+type AgentGetCurrentResult struct {
 	// Currently selected custom agent, or null if using the default agent
-	Agent *SessionAgentGetCurrentResultAgent `json:"agent"`
+	Agent *AgentGetCurrentResultAgent `json:"agent"`
 }
 
-type SessionAgentGetCurrentResultAgent struct {
+type AgentGetCurrentResultAgent struct {
 	// Description of the agent's purpose
 	Description string `json:"description"`
 	// Human-readable display name
@@ -230,13 +467,14 @@ type SessionAgentGetCurrentResultAgent struct {
 	Name string `json:"name"`
 }
 
-type SessionAgentSelectResult struct {
+// Experimental: AgentSelectResult is part of an experimental API and may change or be removed.
+type AgentSelectResult struct {
 	// The newly selected custom agent
-	Agent SessionAgentSelectResultAgent `json:"agent"`
+	Agent AgentSelectAgent `json:"agent"`
 }
 
 // The newly selected custom agent
-type SessionAgentSelectResultAgent struct {
+type AgentSelectAgent struct {
 	// Description of the agent's purpose
 	Description string `json:"description"`
 	// Human-readable display name
@@ -245,117 +483,839 @@ type SessionAgentSelectResultAgent struct {
 	Name string `json:"name"`
 }
 
-type SessionAgentSelectParams struct {
+// Experimental: AgentSelectRequest is part of an experimental API and may change or be removed.
+type AgentSelectRequest struct {
 	// Name of the custom agent to select
 	Name string `json:"name"`
 }
 
-type SessionAgentDeselectResult struct {
+// Experimental: AgentDeselectResult is part of an experimental API and may change or be removed.
+type AgentDeselectResult struct {
 }
 
-type SessionCompactionCompactResult struct {
+// Experimental: AgentReloadResult is part of an experimental API and may change or be removed.
+type AgentReloadResult struct {
+	// Reloaded custom agents
+	Agents []AgentReloadAgent `json:"agents"`
+}
+
+type AgentReloadAgent struct {
+	// Description of the agent's purpose
+	Description string `json:"description"`
+	// Human-readable display name
+	DisplayName string `json:"displayName"`
+	// Unique identifier of the custom agent
+	Name string `json:"name"`
+}
+
+// Experimental: SkillList is part of an experimental API and may change or be removed.
+type SkillList struct {
+	// Available skills
+	Skills []Skill `json:"skills"`
+}
+
+type Skill struct {
+	// Description of what the skill does
+	Description string `json:"description"`
+	// Whether the skill is currently enabled
+	Enabled bool `json:"enabled"`
+	// Unique identifier for the skill
+	Name string `json:"name"`
+	// Absolute path to the skill file
+	Path *string `json:"path,omitempty"`
+	// Source location type (e.g., project, personal, plugin)
+	Source string `json:"source"`
+	// Whether the skill can be invoked by the user as a slash command
+	UserInvocable bool `json:"userInvocable"`
+}
+
+// Experimental: SkillsEnableResult is part of an experimental API and may change or be removed.
+type SkillsEnableResult struct {
+}
+
+// Experimental: SkillsEnableRequest is part of an experimental API and may change or be removed.
+type SkillsEnableRequest struct {
+	// Name of the skill to enable
+	Name string `json:"name"`
+}
+
+// Experimental: SkillsDisableResult is part of an experimental API and may change or be removed.
+type SkillsDisableResult struct {
+}
+
+// Experimental: SkillsDisableRequest is part of an experimental API and may change or be removed.
+type SkillsDisableRequest struct {
+	// Name of the skill to disable
+	Name string `json:"name"`
+}
+
+// Experimental: SkillsReloadResult is part of an experimental API and may change or be removed.
+type SkillsReloadResult struct {
+}
+
+type MCPServerList struct {
+	// Configured MCP servers
+	Servers []MCPServer `json:"servers"`
+}
+
+type MCPServer struct {
+	// Error message if the server failed to connect
+	Error *string `json:"error,omitempty"`
+	// Server name (config key)
+	Name string `json:"name"`
+	// Configuration source: user, workspace, plugin, or builtin
+	Source *MCPServerSource `json:"source,omitempty"`
+	// Connection status: connected, failed, needs-auth, pending, disabled, or not_configured
+	Status MCPServerStatus `json:"status"`
+}
+
+type MCPEnableResult struct {
+}
+
+type MCPEnableRequest struct {
+	// Name of the MCP server to enable
+	ServerName string `json:"serverName"`
+}
+
+type MCPDisableResult struct {
+}
+
+type MCPDisableRequest struct {
+	// Name of the MCP server to disable
+	ServerName string `json:"serverName"`
+}
+
+type MCPReloadResult struct {
+}
+
+// Experimental: PluginList is part of an experimental API and may change or be removed.
+type PluginList struct {
+	// Installed plugins
+	Plugins []PluginElement `json:"plugins"`
+}
+
+type PluginElement struct {
+	// Whether the plugin is currently enabled
+	Enabled bool `json:"enabled"`
+	// Marketplace the plugin came from
+	Marketplace string `json:"marketplace"`
+	// Plugin name
+	Name string `json:"name"`
+	// Installed version
+	Version *string `json:"version,omitempty"`
+}
+
+// Experimental: ExtensionList is part of an experimental API and may change or be removed.
+type ExtensionList struct {
+	// Discovered extensions and their current status
+	Extensions []Extension `json:"extensions"`
+}
+
+type Extension struct {
+	// Source-qualified ID (e.g., 'project:my-ext', 'user:auth-helper')
+	ID string `json:"id"`
+	// Extension name (directory name)
+	Name string `json:"name"`
+	// Process ID if the extension is running
+	PID *int64 `json:"pid,omitempty"`
+	// Discovery source: project (.github/extensions/) or user (~/.copilot/extensions/)
+	Source ExtensionSource `json:"source"`
+	// Current status: running, disabled, failed, or starting
+	Status ExtensionStatus `json:"status"`
+}
+
+// Experimental: ExtensionsEnableResult is part of an experimental API and may change or be removed.
+type ExtensionsEnableResult struct {
+}
+
+// Experimental: ExtensionsEnableRequest is part of an experimental API and may change or be removed.
+type ExtensionsEnableRequest struct {
+	// Source-qualified extension ID to enable
+	ID string `json:"id"`
+}
+
+// Experimental: ExtensionsDisableResult is part of an experimental API and may change or be removed.
+type ExtensionsDisableResult struct {
+}
+
+// Experimental: ExtensionsDisableRequest is part of an experimental API and may change or be removed.
+type ExtensionsDisableRequest struct {
+	// Source-qualified extension ID to disable
+	ID string `json:"id"`
+}
+
+// Experimental: ExtensionsReloadResult is part of an experimental API and may change or be removed.
+type ExtensionsReloadResult struct {
+}
+
+type HandleToolCallResult struct {
+	// Whether the tool call result was handled successfully
+	Success bool `json:"success"`
+}
+
+type ToolsHandlePendingToolCallRequest struct {
+	// Error message if the tool call failed
+	Error *string `json:"error,omitempty"`
+	// Request ID of the pending tool call
+	RequestID string `json:"requestId"`
+	// Tool call result (string or expanded result object)
+	Result *ToolsHandlePendingToolCall `json:"result"`
+}
+
+type ToolCallResult struct {
+	// Error message if the tool call failed
+	Error *string `json:"error,omitempty"`
+	// Type of the tool result
+	ResultType *string `json:"resultType,omitempty"`
+	// Text result to send back to the LLM
+	TextResultForLlm string `json:"textResultForLlm"`
+	// Telemetry data from tool execution
+	ToolTelemetry map[string]any `json:"toolTelemetry,omitempty"`
+}
+
+type CommandsHandlePendingCommandResult struct {
+	// Whether the command was handled successfully
+	Success bool `json:"success"`
+}
+
+type CommandsHandlePendingCommandRequest struct {
+	// Error message if the command handler failed
+	Error *string `json:"error,omitempty"`
+	// Request ID from the command invocation event
+	RequestID string `json:"requestId"`
+}
+
+// The elicitation response (accept with form values, decline, or cancel)
+type UIElicitationResponse struct {
+	// The user's response: accept (submitted), decline (rejected), or cancel (dismissed)
+	Action UIElicitationResponseAction `json:"action"`
+	// The form values submitted by the user (present when action is 'accept')
+	Content map[string]*UIElicitationFieldValue `json:"content,omitempty"`
+}
+
+type UIElicitationRequest struct {
+	// Message describing what information is needed from the user
+	Message string `json:"message"`
+	// JSON Schema describing the form fields to present to the user
+	RequestedSchema UIElicitationSchema `json:"requestedSchema"`
+}
+
+// JSON Schema describing the form fields to present to the user
+type UIElicitationSchema struct {
+	// Form field definitions, keyed by field name
+	Properties map[string]UIElicitationSchemaProperty `json:"properties"`
+	// List of required field names
+	Required []string `json:"required,omitempty"`
+	// Schema type indicator (always 'object')
+	Type RequestedSchemaType `json:"type"`
+}
+
+type UIElicitationSchemaProperty struct {
+	Default     *UIElicitationFieldValue                 `json:"default"`
+	Description *string                                  `json:"description,omitempty"`
+	Enum        []string                                 `json:"enum,omitempty"`
+	EnumNames   []string                                 `json:"enumNames,omitempty"`
+	Title       *string                                  `json:"title,omitempty"`
+	Type        UIElicitationSchemaPropertyNumberType    `json:"type"`
+	OneOf       []UIElicitationStringOneOfFieldOneOf     `json:"oneOf,omitempty"`
+	Items       *UIElicitationArrayFieldItems            `json:"items,omitempty"`
+	MaxItems    *float64                                 `json:"maxItems,omitempty"`
+	MinItems    *float64                                 `json:"minItems,omitempty"`
+	Format      *UIElicitationSchemaPropertyStringFormat `json:"format,omitempty"`
+	MaxLength   *float64                                 `json:"maxLength,omitempty"`
+	MinLength   *float64                                 `json:"minLength,omitempty"`
+	Maximum     *float64                                 `json:"maximum,omitempty"`
+	Minimum     *float64                                 `json:"minimum,omitempty"`
+}
+
+type UIElicitationArrayFieldItems struct {
+	Enum  []string                                 `json:"enum,omitempty"`
+	Type  *ItemsType                               `json:"type,omitempty"`
+	AnyOf []UIElicitationArrayAnyOfFieldItemsAnyOf `json:"anyOf,omitempty"`
+}
+
+type UIElicitationArrayAnyOfFieldItemsAnyOf struct {
+	Const string `json:"const"`
+	Title string `json:"title"`
+}
+
+type UIElicitationStringOneOfFieldOneOf struct {
+	Const string `json:"const"`
+	Title string `json:"title"`
+}
+
+type UIElicitationResult struct {
+	// Whether the response was accepted. False if the request was already resolved by another
+	// client.
+	Success bool `json:"success"`
+}
+
+type UIHandlePendingElicitationRequest struct {
+	// The unique request ID from the elicitation.requested event
+	RequestID string `json:"requestId"`
+	// The elicitation response (accept with form values, decline, or cancel)
+	Result UIElicitationResponse `json:"result"`
+}
+
+type PermissionRequestResult struct {
+	// Whether the permission request was handled successfully
+	Success bool `json:"success"`
+}
+
+type PermissionDecisionRequest struct {
+	// Request ID of the pending permission request
+	RequestID string             `json:"requestId"`
+	Result    PermissionDecision `json:"result"`
+}
+
+type PermissionDecision struct {
+	// The permission request was approved
+	//
+	// Denied because approval rules explicitly blocked it
+	//
+	// Denied because no approval rule matched and user confirmation was unavailable
+	//
+	// Denied by the user during an interactive prompt
+	//
+	// Denied by the organization's content exclusion policy
+	//
+	// Denied by a permission request hook registered by an extension or plugin
+	Kind Kind `json:"kind"`
+	// Rules that denied the request
+	Rules []any `json:"rules,omitempty"`
+	// Optional feedback from the user explaining the denial
+	Feedback *string `json:"feedback,omitempty"`
+	// Human-readable explanation of why the path was excluded
+	//
+	// Optional message from the hook explaining the denial
+	Message *string `json:"message,omitempty"`
+	// File path that triggered the exclusion
+	Path *string `json:"path,omitempty"`
+	// Whether to interrupt the current agent turn
+	Interrupt *bool `json:"interrupt,omitempty"`
+}
+
+type LogResult struct {
+	// The unique identifier of the emitted session event
+	EventID string `json:"eventId"`
+}
+
+type LogRequest struct {
+	// When true, the message is transient and not persisted to the session event log on disk
+	Ephemeral *bool `json:"ephemeral,omitempty"`
+	// Log severity level. Determines how the message is displayed in the timeline. Defaults to
+	// "info".
+	Level *SessionLogLevel `json:"level,omitempty"`
+	// Human-readable message
+	Message string `json:"message"`
+	// Optional URL the user can open in their browser for more details
+	URL *string `json:"url,omitempty"`
+}
+
+type ShellExecResult struct {
+	// Unique identifier for tracking streamed output
+	ProcessID string `json:"processId"`
+}
+
+type ShellExecRequest struct {
+	// Shell command to execute
+	Command string `json:"command"`
+	// Working directory (defaults to session working directory)
+	Cwd *string `json:"cwd,omitempty"`
+	// Timeout in milliseconds (default: 30000)
+	Timeout *int64 `json:"timeout,omitempty"`
+}
+
+type ShellKillResult struct {
+	// Whether the signal was sent successfully
+	Killed bool `json:"killed"`
+}
+
+type ShellKillRequest struct {
+	// Process identifier returned by shell.exec
+	ProcessID string `json:"processId"`
+	// Signal to send (default: SIGTERM)
+	Signal *ShellKillSignal `json:"signal,omitempty"`
+}
+
+// Experimental: HistoryCompactResult is part of an experimental API and may change or be removed.
+type HistoryCompactResult struct {
+	// Post-compaction context window usage breakdown
+	ContextWindow *HistoryCompactContextWindow `json:"contextWindow,omitempty"`
 	// Number of messages removed during compaction
-	MessagesRemoved float64 `json:"messagesRemoved"`
+	MessagesRemoved int64 `json:"messagesRemoved"`
 	// Whether compaction completed successfully
 	Success bool `json:"success"`
 	// Number of tokens freed by compaction
-	TokensRemoved float64 `json:"tokensRemoved"`
+	TokensRemoved int64 `json:"tokensRemoved"`
 }
 
-type SessionToolsHandlePendingToolCallResult struct {
-	Success bool `json:"success"`
+// Post-compaction context window usage breakdown
+type HistoryCompactContextWindow struct {
+	// Token count from non-system messages (user, assistant, tool)
+	ConversationTokens *int64 `json:"conversationTokens,omitempty"`
+	// Current total tokens in the context window (system + conversation + tool definitions)
+	CurrentTokens int64 `json:"currentTokens"`
+	// Current number of messages in the conversation
+	MessagesLength int64 `json:"messagesLength"`
+	// Token count from system message(s)
+	SystemTokens *int64 `json:"systemTokens,omitempty"`
+	// Maximum token count for the model's context window
+	TokenLimit int64 `json:"tokenLimit"`
+	// Token count from tool definitions
+	ToolDefinitionsTokens *int64 `json:"toolDefinitionsTokens,omitempty"`
 }
 
-type SessionToolsHandlePendingToolCallParams struct {
-	Error     *string      `json:"error,omitempty"`
-	RequestID string       `json:"requestId"`
-	Result    *ResultUnion `json:"result"`
+// Experimental: HistoryTruncateResult is part of an experimental API and may change or be removed.
+type HistoryTruncateResult struct {
+	// Number of events that were removed
+	EventsRemoved int64 `json:"eventsRemoved"`
 }
 
-type ResultResult struct {
-	Error            *string                `json:"error,omitempty"`
-	ResultType       *string                `json:"resultType,omitempty"`
-	TextResultForLlm string                 `json:"textResultForLlm"`
-	ToolTelemetry    map[string]interface{} `json:"toolTelemetry,omitempty"`
+// Experimental: HistoryTruncateRequest is part of an experimental API and may change or be removed.
+type HistoryTruncateRequest struct {
+	// Event ID to truncate to. This event and all events after it are removed from the session.
+	EventID string `json:"eventId"`
 }
 
-type SessionPermissionsHandlePendingPermissionRequestResult struct {
-	Success bool `json:"success"`
+// Experimental: UsageGetMetricsResult is part of an experimental API and may change or be removed.
+type UsageGetMetricsResult struct {
+	// Aggregated code change metrics
+	CodeChanges UsageMetricsCodeChanges `json:"codeChanges"`
+	// Currently active model identifier
+	CurrentModel *string `json:"currentModel,omitempty"`
+	// Input tokens from the most recent main-agent API call
+	LastCallInputTokens int64 `json:"lastCallInputTokens"`
+	// Output tokens from the most recent main-agent API call
+	LastCallOutputTokens int64 `json:"lastCallOutputTokens"`
+	// Per-model token and request metrics, keyed by model identifier
+	ModelMetrics map[string]UsageMetricsModelMetric `json:"modelMetrics"`
+	// Session start timestamp (epoch milliseconds)
+	SessionStartTime int64 `json:"sessionStartTime"`
+	// Total time spent in model API calls (milliseconds)
+	TotalAPIDurationMS float64 `json:"totalApiDurationMs"`
+	// Total user-initiated premium request cost across all models (may be fractional due to
+	// multipliers)
+	TotalPremiumRequestCost float64 `json:"totalPremiumRequestCost"`
+	// Raw count of user-initiated API requests
+	TotalUserRequests int64 `json:"totalUserRequests"`
 }
 
-type SessionPermissionsHandlePendingPermissionRequestParams struct {
-	RequestID string                                                       `json:"requestId"`
-	Result    SessionPermissionsHandlePendingPermissionRequestParamsResult `json:"result"`
+// Aggregated code change metrics
+type UsageMetricsCodeChanges struct {
+	// Number of distinct files modified
+	FilesModifiedCount int64 `json:"filesModifiedCount"`
+	// Total lines of code added
+	LinesAdded int64 `json:"linesAdded"`
+	// Total lines of code removed
+	LinesRemoved int64 `json:"linesRemoved"`
 }
 
-type SessionPermissionsHandlePendingPermissionRequestParamsResult struct {
-	Kind     Kind          `json:"kind"`
-	Rules    []interface{} `json:"rules,omitempty"`
-	Feedback *string       `json:"feedback,omitempty"`
-	Message  *string       `json:"message,omitempty"`
-	Path     *string       `json:"path,omitempty"`
+type UsageMetricsModelMetric struct {
+	// Request count and cost metrics for this model
+	Requests UsageMetricsModelMetricRequests `json:"requests"`
+	// Token usage metrics for this model
+	Usage UsageMetricsModelMetricUsage `json:"usage"`
 }
 
-// The current agent mode.
-//
-// The agent mode after switching.
-//
-// The mode to switch to. Valid values: "interactive", "plan", "autopilot".
-type Mode string
+// Request count and cost metrics for this model
+type UsageMetricsModelMetricRequests struct {
+	// User-initiated premium request cost (with multiplier applied)
+	Cost float64 `json:"cost"`
+	// Number of API requests made with this model
+	Count int64 `json:"count"`
+}
+
+// Token usage metrics for this model
+type UsageMetricsModelMetricUsage struct {
+	// Total tokens read from prompt cache
+	CacheReadTokens int64 `json:"cacheReadTokens"`
+	// Total tokens written to prompt cache
+	CacheWriteTokens int64 `json:"cacheWriteTokens"`
+	// Total input tokens consumed
+	InputTokens int64 `json:"inputTokens"`
+	// Total output tokens produced
+	OutputTokens int64 `json:"outputTokens"`
+	// Total output tokens used for reasoning
+	ReasoningTokens *int64 `json:"reasoningTokens,omitempty"`
+}
+
+type SessionFSReadFileResult struct {
+	// File content as UTF-8 string
+	Content string `json:"content"`
+}
+
+type SessionFSReadFileRequest struct {
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSWriteFileResult struct {
+}
+
+type SessionFSWriteFileRequest struct {
+	// Content to write
+	Content string `json:"content"`
+	// Optional POSIX-style mode for newly created files
+	Mode *int64 `json:"mode,omitempty"`
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSAppendFileResult struct {
+}
+
+type SessionFSAppendFileRequest struct {
+	// Content to append
+	Content string `json:"content"`
+	// Optional POSIX-style mode for newly created files
+	Mode *int64 `json:"mode,omitempty"`
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSExistsResult struct {
+	// Whether the path exists
+	Exists bool `json:"exists"`
+}
+
+type SessionFSExistsRequest struct {
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSStatResult struct {
+	// ISO 8601 timestamp of creation
+	Birthtime time.Time `json:"birthtime"`
+	// Whether the path is a directory
+	IsDirectory bool `json:"isDirectory"`
+	// Whether the path is a file
+	IsFile bool `json:"isFile"`
+	// ISO 8601 timestamp of last modification
+	Mtime time.Time `json:"mtime"`
+	// File size in bytes
+	Size int64 `json:"size"`
+}
+
+type SessionFSStatRequest struct {
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSMkdirResult struct {
+}
+
+type SessionFSMkdirRequest struct {
+	// Optional POSIX-style mode for newly created directories
+	Mode *int64 `json:"mode,omitempty"`
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Create parent directories as needed
+	Recursive *bool `json:"recursive,omitempty"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSReaddirResult struct {
+	// Entry names in the directory
+	Entries []string `json:"entries"`
+}
+
+type SessionFSReaddirRequest struct {
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSReaddirWithTypesResult struct {
+	// Directory entries with type information
+	Entries []SessionFSReaddirWithTypesEntry `json:"entries"`
+}
+
+type SessionFSReaddirWithTypesEntry struct {
+	// Entry name
+	Name string `json:"name"`
+	// Entry type
+	Type SessionFSReaddirWithTypesEntryType `json:"type"`
+}
+
+type SessionFSReaddirWithTypesRequest struct {
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSRmResult struct {
+}
+
+type SessionFSRmRequest struct {
+	// Ignore errors if the path does not exist
+	Force *bool `json:"force,omitempty"`
+	// Path using SessionFs conventions
+	Path string `json:"path"`
+	// Remove directories and their contents recursively
+	Recursive *bool `json:"recursive,omitempty"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+type SessionFSRenameResult struct {
+}
+
+type SessionFSRenameRequest struct {
+	// Destination path using SessionFs conventions
+	Dest string `json:"dest"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+	// Source path using SessionFs conventions
+	Src string `json:"src"`
+}
+
+type MCPConfigFilterMappingString string
 
 const (
-	Autopilot   Mode = "autopilot"
-	Interactive Mode = "interactive"
-	Plan        Mode = "plan"
+	MCPConfigFilterMappingStringHiddenCharacters MCPConfigFilterMappingString = "hidden_characters"
+	MCPConfigFilterMappingStringMarkdown         MCPConfigFilterMappingString = "markdown"
+	MCPConfigFilterMappingStringNone             MCPConfigFilterMappingString = "none"
+)
+
+type MCPConfigType string
+
+const (
+	MCPConfigTypeHTTP  MCPConfigType = "http"
+	MCPConfigTypeLocal MCPConfigType = "local"
+	MCPConfigTypeSSE   MCPConfigType = "sse"
+	MCPConfigTypeStdio MCPConfigType = "stdio"
+)
+
+// Configuration source
+//
+// Configuration source: user, workspace, plugin, or builtin
+type MCPServerSource string
+
+const (
+	MCPServerSourceBuiltin   MCPServerSource = "builtin"
+	MCPServerSourceUser      MCPServerSource = "user"
+	MCPServerSourcePlugin    MCPServerSource = "plugin"
+	MCPServerSourceWorkspace MCPServerSource = "workspace"
+)
+
+// Server transport type: stdio, http, sse, or memory (local configs are normalized to stdio)
+type DiscoveredMCPServerType string
+
+const (
+	DiscoveredMCPServerTypeHTTP   DiscoveredMCPServerType = "http"
+	DiscoveredMCPServerTypeSSE    DiscoveredMCPServerType = "sse"
+	DiscoveredMCPServerTypeStdio  DiscoveredMCPServerType = "stdio"
+	DiscoveredMCPServerTypeMemory DiscoveredMCPServerType = "memory"
+)
+
+// Path conventions used by this filesystem
+type SessionFSSetProviderConventions string
+
+const (
+	SessionFSSetProviderConventionsPosix   SessionFSSetProviderConventions = "posix"
+	SessionFSSetProviderConventionsWindows SessionFSSetProviderConventions = "windows"
+)
+
+// The agent mode. Valid values: "interactive", "plan", "autopilot".
+type SessionMode string
+
+const (
+	SessionModeAutopilot   SessionMode = "autopilot"
+	SessionModeInteractive SessionMode = "interactive"
+	SessionModePlan        SessionMode = "plan"
+)
+
+type HostType string
+
+const (
+	HostTypeAdo    HostType = "ado"
+	HostTypeGithub HostType = "github"
+)
+
+type SessionSyncLevel string
+
+const (
+	SessionSyncLevelRepoAndUser SessionSyncLevel = "repo_and_user"
+	SessionSyncLevelLocal       SessionSyncLevel = "local"
+	SessionSyncLevelUser        SessionSyncLevel = "user"
+)
+
+// Connection status: connected, failed, needs-auth, pending, disabled, or not_configured
+type MCPServerStatus string
+
+const (
+	MCPServerStatusConnected     MCPServerStatus = "connected"
+	MCPServerStatusDisabled      MCPServerStatus = "disabled"
+	MCPServerStatusFailed        MCPServerStatus = "failed"
+	MCPServerStatusNeedsAuth     MCPServerStatus = "needs-auth"
+	MCPServerStatusNotConfigured MCPServerStatus = "not_configured"
+	MCPServerStatusPending       MCPServerStatus = "pending"
+)
+
+// Discovery source: project (.github/extensions/) or user (~/.copilot/extensions/)
+type ExtensionSource string
+
+const (
+	ExtensionSourceUser    ExtensionSource = "user"
+	ExtensionSourceProject ExtensionSource = "project"
+)
+
+// Current status: running, disabled, failed, or starting
+type ExtensionStatus string
+
+const (
+	ExtensionStatusDisabled ExtensionStatus = "disabled"
+	ExtensionStatusFailed   ExtensionStatus = "failed"
+	ExtensionStatusRunning  ExtensionStatus = "running"
+	ExtensionStatusStarting ExtensionStatus = "starting"
+)
+
+// The user's response: accept (submitted), decline (rejected), or cancel (dismissed)
+type UIElicitationResponseAction string
+
+const (
+	UIElicitationResponseActionAccept  UIElicitationResponseAction = "accept"
+	UIElicitationResponseActionCancel  UIElicitationResponseAction = "cancel"
+	UIElicitationResponseActionDecline UIElicitationResponseAction = "decline"
+)
+
+type UIElicitationSchemaPropertyStringFormat string
+
+const (
+	UIElicitationSchemaPropertyStringFormatDate     UIElicitationSchemaPropertyStringFormat = "date"
+	UIElicitationSchemaPropertyStringFormatDateTime UIElicitationSchemaPropertyStringFormat = "date-time"
+	UIElicitationSchemaPropertyStringFormatEmail    UIElicitationSchemaPropertyStringFormat = "email"
+	UIElicitationSchemaPropertyStringFormatURI      UIElicitationSchemaPropertyStringFormat = "uri"
+)
+
+type ItemsType string
+
+const (
+	ItemsTypeString ItemsType = "string"
+)
+
+type UIElicitationSchemaPropertyNumberType string
+
+const (
+	UIElicitationSchemaPropertyNumberTypeArray   UIElicitationSchemaPropertyNumberType = "array"
+	UIElicitationSchemaPropertyNumberTypeBoolean UIElicitationSchemaPropertyNumberType = "boolean"
+	UIElicitationSchemaPropertyNumberTypeInteger UIElicitationSchemaPropertyNumberType = "integer"
+	UIElicitationSchemaPropertyNumberTypeNumber  UIElicitationSchemaPropertyNumberType = "number"
+	UIElicitationSchemaPropertyNumberTypeString  UIElicitationSchemaPropertyNumberType = "string"
+)
+
+type RequestedSchemaType string
+
+const (
+	RequestedSchemaTypeObject RequestedSchemaType = "object"
 )
 
 type Kind string
 
 const (
-	Approved                                       Kind = "approved"
-	DeniedByContentExclusionPolicy                 Kind = "denied-by-content-exclusion-policy"
-	DeniedByRules                                  Kind = "denied-by-rules"
-	DeniedInteractivelyByUser                      Kind = "denied-interactively-by-user"
-	DeniedNoApprovalRuleAndCouldNotRequestFromUser Kind = "denied-no-approval-rule-and-could-not-request-from-user"
+	KindApproved                                       Kind = "approved"
+	KindDeniedByContentExclusionPolicy                 Kind = "denied-by-content-exclusion-policy"
+	KindDeniedByPermissionRequestHook                  Kind = "denied-by-permission-request-hook"
+	KindDeniedByRules                                  Kind = "denied-by-rules"
+	KindDeniedInteractivelyByUser                      Kind = "denied-interactively-by-user"
+	KindDeniedNoApprovalRuleAndCouldNotRequestFromUser Kind = "denied-no-approval-rule-and-could-not-request-from-user"
 )
 
-type ResultUnion struct {
-	ResultResult *ResultResult
-	String       *string
+// Log severity level. Determines how the message is displayed in the timeline. Defaults to
+// "info".
+type SessionLogLevel string
+
+const (
+	SessionLogLevelError   SessionLogLevel = "error"
+	SessionLogLevelInfo    SessionLogLevel = "info"
+	SessionLogLevelWarning SessionLogLevel = "warning"
+)
+
+// Signal to send (default: SIGTERM)
+type ShellKillSignal string
+
+const (
+	ShellKillSignalSIGINT  ShellKillSignal = "SIGINT"
+	ShellKillSignalSIGKILL ShellKillSignal = "SIGKILL"
+	ShellKillSignalSIGTERM ShellKillSignal = "SIGTERM"
+)
+
+// Entry type
+type SessionFSReaddirWithTypesEntryType string
+
+const (
+	SessionFSReaddirWithTypesEntryTypeDirectory SessionFSReaddirWithTypesEntryType = "directory"
+	SessionFSReaddirWithTypesEntryTypeFile      SessionFSReaddirWithTypesEntryType = "file"
+)
+
+type MCPConfigFilterMapping struct {
+	Enum    *MCPConfigFilterMappingString
+	EnumMap map[string]MCPConfigFilterMappingString
 }
 
-type ServerModelsRpcApi struct{ client *jsonrpc2.Client }
+// Tool call result (string or expanded result object)
+type ToolsHandlePendingToolCall struct {
+	String         *string
+	ToolCallResult *ToolCallResult
+}
 
-func (a *ServerModelsRpcApi) List(ctx context.Context) (*ModelsListResult, error) {
-	raw, err := a.client.Request("models.list", map[string]interface{}{})
+type UIElicitationFieldValue struct {
+	Bool        *bool
+	Double      *float64
+	String      *string
+	StringArray []string
+}
+
+type serverApi struct {
+	client *jsonrpc2.Client
+}
+
+type ServerModelsApi serverApi
+
+func (a *ServerModelsApi) List(ctx context.Context) (*ModelList, error) {
+	raw, err := a.client.Request("models.list", nil)
 	if err != nil {
 		return nil, err
 	}
-	var result ModelsListResult
+	var result ModelList
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type ServerToolsRpcApi struct{ client *jsonrpc2.Client }
+type ServerToolsApi serverApi
 
-func (a *ServerToolsRpcApi) List(ctx context.Context, params *ToolsListParams) (*ToolsListResult, error) {
+func (a *ServerToolsApi) List(ctx context.Context, params *ToolsListRequest) (*ToolList, error) {
 	raw, err := a.client.Request("tools.list", params)
 	if err != nil {
 		return nil, err
 	}
-	var result ToolsListResult
+	var result ToolList
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type ServerAccountRpcApi struct{ client *jsonrpc2.Client }
+type ServerAccountApi serverApi
 
-func (a *ServerAccountRpcApi) GetQuota(ctx context.Context) (*AccountGetQuotaResult, error) {
-	raw, err := a.client.Request("account.getQuota", map[string]interface{}{})
+func (a *ServerAccountApi) GetQuota(ctx context.Context) (*AccountGetQuotaResult, error) {
+	raw, err := a.client.Request("account.getQuota", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -366,16 +1326,63 @@ func (a *ServerAccountRpcApi) GetQuota(ctx context.Context) (*AccountGetQuotaRes
 	return &result, nil
 }
 
-// ServerRpc provides typed server-scoped RPC methods.
-type ServerRpc struct {
-	client  *jsonrpc2.Client
-	Models  *ServerModelsRpcApi
-	Tools   *ServerToolsRpcApi
-	Account *ServerAccountRpcApi
+type ServerMcpApi serverApi
+
+func (a *ServerMcpApi) Discover(ctx context.Context, params *MCPDiscoverRequest) (*MCPDiscoverResult, error) {
+	raw, err := a.client.Request("mcp.discover", params)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPDiscoverResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
-func (a *ServerRpc) Ping(ctx context.Context, params *PingParams) (*PingResult, error) {
-	raw, err := a.client.Request("ping", params)
+type ServerSessionFsApi serverApi
+
+func (a *ServerSessionFsApi) SetProvider(ctx context.Context, params *SessionFSSetProviderRequest) (*SessionFSSetProviderResult, error) {
+	raw, err := a.client.Request("sessionFs.setProvider", params)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionFSSetProviderResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: ServerSessionsApi contains experimental APIs that may change or be removed.
+type ServerSessionsApi serverApi
+
+func (a *ServerSessionsApi) Fork(ctx context.Context, params *SessionsForkRequest) (*SessionsForkResult, error) {
+	raw, err := a.client.Request("sessions.fork", params)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionsForkResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ServerRpc provides typed server-scoped RPC methods.
+type ServerRpc struct {
+	common serverApi // Reuse a single struct instead of allocating one for each service on the heap.
+
+	Models    *ServerModelsApi
+	Tools     *ServerToolsApi
+	Account   *ServerAccountApi
+	Mcp       *ServerMcpApi
+	SessionFs *ServerSessionFsApi
+	Sessions  *ServerSessionsApi
+}
+
+func (a *ServerRpc) Ping(ctx context.Context, params *PingRequest) (*PingResult, error) {
+	raw, err := a.common.client.Request("ping", params)
 	if err != nil {
 		return nil, err
 	}
@@ -387,67 +1394,76 @@ func (a *ServerRpc) Ping(ctx context.Context, params *PingParams) (*PingResult, 
 }
 
 func NewServerRpc(client *jsonrpc2.Client) *ServerRpc {
-	return &ServerRpc{client: client,
-		Models:  &ServerModelsRpcApi{client: client},
-		Tools:   &ServerToolsRpcApi{client: client},
-		Account: &ServerAccountRpcApi{client: client},
-	}
+	r := &ServerRpc{}
+	r.common = serverApi{client: client}
+	r.Models = (*ServerModelsApi)(&r.common)
+	r.Tools = (*ServerToolsApi)(&r.common)
+	r.Account = (*ServerAccountApi)(&r.common)
+	r.Mcp = (*ServerMcpApi)(&r.common)
+	r.SessionFs = (*ServerSessionFsApi)(&r.common)
+	r.Sessions = (*ServerSessionsApi)(&r.common)
+	return r
 }
 
-type ModelRpcApi struct {
+type sessionApi struct {
 	client    *jsonrpc2.Client
 	sessionID string
 }
 
-func (a *ModelRpcApi) GetCurrent(ctx context.Context) (*SessionModelGetCurrentResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+type ModelApi sessionApi
+
+func (a *ModelApi) GetCurrent(ctx context.Context) (*CurrentModel, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.model.getCurrent", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionModelGetCurrentResult
+	var result CurrentModel
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *ModelRpcApi) SwitchTo(ctx context.Context, params *SessionModelSwitchToParams) (*SessionModelSwitchToResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *ModelApi) SwitchTo(ctx context.Context, params *ModelSwitchToRequest) (*ModelSwitchToResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["modelId"] = params.ModelID
+		if params.ReasoningEffort != nil {
+			req["reasoningEffort"] = *params.ReasoningEffort
+		}
+		if params.ModelCapabilities != nil {
+			req["modelCapabilities"] = *params.ModelCapabilities
+		}
 	}
 	raw, err := a.client.Request("session.model.switchTo", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionModelSwitchToResult
+	var result ModelSwitchToResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type ModeRpcApi struct {
-	client    *jsonrpc2.Client
-	sessionID string
-}
+type ModeApi sessionApi
 
-func (a *ModeRpcApi) Get(ctx context.Context) (*SessionModeGetResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *ModeApi) Get(ctx context.Context) (*SessionMode, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.mode.get", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionModeGetResult
+	var result SessionMode
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *ModeRpcApi) Set(ctx context.Context, params *SessionModeSetParams) (*SessionModeSetResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *ModeApi) Set(ctx context.Context, params *ModeSetRequest) (*ModeSetResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["mode"] = params.Mode
 	}
@@ -455,33 +1471,61 @@ func (a *ModeRpcApi) Set(ctx context.Context, params *SessionModeSetParams) (*Se
 	if err != nil {
 		return nil, err
 	}
-	var result SessionModeSetResult
+	var result ModeSetResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type PlanRpcApi struct {
-	client    *jsonrpc2.Client
-	sessionID string
+type NameApi sessionApi
+
+func (a *NameApi) Get(ctx context.Context) (*NameGetResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.name.get", req)
+	if err != nil {
+		return nil, err
+	}
+	var result NameGetResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
-func (a *PlanRpcApi) Read(ctx context.Context) (*SessionPlanReadResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *NameApi) Set(ctx context.Context, params *NameSetRequest) (*NameSetResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["name"] = params.Name
+	}
+	raw, err := a.client.Request("session.name.set", req)
+	if err != nil {
+		return nil, err
+	}
+	var result NameSetResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+type PlanApi sessionApi
+
+func (a *PlanApi) Read(ctx context.Context) (*PlanReadResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.plan.read", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionPlanReadResult
+	var result PlanReadResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *PlanRpcApi) Update(ctx context.Context, params *SessionPlanUpdateParams) (*SessionPlanUpdateResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *PlanApi) Update(ctx context.Context, params *PlanUpdateRequest) (*PlanUpdateResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["content"] = params.Content
 	}
@@ -489,84 +1533,92 @@ func (a *PlanRpcApi) Update(ctx context.Context, params *SessionPlanUpdateParams
 	if err != nil {
 		return nil, err
 	}
-	var result SessionPlanUpdateResult
+	var result PlanUpdateResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *PlanRpcApi) Delete(ctx context.Context) (*SessionPlanDeleteResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *PlanApi) Delete(ctx context.Context) (*PlanDeleteResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.plan.delete", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionPlanDeleteResult
+	var result PlanDeleteResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type WorkspaceRpcApi struct {
-	client    *jsonrpc2.Client
-	sessionID string
-}
+type WorkspacesApi sessionApi
 
-func (a *WorkspaceRpcApi) ListFiles(ctx context.Context) (*SessionWorkspaceListFilesResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
-	raw, err := a.client.Request("session.workspace.listFiles", req)
+func (a *WorkspacesApi) GetWorkspace(ctx context.Context) (*WorkspacesGetWorkspaceResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.workspaces.getWorkspace", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionWorkspaceListFilesResult
+	var result WorkspacesGetWorkspaceResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *WorkspaceRpcApi) ReadFile(ctx context.Context, params *SessionWorkspaceReadFileParams) (*SessionWorkspaceReadFileResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *WorkspacesApi) ListFiles(ctx context.Context) (*WorkspacesListFilesResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.workspaces.listFiles", req)
+	if err != nil {
+		return nil, err
+	}
+	var result WorkspacesListFilesResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *WorkspacesApi) ReadFile(ctx context.Context, params *WorkspacesReadFileRequest) (*WorkspacesReadFileResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
 	}
-	raw, err := a.client.Request("session.workspace.readFile", req)
+	raw, err := a.client.Request("session.workspaces.readFile", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionWorkspaceReadFileResult
+	var result WorkspacesReadFileResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *WorkspaceRpcApi) CreateFile(ctx context.Context, params *SessionWorkspaceCreateFileParams) (*SessionWorkspaceCreateFileResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *WorkspacesApi) CreateFile(ctx context.Context, params *WorkspacesCreateFileRequest) (*WorkspacesCreateFileResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
 		req["content"] = params.Content
 	}
-	raw, err := a.client.Request("session.workspace.createFile", req)
+	raw, err := a.client.Request("session.workspaces.createFile", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionWorkspaceCreateFileResult
+	var result WorkspacesCreateFileResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type FleetRpcApi struct {
-	client    *jsonrpc2.Client
-	sessionID string
-}
+// Experimental: FleetApi contains experimental APIs that may change or be removed.
+type FleetApi sessionApi
 
-func (a *FleetRpcApi) Start(ctx context.Context, params *SessionFleetStartParams) (*SessionFleetStartResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *FleetApi) Start(ctx context.Context, params *FleetStartRequest) (*FleetStartResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Prompt != nil {
 			req["prompt"] = *params.Prompt
@@ -576,46 +1628,44 @@ func (a *FleetRpcApi) Start(ctx context.Context, params *SessionFleetStartParams
 	if err != nil {
 		return nil, err
 	}
-	var result SessionFleetStartResult
+	var result FleetStartResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type AgentRpcApi struct {
-	client    *jsonrpc2.Client
-	sessionID string
-}
+// Experimental: AgentApi contains experimental APIs that may change or be removed.
+type AgentApi sessionApi
 
-func (a *AgentRpcApi) List(ctx context.Context) (*SessionAgentListResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *AgentApi) List(ctx context.Context) (*AgentList, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.agent.list", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionAgentListResult
+	var result AgentList
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *AgentRpcApi) GetCurrent(ctx context.Context) (*SessionAgentGetCurrentResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *AgentApi) GetCurrent(ctx context.Context) (*AgentGetCurrentResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.agent.getCurrent", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionAgentGetCurrentResult
+	var result AgentGetCurrentResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *AgentRpcApi) Select(ctx context.Context, params *SessionAgentSelectParams) (*SessionAgentSelectResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *AgentApi) Select(ctx context.Context, params *AgentSelectRequest) (*AgentSelectResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["name"] = params.Name
 	}
@@ -623,51 +1673,242 @@ func (a *AgentRpcApi) Select(ctx context.Context, params *SessionAgentSelectPara
 	if err != nil {
 		return nil, err
 	}
-	var result SessionAgentSelectResult
+	var result AgentSelectResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (a *AgentRpcApi) Deselect(ctx context.Context) (*SessionAgentDeselectResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *AgentApi) Deselect(ctx context.Context) (*AgentDeselectResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.agent.deselect", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionAgentDeselectResult
+	var result AgentDeselectResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type CompactionRpcApi struct {
-	client    *jsonrpc2.Client
-	sessionID string
-}
-
-func (a *CompactionRpcApi) Compact(ctx context.Context) (*SessionCompactionCompactResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
-	raw, err := a.client.Request("session.compaction.compact", req)
+func (a *AgentApi) Reload(ctx context.Context) (*AgentReloadResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.agent.reload", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionCompactionCompactResult
+	var result AgentReloadResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type ToolsRpcApi struct {
-	client    *jsonrpc2.Client
-	sessionID string
+// Experimental: SkillsApi contains experimental APIs that may change or be removed.
+type SkillsApi sessionApi
+
+func (a *SkillsApi) List(ctx context.Context) (*SkillList, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.skills.list", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SkillList
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
-func (a *ToolsRpcApi) HandlePendingToolCall(ctx context.Context, params *SessionToolsHandlePendingToolCallParams) (*SessionToolsHandlePendingToolCallResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+func (a *SkillsApi) Enable(ctx context.Context, params *SkillsEnableRequest) (*SkillsEnableResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["name"] = params.Name
+	}
+	raw, err := a.client.Request("session.skills.enable", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SkillsEnableResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *SkillsApi) Disable(ctx context.Context, params *SkillsDisableRequest) (*SkillsDisableResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["name"] = params.Name
+	}
+	raw, err := a.client.Request("session.skills.disable", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SkillsDisableResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *SkillsApi) Reload(ctx context.Context) (*SkillsReloadResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.skills.reload", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SkillsReloadResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: McpApi contains experimental APIs that may change or be removed.
+type McpApi sessionApi
+
+func (a *McpApi) List(ctx context.Context) (*MCPServerList, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.mcp.list", req)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPServerList
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *McpApi) Enable(ctx context.Context, params *MCPEnableRequest) (*MCPEnableResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["serverName"] = params.ServerName
+	}
+	raw, err := a.client.Request("session.mcp.enable", req)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPEnableResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *McpApi) Disable(ctx context.Context, params *MCPDisableRequest) (*MCPDisableResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["serverName"] = params.ServerName
+	}
+	raw, err := a.client.Request("session.mcp.disable", req)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPDisableResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *McpApi) Reload(ctx context.Context) (*MCPReloadResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.mcp.reload", req)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPReloadResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: PluginsApi contains experimental APIs that may change or be removed.
+type PluginsApi sessionApi
+
+func (a *PluginsApi) List(ctx context.Context) (*PluginList, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.plugins.list", req)
+	if err != nil {
+		return nil, err
+	}
+	var result PluginList
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: ExtensionsApi contains experimental APIs that may change or be removed.
+type ExtensionsApi sessionApi
+
+func (a *ExtensionsApi) List(ctx context.Context) (*ExtensionList, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.extensions.list", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ExtensionList
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *ExtensionsApi) Enable(ctx context.Context, params *ExtensionsEnableRequest) (*ExtensionsEnableResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["id"] = params.ID
+	}
+	raw, err := a.client.Request("session.extensions.enable", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ExtensionsEnableResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *ExtensionsApi) Disable(ctx context.Context, params *ExtensionsDisableRequest) (*ExtensionsDisableResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["id"] = params.ID
+	}
+	raw, err := a.client.Request("session.extensions.disable", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ExtensionsDisableResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *ExtensionsApi) Reload(ctx context.Context) (*ExtensionsReloadResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.extensions.reload", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ExtensionsReloadResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+type ToolsApi sessionApi
+
+func (a *ToolsApi) HandlePendingToolCall(ctx context.Context, params *ToolsHandlePendingToolCallRequest) (*HandleToolCallResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
 		if params.Result != nil {
@@ -681,20 +1922,74 @@ func (a *ToolsRpcApi) HandlePendingToolCall(ctx context.Context, params *Session
 	if err != nil {
 		return nil, err
 	}
-	var result SessionToolsHandlePendingToolCallResult
+	var result HandleToolCallResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type PermissionsRpcApi struct {
-	client    *jsonrpc2.Client
-	sessionID string
+type CommandsApi sessionApi
+
+func (a *CommandsApi) HandlePendingCommand(ctx context.Context, params *CommandsHandlePendingCommandRequest) (*CommandsHandlePendingCommandResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["requestId"] = params.RequestID
+		if params.Error != nil {
+			req["error"] = *params.Error
+		}
+	}
+	raw, err := a.client.Request("session.commands.handlePendingCommand", req)
+	if err != nil {
+		return nil, err
+	}
+	var result CommandsHandlePendingCommandResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
-func (a *PermissionsRpcApi) HandlePendingPermissionRequest(ctx context.Context, params *SessionPermissionsHandlePendingPermissionRequestParams) (*SessionPermissionsHandlePendingPermissionRequestResult, error) {
-	req := map[string]interface{}{"sessionId": a.sessionID}
+type UIApi sessionApi
+
+func (a *UIApi) Elicitation(ctx context.Context, params *UIElicitationRequest) (*UIElicitationResponse, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["message"] = params.Message
+		req["requestedSchema"] = params.RequestedSchema
+	}
+	raw, err := a.client.Request("session.ui.elicitation", req)
+	if err != nil {
+		return nil, err
+	}
+	var result UIElicitationResponse
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *UIApi) HandlePendingElicitation(ctx context.Context, params *UIHandlePendingElicitationRequest) (*UIElicitationResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["requestId"] = params.RequestID
+		req["result"] = params.Result
+	}
+	raw, err := a.client.Request("session.ui.handlePendingElicitation", req)
+	if err != nil {
+		return nil, err
+	}
+	var result UIElicitationResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+type PermissionsApi sessionApi
+
+func (a *PermissionsApi) HandlePendingPermissionRequest(ctx context.Context, params *PermissionDecisionRequest) (*PermissionRequestResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
 		req["result"] = params.Result
@@ -703,7 +1998,98 @@ func (a *PermissionsRpcApi) HandlePendingPermissionRequest(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
-	var result SessionPermissionsHandlePendingPermissionRequestResult
+	var result PermissionRequestResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+type ShellApi sessionApi
+
+func (a *ShellApi) Exec(ctx context.Context, params *ShellExecRequest) (*ShellExecResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["command"] = params.Command
+		if params.Cwd != nil {
+			req["cwd"] = *params.Cwd
+		}
+		if params.Timeout != nil {
+			req["timeout"] = *params.Timeout
+		}
+	}
+	raw, err := a.client.Request("session.shell.exec", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ShellExecResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *ShellApi) Kill(ctx context.Context, params *ShellKillRequest) (*ShellKillResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["processId"] = params.ProcessID
+		if params.Signal != nil {
+			req["signal"] = *params.Signal
+		}
+	}
+	raw, err := a.client.Request("session.shell.kill", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ShellKillResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: HistoryApi contains experimental APIs that may change or be removed.
+type HistoryApi sessionApi
+
+func (a *HistoryApi) Compact(ctx context.Context) (*HistoryCompactResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.history.compact", req)
+	if err != nil {
+		return nil, err
+	}
+	var result HistoryCompactResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (a *HistoryApi) Truncate(ctx context.Context, params *HistoryTruncateRequest) (*HistoryTruncateResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["eventId"] = params.EventID
+	}
+	raw, err := a.client.Request("session.history.truncate", req)
+	if err != nil {
+		return nil, err
+	}
+	var result HistoryTruncateResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: UsageApi contains experimental APIs that may change or be removed.
+type UsageApi sessionApi
+
+func (a *UsageApi) GetMetrics(ctx context.Context) (*UsageGetMetricsResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.usage.getMetrics", req)
+	if err != nil {
+		return nil, err
+	}
+	var result UsageGetMetricsResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -712,29 +2098,296 @@ func (a *PermissionsRpcApi) HandlePendingPermissionRequest(ctx context.Context, 
 
 // SessionRpc provides typed session-scoped RPC methods.
 type SessionRpc struct {
-	client      *jsonrpc2.Client
-	sessionID   string
-	Model       *ModelRpcApi
-	Mode        *ModeRpcApi
-	Plan        *PlanRpcApi
-	Workspace   *WorkspaceRpcApi
-	Fleet       *FleetRpcApi
-	Agent       *AgentRpcApi
-	Compaction  *CompactionRpcApi
-	Tools       *ToolsRpcApi
-	Permissions *PermissionsRpcApi
+	common sessionApi // Reuse a single struct instead of allocating one for each service on the heap.
+
+	Model       *ModelApi
+	Mode        *ModeApi
+	Name        *NameApi
+	Plan        *PlanApi
+	Workspaces  *WorkspacesApi
+	Fleet       *FleetApi
+	Agent       *AgentApi
+	Skills      *SkillsApi
+	Mcp         *McpApi
+	Plugins     *PluginsApi
+	Extensions  *ExtensionsApi
+	Tools       *ToolsApi
+	Commands    *CommandsApi
+	UI          *UIApi
+	Permissions *PermissionsApi
+	Shell       *ShellApi
+	History     *HistoryApi
+	Usage       *UsageApi
+}
+
+func (a *SessionRpc) Log(ctx context.Context, params *LogRequest) (*LogResult, error) {
+	req := map[string]any{"sessionId": a.common.sessionID}
+	if params != nil {
+		req["message"] = params.Message
+		if params.Level != nil {
+			req["level"] = *params.Level
+		}
+		if params.Ephemeral != nil {
+			req["ephemeral"] = *params.Ephemeral
+		}
+		if params.URL != nil {
+			req["url"] = *params.URL
+		}
+	}
+	raw, err := a.common.client.Request("session.log", req)
+	if err != nil {
+		return nil, err
+	}
+	var result LogResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func NewSessionRpc(client *jsonrpc2.Client, sessionID string) *SessionRpc {
-	return &SessionRpc{client: client, sessionID: sessionID,
-		Model:       &ModelRpcApi{client: client, sessionID: sessionID},
-		Mode:        &ModeRpcApi{client: client, sessionID: sessionID},
-		Plan:        &PlanRpcApi{client: client, sessionID: sessionID},
-		Workspace:   &WorkspaceRpcApi{client: client, sessionID: sessionID},
-		Fleet:       &FleetRpcApi{client: client, sessionID: sessionID},
-		Agent:       &AgentRpcApi{client: client, sessionID: sessionID},
-		Compaction:  &CompactionRpcApi{client: client, sessionID: sessionID},
-		Tools:       &ToolsRpcApi{client: client, sessionID: sessionID},
-		Permissions: &PermissionsRpcApi{client: client, sessionID: sessionID},
+	r := &SessionRpc{}
+	r.common = sessionApi{client: client, sessionID: sessionID}
+	r.Model = (*ModelApi)(&r.common)
+	r.Mode = (*ModeApi)(&r.common)
+	r.Name = (*NameApi)(&r.common)
+	r.Plan = (*PlanApi)(&r.common)
+	r.Workspaces = (*WorkspacesApi)(&r.common)
+	r.Fleet = (*FleetApi)(&r.common)
+	r.Agent = (*AgentApi)(&r.common)
+	r.Skills = (*SkillsApi)(&r.common)
+	r.Mcp = (*McpApi)(&r.common)
+	r.Plugins = (*PluginsApi)(&r.common)
+	r.Extensions = (*ExtensionsApi)(&r.common)
+	r.Tools = (*ToolsApi)(&r.common)
+	r.Commands = (*CommandsApi)(&r.common)
+	r.UI = (*UIApi)(&r.common)
+	r.Permissions = (*PermissionsApi)(&r.common)
+	r.Shell = (*ShellApi)(&r.common)
+	r.History = (*HistoryApi)(&r.common)
+	r.Usage = (*UsageApi)(&r.common)
+	return r
+}
+
+type SessionFsHandler interface {
+	ReadFile(request *SessionFSReadFileRequest) (*SessionFSReadFileResult, error)
+	WriteFile(request *SessionFSWriteFileRequest) (*SessionFSWriteFileResult, error)
+	AppendFile(request *SessionFSAppendFileRequest) (*SessionFSAppendFileResult, error)
+	Exists(request *SessionFSExistsRequest) (*SessionFSExistsResult, error)
+	Stat(request *SessionFSStatRequest) (*SessionFSStatResult, error)
+	Mkdir(request *SessionFSMkdirRequest) (*SessionFSMkdirResult, error)
+	Readdir(request *SessionFSReaddirRequest) (*SessionFSReaddirResult, error)
+	ReaddirWithTypes(request *SessionFSReaddirWithTypesRequest) (*SessionFSReaddirWithTypesResult, error)
+	Rm(request *SessionFSRmRequest) (*SessionFSRmResult, error)
+	Rename(request *SessionFSRenameRequest) (*SessionFSRenameResult, error)
+}
+
+// ClientSessionApiHandlers provides all client session API handler groups for a session.
+type ClientSessionApiHandlers struct {
+	SessionFs SessionFsHandler
+}
+
+func clientSessionHandlerError(err error) *jsonrpc2.Error {
+	if err == nil {
+		return nil
 	}
+	var rpcErr *jsonrpc2.Error
+	if errors.As(err, &rpcErr) {
+		return rpcErr
+	}
+	return &jsonrpc2.Error{Code: -32603, Message: err.Error()}
+}
+
+// RegisterClientSessionApiHandlers registers handlers for server-to-client session API calls.
+func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(sessionID string) *ClientSessionApiHandlers) {
+	client.SetRequestHandler("sessionFs.readFile", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSReadFileRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.ReadFile(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.writeFile", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSWriteFileRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.WriteFile(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.appendFile", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSAppendFileRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.AppendFile(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.exists", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSExistsRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.Exists(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.stat", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSStatRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.Stat(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.mkdir", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSMkdirRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.Mkdir(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.readdir", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSReaddirRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.Readdir(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.readdirWithTypes", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSReaddirWithTypesRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.ReaddirWithTypes(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.rm", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSRmRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.Rm(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.rename", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSRenameRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFs == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.SessionFs.Rename(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
 }
