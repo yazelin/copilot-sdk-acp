@@ -54,6 +54,7 @@ const session = await client.createSession({
 
 ```python
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 async def main():
     client = CopilotClient()
@@ -70,13 +71,11 @@ async def main():
     async def on_session_start(input_data, invocation):
         return {"additionalContext": "User prefers concise answers."}
 
-    session = await client.create_session({
-        "hooks": {
+    session = await client.create_session(on_permission_request=PermissionHandler.approve_all, hooks={
             "on_pre_tool_use": on_pre_tool_use,
             "on_post_tool_use": on_post_tool_use,
             "on_session_start": on_session_start,
-        }
-    })
+        })
 ```
 
 </details>
@@ -153,6 +152,42 @@ var session = await client.CreateSessionAsync(new SessionConfig
         },
     },
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.*;
+import com.github.copilot.sdk.json.*;
+import java.util.concurrent.CompletableFuture;
+
+try (var client = new CopilotClient()) {
+    client.start().get();
+
+    var hooks = new SessionHooks()
+        .setOnPreToolUse((input, invocation) -> {
+            System.out.println("Tool called: " + input.getToolName());
+            return CompletableFuture.completedFuture(PreToolUseHookOutput.allow());
+        })
+        .setOnPostToolUse((input, invocation) -> {
+            System.out.println("Tool result: " + input.getToolResult());
+            return CompletableFuture.completedFuture(null);
+        })
+        .setOnSessionStart((input, invocation) -> {
+            return CompletableFuture.completedFuture(
+                new SessionStartHookOutput("User prefers concise answers.", null)
+            );
+        });
+
+    var session = client.createSession(
+        new SessionConfig()
+            .setHooks(hooks)
+            .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    ).get();
+}
 ```
 
 </details>
