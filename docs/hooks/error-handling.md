@@ -35,18 +35,18 @@ type ErrorOccurredHandler = (
 
 <!-- docs-validate: hidden -->
 ```python
-from copilot.types import ErrorOccurredHookInput, HookInvocation, ErrorOccurredHookOutput
+from copilot.session import ErrorOccurredHookInput, ErrorOccurredHookOutput
 from typing import Callable, Awaitable
 
 ErrorOccurredHandler = Callable[
-    [ErrorOccurredHookInput, HookInvocation],
+    [ErrorOccurredHookInput, dict[str, str]],
     Awaitable[ErrorOccurredHookOutput | None]
 ]
 ```
 <!-- /docs-validate: hidden -->
 ```python
 ErrorOccurredHandler = Callable[
-    [ErrorOccurredHookInput, HookInvocation],
+    [ErrorOccurredHookInput, dict[str, str]],
     Awaitable[ErrorOccurredHookOutput | None]
 ]
 ```
@@ -99,6 +99,23 @@ public delegate Task<ErrorOccurredHookOutput?> ErrorOccurredHandler(
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+// Note: Java SDK does not have an onErrorOccurred hook.
+// Use EventErrorPolicy and EventErrorHandler instead:
+//
+// session.setEventErrorPolicy(EventErrorPolicy.SUPPRESS_AND_LOG_ERRORS);
+// session.setEventErrorHandler((event, ex) -> {
+//     System.err.println("Error in " + event.getType() + ": " + ex.getMessage());
+// });
+//
+// See the "Basic Error Logging" example below for a complete snippet.
+```
+
+</details>
+
 ## Input
 
 | Field | Type | Description |
@@ -146,15 +163,15 @@ const session = await client.createSession({
 <summary><strong>Python</strong></summary>
 
 ```python
+from copilot.session import PermissionHandler
+
 async def on_error_occurred(input_data, invocation):
     print(f"[{invocation['session_id']}] Error: {input_data['error']}")
     print(f"  Context: {input_data['errorContext']}")
     print(f"  Recoverable: {input_data['recoverable']}")
     return None
 
-session = await client.create_session({
-    "hooks": {"on_error_occurred": on_error_occurred}
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, hooks={"on_error_occurred": on_error_occurred})
 ```
 
 </details>
@@ -246,6 +263,30 @@ var session = await client.CreateSessionAsync(new SessionConfig
             return Task.FromResult<ErrorOccurredHookOutput?>(null);
         },
     },
+});
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.*;
+import com.github.copilot.sdk.json.*;
+
+// Note: Java SDK does not have an onErrorOccurred hook.
+// Use EventErrorPolicy and EventErrorHandler instead:
+
+var session = client.createSession(
+    new SessionConfig()
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+).get();
+
+session.setEventErrorPolicy(EventErrorPolicy.SUPPRESS_AND_LOG_ERRORS);
+session.setEventErrorHandler((event, ex) -> {
+    System.err.println("[" + session.getSessionId() + "] Error: " + ex.getMessage());
+    System.err.println("  Event: " + event.getType());
 });
 ```
 
