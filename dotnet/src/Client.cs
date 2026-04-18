@@ -14,6 +14,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using GitHub.Copilot.SDK.Rpc;
 using System.Globalization;
@@ -54,6 +55,9 @@ namespace GitHub.Copilot.SDK;
 /// </example>
 public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 {
+    internal const string NoResultPermissionV2ErrorMessage =
+        "Permission handlers cannot return 'no-result' when connected to a protocol v2 server.";
+
     /// <summary>
     /// Minimum protocol version this SDK can communicate with.
     /// </summary>
@@ -63,6 +67,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     private readonly CopilotClientOptions _options;
     private readonly ILogger _logger;
     private Task<Connection>? _connectionTask;
+    private volatile bool _disconnected;
     private bool _disposed;
     private readonly int? _optionsPort;
     private readonly string? _optionsHost;
@@ -70,7 +75,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     private int? _negotiatedProtocolVersion;
     private List<ModelInfo>? _modelsCache;
     private readonly SemaphoreSlim _modelsCacheLock = new(1, 1);
-    private readonly Func<CancellationToken, Task<List<ModelInfo>>>? _onListModels;
+    private readonly Func<CancellationToken, Task<IList<ModelInfo>>>? _onListModels;
     private readonly List<Action<SessionLifecycleEvent>> _lifecycleHandlers = [];
     private readonly Dictionary<string, List<Action<SessionLifecycleEvent>>> _typedLifecycleHandlers = [];
     private readonly object _lifecycleHandlersLock = new();
@@ -199,6 +204,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         async Task<Connection> StartCoreAsync(CancellationToken ct)
         {
             _logger.LogDebug("Starting Copilot client");
+            _disconnected = false;
 
             Task<Connection> result;
 
@@ -220,6 +226,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 
             // Verify protocol version compatibility
             await VerifyProtocolVersionAsync(connection, ct);
+            await ConfigureSessionFsAsync(ct);
 
             _logger.LogInformation("Copilot client connected");
             return connection;
@@ -359,6 +366,44 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         }
     }
 
+    private static (SystemMessageConfig? wireConfig, Dictionary<string, Func<string, Task<string>>>? callbacks) ExtractTransformCallbacks(SystemMessageConfig? systemMessage)
+    {
+        if (systemMessage?.Mode != SystemMessageMode.Customize || systemMessage.Sections == null)
+        {
+            return (systemMessage, null);
+        }
+
+        var callbacks = new Dictionary<string, Func<string, Task<string>>>();
+        var wireSections = new Dictionary<string, SectionOverride>();
+
+        foreach (var (sectionId, sectionOverride) in systemMessage.Sections)
+        {
+            if (sectionOverride.Transform != null)
+            {
+                callbacks[sectionId] = sectionOverride.Transform;
+                wireSections[sectionId] = new SectionOverride { Action = SectionOverrideAction.Transform };
+            }
+            else
+            {
+                wireSections[sectionId] = sectionOverride;
+            }
+        }
+
+        if (callbacks.Count == 0)
+        {
+            return (systemMessage, null);
+        }
+
+        var wireConfig = new SystemMessageConfig
+        {
+            Mode = systemMessage.Mode,
+            Content = systemMessage.Content,
+            Sections = wireSections
+        };
+
+        return (wireConfig, callbacks);
+    }
+
     /// <summary>
     /// Creates a new Copilot session with the specified configuration.
     /// </summary>
@@ -403,36 +448,17 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             config.Hooks.OnSessionEnd != null ||
             config.Hooks.OnErrorOccurred != null);
 
-        var request = new CreateSessionRequest(
-            config.Model,
-            config.SessionId,
-            config.ClientName,
-            config.ReasoningEffort,
-            config.Tools?.Select(ToolDefinition.FromAIFunction).ToList(),
-            config.SystemMessage,
-            config.AvailableTools,
-            config.ExcludedTools,
-            config.Provider,
-            (bool?)true,
-            config.OnUserInputRequest != null ? true : null,
-            hasHooks ? true : null,
-            config.WorkingDirectory,
-            config.Streaming is true ? true : null,
-            config.McpServers,
-            "direct",
-            config.CustomAgents,
-            config.Agent,
-            config.ConfigDir,
-            config.SkillDirectories,
-            config.DisabledSkills,
-            config.InfiniteSessions);
+        var (wireSystemMessage, transformCallbacks) = ExtractTransformCallbacks(config.SystemMessage);
 
-        var response = await InvokeRpcAsync<CreateSessionResponse>(
-            connection.Rpc, "session.create", [request], cancellationToken);
+        var sessionId = config.SessionId ?? Guid.NewGuid().ToString();
 
-        var session = new CopilotSession(response.SessionId, connection.Rpc, response.WorkspacePath);
+        // Create and register the session before issuing the RPC so that
+        // events emitted by the CLI (e.g. session.start) are not dropped.
+        var session = new CopilotSession(sessionId, connection.Rpc, _logger);
         session.RegisterTools(config.Tools ?? []);
         session.RegisterPermissionHandler(config.OnPermissionRequest);
+        session.RegisterCommands(config.Commands);
+        session.RegisterElicitationHandler(config.OnElicitationRequest);
         if (config.OnUserInputRequest != null)
         {
             session.RegisterUserInputHandler(config.OnUserInputRequest);
@@ -441,10 +467,62 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         {
             session.RegisterHooks(config.Hooks);
         }
-
-        if (!_sessions.TryAdd(response.SessionId, session))
+        if (transformCallbacks != null)
         {
-            throw new InvalidOperationException($"Session {response.SessionId} already exists");
+            session.RegisterTransformCallbacks(transformCallbacks);
+        }
+        if (config.OnEvent != null)
+        {
+            session.On(config.OnEvent);
+        }
+        ConfigureSessionFsHandlers(session, config.CreateSessionFsHandler);
+        _sessions[sessionId] = session;
+
+        try
+        {
+            var (traceparent, tracestate) = TelemetryHelpers.GetTraceContext();
+
+            var request = new CreateSessionRequest(
+                config.Model,
+                sessionId,
+                config.ClientName,
+                config.ReasoningEffort,
+                config.Tools?.Select(ToolDefinition.FromAIFunction).ToList(),
+                wireSystemMessage,
+                config.AvailableTools,
+                config.ExcludedTools,
+                config.Provider,
+                (bool?)true,
+                config.OnUserInputRequest != null ? true : null,
+                hasHooks ? true : null,
+                config.WorkingDirectory,
+                config.Streaming is true ? true : null,
+                config.IncludeSubAgentStreamingEvents,
+                config.McpServers,
+                "direct",
+                config.CustomAgents,
+                config.Agent,
+                config.ConfigDir,
+                config.EnableConfigDiscovery,
+                config.SkillDirectories,
+                config.DisabledSkills,
+                config.InfiniteSessions,
+                Commands: config.Commands?.Select(c => new CommandWireDefinition(c.Name, c.Description)).ToList(),
+                RequestElicitation: config.OnElicitationRequest != null,
+                Traceparent: traceparent,
+                Tracestate: tracestate,
+                ModelCapabilities: config.ModelCapabilities);
+
+            var response = await InvokeRpcAsync<CreateSessionResponse>(
+                connection.Rpc, "session.create", [request], cancellationToken);
+
+            session.WorkspacePath = response.WorkspacePath;
+            session.SetCapabilities(response.Capabilities);
+        }
+        catch
+        {
+            _sessions.TryRemove(sessionId, out _);
+            throw;
         }
 
         return session;
@@ -495,37 +573,15 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             config.Hooks.OnSessionEnd != null ||
             config.Hooks.OnErrorOccurred != null);
 
-        var request = new ResumeSessionRequest(
-            sessionId,
-            config.ClientName,
-            config.Model,
-            config.ReasoningEffort,
-            config.Tools?.Select(ToolDefinition.FromAIFunction).ToList(),
-            config.SystemMessage,
-            config.AvailableTools,
-            config.ExcludedTools,
-            config.Provider,
-            (bool?)true,
-            config.OnUserInputRequest != null ? true : null,
-            hasHooks ? true : null,
-            config.WorkingDirectory,
-            config.ConfigDir,
-            config.DisableResume is true ? true : null,
-            config.Streaming is true ? true : null,
-            config.McpServers,
-            "direct",
-            config.CustomAgents,
-            config.Agent,
-            config.SkillDirectories,
-            config.DisabledSkills,
-            config.InfiniteSessions);
+        var (wireSystemMessage, transformCallbacks) = ExtractTransformCallbacks(config.SystemMessage);
 
-        var response = await InvokeRpcAsync<ResumeSessionResponse>(
-            connection.Rpc, "session.resume", [request], cancellationToken);
-
-        var session = new CopilotSession(response.SessionId, connection.Rpc, response.WorkspacePath);
+        // Create and register the session before issuing the RPC so that
+        // events emitted by the CLI (e.g. session.start) are not dropped.
+        var session = new CopilotSession(sessionId, connection.Rpc, _logger);
         session.RegisterTools(config.Tools ?? []);
         session.RegisterPermissionHandler(config.OnPermissionRequest);
+        session.RegisterCommands(config.Commands);
+        session.RegisterElicitationHandler(config.OnElicitationRequest);
         if (config.OnUserInputRequest != null)
         {
             session.RegisterUserInputHandler(config.OnUserInputRequest);
@@ -534,9 +590,65 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         {
             session.RegisterHooks(config.Hooks);
         }
+        if (transformCallbacks != null)
+        {
+            session.RegisterTransformCallbacks(transformCallbacks);
+        }
+        if (config.OnEvent != null)
+        {
+            session.On(config.OnEvent);
+        }
+        ConfigureSessionFsHandlers(session, config.CreateSessionFsHandler);
+        _sessions[sessionId] = session;
 
-        // Replace any existing session entry to ensure new config (like permission handler) is used
-        _sessions[response.SessionId] = session;
+        try
+        {
+            var (traceparent, tracestate) = TelemetryHelpers.GetTraceContext();
+
+            var request = new ResumeSessionRequest(
+                sessionId,
+                config.ClientName,
+                config.Model,
+                config.ReasoningEffort,
+                config.Tools?.Select(ToolDefinition.FromAIFunction).ToList(),
+                wireSystemMessage,
+                config.AvailableTools,
+                config.ExcludedTools,
+                config.Provider,
+                (bool?)true,
+                config.OnUserInputRequest != null ? true : null,
+                hasHooks ? true : null,
+                config.WorkingDirectory,
+                config.ConfigDir,
+                config.EnableConfigDiscovery,
+                config.DisableResume is true ? true : null,
+                config.Streaming is true ? true : null,
+                config.IncludeSubAgentStreamingEvents,
+                config.McpServers,
+                "direct",
+                config.CustomAgents,
+                config.Agent,
+                config.SkillDirectories,
+                config.DisabledSkills,
+                config.InfiniteSessions,
+                Commands: config.Commands?.Select(c => new CommandWireDefinition(c.Name, c.Description)).ToList(),
+                RequestElicitation: config.OnElicitationRequest != null,
+                Traceparent: traceparent,
+                Tracestate: tracestate,
+                ModelCapabilities: config.ModelCapabilities);
+
+            var response = await InvokeRpcAsync<ResumeSessionResponse>(
+                connection.Rpc, "session.resume", [request], cancellationToken);
+
+            session.WorkspacePath = response.WorkspacePath;
+            session.SetCapabilities(response.Capabilities);
+        }
+        catch
+        {
+            _sessions.TryRemove(sessionId, out _);
+            throw;
+        }
+
         return session;
     }
 
@@ -561,6 +673,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             if (_connectionTask == null) return ConnectionState.Disconnected;
             if (_connectionTask.IsFaulted) return ConnectionState.Error;
             if (!_connectionTask.IsCompleted) return ConnectionState.Connecting;
+            if (_disconnected) return ConnectionState.Disconnected;
             return ConnectionState.Connected;
         }
     }
@@ -624,7 +737,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     /// The cache is cleared when the client disconnects.
     /// </remarks>
     /// <exception cref="InvalidOperationException">Thrown when the client is not connected or not authenticated.</exception>
-    public async Task<List<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken = default)
+    public async Task<IList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken = default)
     {
         await _modelsCacheLock.WaitAsync(cancellationToken);
         try
@@ -635,7 +748,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
                 return [.. _modelsCache]; // Return a copy to prevent cache mutation
             }
 
-            List<ModelInfo> models;
+            IList<ModelInfo> models;
             if (_onListModels is not null)
             {
                 // Use custom handler instead of CLI RPC
@@ -736,7 +849,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     /// }
     /// </code>
     /// </example>
-    public async Task<List<SessionMetadata>> ListSessionsAsync(SessionListFilter? filter = null, CancellationToken cancellationToken = default)
+    public async Task<IList<SessionMetadata>> ListSessionsAsync(SessionListFilter? filter = null, CancellationToken cancellationToken = default)
     {
         var connection = await EnsureConnectedAsync(cancellationToken);
 
@@ -744,6 +857,36 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             connection.Rpc, "session.list", [new ListSessionsRequest(filter)], cancellationToken);
 
         return response.Sessions;
+    }
+
+    /// <summary>
+    /// Gets metadata for a specific session by ID.
+    /// </summary>
+    /// <remarks>
+    /// This provides an efficient O(1) lookup of a single session's metadata
+    /// instead of listing all sessions.
+    /// </remarks>
+    /// <param name="sessionId">The ID of the session to look up.</param>
+    /// <param name="cancellationToken">A <see cref="CancellationToken"/> that can be used to cancel the operation.</param>
+    /// <returns>A task that resolves with the <see cref="SessionMetadata"/>, or null if the session was not found.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the client is not connected.</exception>
+    /// <example>
+    /// <code>
+    /// var metadata = await client.GetSessionMetadataAsync("session-123");
+    /// if (metadata != null)
+    /// {
+    ///     Console.WriteLine($"Session started at: {metadata.StartTime}");
+    /// }
+    /// </code>
+    /// </example>
+    public async Task<SessionMetadata?> GetSessionMetadataAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        var connection = await EnsureConnectedAsync(cancellationToken);
+
+        var response = await InvokeRpcAsync<GetSessionMetadataResponse>(
+            connection.Rpc, "session.getMetadata", [new GetSessionMetadataRequest(sessionId)], cancellationToken);
+
+        return response.Session;
     }
 
     /// <summary>
@@ -902,6 +1045,11 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         return await InvokeRpcAsync<T>(rpc, method, args, null, cancellationToken);
     }
 
+    internal static async Task InvokeRpcAsync(JsonRpc rpc, string method, object?[]? args, CancellationToken cancellationToken)
+    {
+        await InvokeRpcAsync<object>(rpc, method, args, null, cancellationToken);
+    }
+
     internal static async Task<T> InvokeRpcAsync<T>(JsonRpc rpc, string method, object?[]? args, StringBuilder? stderrBuffer, CancellationToken cancellationToken)
     {
         try
@@ -942,6 +1090,37 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         return (Task<Connection>)StartAsync(cancellationToken);
     }
 
+    private async Task ConfigureSessionFsAsync(CancellationToken cancellationToken)
+    {
+        if (_options.SessionFs is null)
+        {
+            return;
+        }
+
+        await Rpc.SessionFs.SetProviderAsync(
+            _options.SessionFs.InitialCwd,
+            _options.SessionFs.SessionStatePath,
+            _options.SessionFs.Conventions,
+            cancellationToken);
+    }
+
+    private void ConfigureSessionFsHandlers(CopilotSession session, Func<CopilotSession, ISessionFsHandler>? createSessionFsHandler)
+    {
+        if (_options.SessionFs is null)
+        {
+            return;
+        }
+
+        if (createSessionFsHandler is null)
+        {
+            throw new InvalidOperationException(
+                "CreateSessionFsHandler is required in the session config when CopilotClientOptions.SessionFs is configured.");
+        }
+
+        session.ClientSessionApis.SessionFs = createSessionFsHandler(session)
+            ?? throw new InvalidOperationException("CreateSessionFsHandler returned null.");
+    }
+
     private async Task VerifyProtocolVersionAsync(Connection connection, CancellationToken cancellationToken)
     {
         var maxVersion = SdkProtocolVersion.GetVersion();
@@ -970,8 +1149,12 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 
     private static async Task<(Process Process, int? DetectedLocalhostTcpPort, StringBuilder StderrBuffer)> StartCliServerAsync(CopilotClientOptions options, ILogger logger, CancellationToken cancellationToken)
     {
-        // Use explicit path or bundled CLI - no PATH fallback
-        var cliPath = options.CliPath ?? GetBundledCliPath(out var searchedPath)
+        // Use explicit path, COPILOT_CLI_PATH env var (from options.Environment or process env), or bundled CLI - no PATH fallback
+        var envCliPath = options.Environment is not null && options.Environment.TryGetValue("COPILOT_CLI_PATH", out var envValue) ? envValue
+            : System.Environment.GetEnvironmentVariable("COPILOT_CLI_PATH");
+        var cliPath = options.CliPath
+            ?? envCliPath
+            ?? GetBundledCliPath(out var searchedPath)
             ?? throw new InvalidOperationException($"Copilot CLI not found at '{searchedPath}'. Ensure the SDK NuGet package was restored correctly or provide an explicit CliPath.");
         var args = new List<string>();
 
@@ -1033,6 +1216,17 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         if (!string.IsNullOrEmpty(options.GitHubToken))
         {
             startInfo.Environment["COPILOT_SDK_AUTH_TOKEN"] = options.GitHubToken;
+        }
+
+        // Set telemetry environment variables if configured
+        if (options.Telemetry is { } telemetry)
+        {
+            startInfo.Environment["COPILOT_OTEL_ENABLED"] = "true";
+            if (telemetry.OtlpEndpoint is not null) startInfo.Environment["OTEL_EXPORTER_OTLP_ENDPOINT"] = telemetry.OtlpEndpoint;
+            if (telemetry.FilePath is not null) startInfo.Environment["COPILOT_OTEL_FILE_EXPORTER_PATH"] = telemetry.FilePath;
+            if (telemetry.ExporterType is not null) startInfo.Environment["COPILOT_OTEL_EXPORTER_TYPE"] = telemetry.ExporterType;
+            if (telemetry.SourceName is not null) startInfo.Environment["COPILOT_OTEL_SOURCE_NAME"] = telemetry.SourceName;
+            if (telemetry.CaptureContent is { } capture) startInfo.Environment["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = capture ? "true" : "false";
         }
 
         var cliProcess = new Process { StartInfo = startInfo };
@@ -1167,7 +1361,16 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         rpc.AddLocalRpcMethod("permission.request", handler.OnPermissionRequestV2);
         rpc.AddLocalRpcMethod("userInput.request", handler.OnUserInputRequest);
         rpc.AddLocalRpcMethod("hooks.invoke", handler.OnHooksInvoke);
+        rpc.AddLocalRpcMethod("systemMessage.transform", handler.OnSystemMessageTransform);
+        ClientSessionApiRegistration.RegisterClientSessionApiHandlers(rpc, sessionId =>
+        {
+            var session = GetSession(sessionId) ?? throw new ArgumentException($"Unknown session {sessionId}");
+            return session.ClientSessionApis;
+        });
         rpc.StartListening();
+
+        // Transition state to Disconnected if the JSON-RPC connection drops
+        _ = rpc.Completion.ContinueWith(_ => _disconnected = true, TaskScheduler.Default);
 
         _rpc = new ServerRpc(rpc);
 
@@ -1196,6 +1399,12 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         options.TypeInfoResolverChain.Add(CopilotSession.SessionJsonContext.Default);
         options.TypeInfoResolverChain.Add(SessionEventsJsonContext.Default);
         options.TypeInfoResolverChain.Add(SDK.Rpc.RpcJsonContext.Default);
+
+        // StreamJsonRpc's RequestId needs serialization when CancellationToken fires during
+        // JSON-RPC operations. Its built-in converter (RequestIdSTJsonConverter) is internal,
+        // and [JsonSerializable] can't source-gen for it (SYSLIB1220), so we provide our own
+        // AOT-safe resolver + converter.
+        options.TypeInfoResolverChain.Add(new RequestIdTypeInfoResolver());
 
         options.MakeReadOnly();
 
@@ -1265,7 +1474,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             client.DispatchLifecycleEvent(evt);
         }
 
-        public async Task<UserInputRequestResponse> OnUserInputRequest(string sessionId, string question, List<string>? choices = null, bool? allowFreeform = null)
+        public async Task<UserInputRequestResponse> OnUserInputRequest(string sessionId, string question, IList<string>? choices = null, bool? allowFreeform = null)
         {
             var session = client.GetSession(sessionId) ?? throw new ArgumentException($"Unknown session {sessionId}");
             var request = new UserInputRequest
@@ -1286,13 +1495,23 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             return new HooksInvokeResponse(output);
         }
 
+        public async Task<SystemMessageTransformRpcResponse> OnSystemMessageTransform(string sessionId, JsonElement sections)
+        {
+            var session = client.GetSession(sessionId) ?? throw new ArgumentException($"Unknown session {sessionId}");
+            return await session.HandleSystemMessageTransformAsync(sections);
+        }
+
         // Protocol v2 backward-compatibility adapters
 
         public async Task<ToolCallResponseV2> OnToolCallV2(string sessionId,
             string toolCallId,
             string toolName,
-            object? arguments)
+            object? arguments,
+            string? traceparent = null,
+            string? tracestate = null)
         {
+            using var _ = TelemetryHelpers.RestoreTraceContext(traceparent, tracestate);
+
             var session = client.GetSession(sessionId) ?? throw new ArgumentException($"Unknown session {sessionId}");
             if (session.GetTool(toolName) is not { } tool)
             {
@@ -1337,13 +1556,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 
                 var result = await tool.InvokeAsync(aiFunctionArgs);
 
-                var toolResultObject = result is ToolResultAIContent trac ? trac.Result : new ToolResultObject
-                {
-                    ResultType = "success",
-                    TextResultForLlm = result is JsonElement { ValueKind: JsonValueKind.String } je
-                        ? je.GetString()!
-                        : JsonSerializer.Serialize(result, tool.JsonSerializerOptions.GetTypeInfo(typeof(object))),
-                };
+                var toolResultObject = ToolResultObject.ConvertFromInvocationResult(result, tool.JsonSerializerOptions);
                 return new ToolCallResponseV2(toolResultObject);
             }
             catch (Exception ex)
@@ -1365,7 +1578,15 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             try
             {
                 var result = await session.HandlePermissionRequestAsync(permissionRequest);
+                if (result.Kind == new PermissionRequestResultKind("no-result"))
+                {
+                    throw new InvalidOperationException(NoResultPermissionV2ErrorMessage);
+                }
                 return new PermissionRequestResponseV2(result);
+            }
+            catch (InvalidOperationException ex) when (ex.Message == NoResultPermissionV2ErrorMessage)
+            {
+                throw;
             }
             catch (Exception)
             {
@@ -1407,71 +1628,94 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         string? SessionId,
         string? ClientName,
         string? ReasoningEffort,
-        List<ToolDefinition>? Tools,
+        IList<ToolDefinition>? Tools,
         SystemMessageConfig? SystemMessage,
-        List<string>? AvailableTools,
-        List<string>? ExcludedTools,
+        IList<string>? AvailableTools,
+        IList<string>? ExcludedTools,
         ProviderConfig? Provider,
         bool? RequestPermission,
         bool? RequestUserInput,
         bool? Hooks,
         string? WorkingDirectory,
         bool? Streaming,
-        Dictionary<string, object>? McpServers,
+        bool? IncludeSubAgentStreamingEvents,
+        IDictionary<string, McpServerConfig>? McpServers,
         string? EnvValueMode,
-        List<CustomAgentConfig>? CustomAgents,
+        IList<CustomAgentConfig>? CustomAgents,
         string? Agent,
         string? ConfigDir,
-        List<string>? SkillDirectories,
-        List<string>? DisabledSkills,
-        InfiniteSessionConfig? InfiniteSessions);
+        bool? EnableConfigDiscovery,
+        IList<string>? SkillDirectories,
+        IList<string>? DisabledSkills,
+        InfiniteSessionConfig? InfiniteSessions,
+        IList<CommandWireDefinition>? Commands = null,
+        bool? RequestElicitation = null,
+        string? Traceparent = null,
+        string? Tracestate = null,
+        ModelCapabilitiesOverride? ModelCapabilities = null);
 
     internal record ToolDefinition(
         string Name,
         string? Description,
         JsonElement Parameters, /* JSON schema */
-        bool? OverridesBuiltInTool = null)
+        bool? OverridesBuiltInTool = null,
+        bool? SkipPermission = null)
     {
         public static ToolDefinition FromAIFunction(AIFunction function)
         {
             var overrides = function.AdditionalProperties.TryGetValue("is_override", out var val) && val is true;
+            var skipPerm = function.AdditionalProperties.TryGetValue("skip_permission", out var skipVal) && skipVal is true;
             return new ToolDefinition(function.Name, function.Description, function.JsonSchema,
-                overrides ? true : null);
+                overrides ? true : null,
+                skipPerm ? true : null);
         }
     }
 
     internal record CreateSessionResponse(
         string SessionId,
-        string? WorkspacePath);
+        string? WorkspacePath,
+        SessionCapabilities? Capabilities = null);
 
     internal record ResumeSessionRequest(
         string SessionId,
         string? ClientName,
         string? Model,
         string? ReasoningEffort,
-        List<ToolDefinition>? Tools,
+        IList<ToolDefinition>? Tools,
         SystemMessageConfig? SystemMessage,
-        List<string>? AvailableTools,
-        List<string>? ExcludedTools,
+        IList<string>? AvailableTools,
+        IList<string>? ExcludedTools,
         ProviderConfig? Provider,
         bool? RequestPermission,
         bool? RequestUserInput,
         bool? Hooks,
         string? WorkingDirectory,
         string? ConfigDir,
+        bool? EnableConfigDiscovery,
         bool? DisableResume,
         bool? Streaming,
-        Dictionary<string, object>? McpServers,
+        bool? IncludeSubAgentStreamingEvents,
+        IDictionary<string, McpServerConfig>? McpServers,
         string? EnvValueMode,
-        List<CustomAgentConfig>? CustomAgents,
+        IList<CustomAgentConfig>? CustomAgents,
         string? Agent,
-        List<string>? SkillDirectories,
-        List<string>? DisabledSkills,
-        InfiniteSessionConfig? InfiniteSessions);
+        IList<string>? SkillDirectories,
+        IList<string>? DisabledSkills,
+        InfiniteSessionConfig? InfiniteSessions,
+        IList<CommandWireDefinition>? Commands = null,
+        bool? RequestElicitation = null,
+        string? Traceparent = null,
+        string? Tracestate = null,
+        ModelCapabilitiesOverride? ModelCapabilities = null);
 
     internal record ResumeSessionResponse(
         string SessionId,
-        string? WorkspacePath);
+        string? WorkspacePath,
+        SessionCapabilities? Capabilities = null);
+
+    internal record CommandWireDefinition(
+        string Name,
+        string? Description);
 
     internal record GetLastSessionIdResponse(
         string? SessionId);
@@ -1488,6 +1732,12 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 
     internal record ListSessionsResponse(
         List<SessionMetadata> Sessions);
+
+    internal record GetSessionMetadataRequest(
+        string SessionId);
+
+    internal record GetSessionMetadataResponse(
+        SessionMetadata? Session);
 
     internal record UserInputRequestResponse(
         string Answer,
@@ -1595,13 +1845,20 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     [JsonSerializable(typeof(HooksInvokeResponse))]
     [JsonSerializable(typeof(ListSessionsRequest))]
     [JsonSerializable(typeof(ListSessionsResponse))]
+    [JsonSerializable(typeof(GetSessionMetadataRequest))]
+    [JsonSerializable(typeof(GetSessionMetadataResponse))]
+    [JsonSerializable(typeof(ModelCapabilitiesOverride))]
     [JsonSerializable(typeof(PermissionRequestResult))]
     [JsonSerializable(typeof(PermissionRequestResponseV2))]
     [JsonSerializable(typeof(ProviderConfig))]
     [JsonSerializable(typeof(ResumeSessionRequest))]
     [JsonSerializable(typeof(ResumeSessionResponse))]
+    [JsonSerializable(typeof(SessionCapabilities))]
+    [JsonSerializable(typeof(SessionUiCapabilities))]
     [JsonSerializable(typeof(SessionMetadata))]
     [JsonSerializable(typeof(SystemMessageConfig))]
+    [JsonSerializable(typeof(SystemMessageTransformRpcResponse))]
+    [JsonSerializable(typeof(CommandWireDefinition))]
     [JsonSerializable(typeof(ToolCallResponseV2))]
     [JsonSerializable(typeof(ToolDefinition))]
     [JsonSerializable(typeof(ToolResultAIContent))]
@@ -1610,6 +1867,50 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     [JsonSerializable(typeof(UserInputRequest))]
     [JsonSerializable(typeof(UserInputResponse))]
     internal partial class ClientJsonContext : JsonSerializerContext;
+
+    /// <summary>
+    /// AOT-safe type info resolver for <see cref="RequestId"/>.
+    /// StreamJsonRpc's own RequestIdSTJsonConverter is internal (SYSLIB1220/CS0122),
+    /// so we provide our own converter and wire it through <see cref="JsonMetadataServices.CreateValueInfo{T}"/>
+    /// to stay fully AOT/trimming-compatible.
+    /// </summary>
+    private sealed class RequestIdTypeInfoResolver : IJsonTypeInfoResolver
+    {
+        public JsonTypeInfo? GetTypeInfo(Type type, JsonSerializerOptions options)
+        {
+            if (type == typeof(RequestId))
+                return JsonMetadataServices.CreateValueInfo<RequestId>(options, new RequestIdJsonConverter());
+            return null;
+        }
+    }
+
+    private sealed class RequestIdJsonConverter : JsonConverter<RequestId>
+    {
+        public override RequestId Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            return reader.TokenType switch
+            {
+                JsonTokenType.Number => reader.TryGetInt64(out long val)
+                    ? new RequestId(val)
+                    : new RequestId(reader.HasValueSequence
+                        ? Encoding.UTF8.GetString(reader.ValueSequence)
+                        : Encoding.UTF8.GetString(reader.ValueSpan)),
+                JsonTokenType.String => new RequestId(reader.GetString()!),
+                JsonTokenType.Null => RequestId.Null,
+                _ => throw new JsonException($"Unexpected token type for RequestId: {reader.TokenType}"),
+            };
+        }
+
+        public override void Write(Utf8JsonWriter writer, RequestId value, JsonSerializerOptions options)
+        {
+            if (value.Number.HasValue)
+                writer.WriteNumberValue(value.Number.Value);
+            else if (value.String is not null)
+                writer.WriteStringValue(value.String);
+            else
+                writer.WriteNullValue();
+        }
+    }
 
     [GeneratedRegex(@"listening on port ([0-9]+)", RegexOptions.IgnoreCase)]
     private static partial Regex ListeningOnPortRegex();
