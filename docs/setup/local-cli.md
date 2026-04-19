@@ -1,18 +1,18 @@
 # Local CLI Setup
 
-Use the Copilot SDK with the CLI already signed in on your machine. This is the simplest configuration — zero auth code, zero infrastructure.
+Use a specific CLI binary instead of the SDK's bundled CLI. This is an advanced option — you supply the CLI path explicitly, and you are responsible for ensuring version compatibility with the SDK.
 
-**Best for:** Personal projects, prototyping, local development, learning the SDK.
+**Use when:** You need to pin a specific CLI version, or work with the Go SDK (which does not bundle a CLI).
 
 ## How It Works
 
-When you install the Copilot CLI and sign in, your credentials are stored in the system keychain. The SDK automatically starts the CLI as a child process and uses those stored credentials.
+By default, the Node.js, Python, and .NET SDKs include their own CLI dependency (see [Default Setup](./bundled-cli.md)). If you need to override this — for example, to use a system-installed CLI — you can use the `cliPath` option.
 
 ```mermaid
 flowchart LR
     subgraph YourMachine["Your Machine"]
         App["Your App"] --> SDK["SDK Client"]
-        SDK -- "stdio" --> CLI["Copilot CLI<br/>(auto-started)"]
+        SDK -- "cliPath" --> CLI["Copilot CLI<br/>(your own binary)"]
         CLI --> Keychain["🔐 System Keychain<br/>(stored credentials)"]
     end
     CLI -- "API calls" --> Copilot["☁️ GitHub Copilot"]
@@ -21,14 +21,14 @@ flowchart LR
 ```
 
 **Key characteristics:**
-- CLI is spawned automatically by the SDK (no setup needed)
-- Authentication uses the signed-in user's credentials from the system keychain
-- Communication happens over stdio (stdin/stdout) — no network ports
-- Sessions are local to your machine
+- You explicitly provide the CLI binary path
+- You are responsible for CLI version compatibility with the SDK
+- Authentication uses the signed-in user's credentials from the system keychain (or env vars)
+- Communication happens over stdio
 
-## Quick Start
+## Configuration
 
-The default configuration requires no options at all:
+### Using a local CLI binary
 
 <details open>
 <summary><strong>Node.js / TypeScript</strong></summary>
@@ -36,9 +36,11 @@ The default configuration requires no options at all:
 ```typescript
 import { CopilotClient } from "@github/copilot-sdk";
 
-const client = new CopilotClient();
-const session = await client.createSession({ model: "gpt-4.1" });
+const client = new CopilotClient({
+    cliPath: "/usr/local/bin/copilot",
+});
 
+const session = await client.createSession({ model: "gpt-4.1" });
 const response = await session.sendAndWait({ prompt: "Hello!" });
 console.log(response?.data.content);
 
@@ -52,13 +54,20 @@ await client.stop();
 
 ```python
 from copilot import CopilotClient
+from copilot.generated.session_events import AssistantMessageData
+from copilot.session import PermissionHandler
 
-client = CopilotClient()
+client = CopilotClient({
+    "cli_path": "/usr/local/bin/copilot",
+})
 await client.start()
 
-session = await client.create_session({"model": "gpt-4.1"})
-response = await session.send_and_wait({"prompt": "Hello!"})
-print(response.data.content)
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-4.1")
+response = await session.send_and_wait("Hello!")
+if response:
+    match response.data:
+        case AssistantMessageData() as data:
+            print(data.content)
 
 await client.stop()
 ```
@@ -67,6 +76,8 @@ await client.stop()
 
 <details>
 <summary><strong>Go</strong></summary>
+
+> **Note:** The Go SDK does not bundle a CLI, so you must always provide `CLIPath`.
 
 <!-- docs-validate: hidden -->
 ```go
@@ -82,7 +93,9 @@ import (
 func main() {
 	ctx := context.Background()
 
-	client := copilot.NewClient(nil)
+	client := copilot.NewClient(&copilot.ClientOptions{
+		CLIPath: "/usr/local/bin/copilot",
+	})
 	if err := client.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
@@ -90,13 +103,19 @@ func main() {
 
 	session, _ := client.CreateSession(ctx, &copilot.SessionConfig{Model: "gpt-4.1"})
 	response, _ := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: "Hello!"})
-	fmt.Println(*response.Data.Content)
+	if response != nil {
+		if d, ok := response.Data.(*copilot.AssistantMessageData); ok {
+			fmt.Println(d.Content)
+		}
+	}
 }
 ```
 <!-- /docs-validate: hidden -->
 
 ```go
-client := copilot.NewClient(nil)
+client := copilot.NewClient(&copilot.ClientOptions{
+    CLIPath: "/usr/local/bin/copilot",
+})
 if err := client.Start(ctx); err != nil {
     log.Fatal(err)
 }
@@ -104,7 +123,11 @@ defer client.Stop()
 
 session, _ := client.CreateSession(ctx, &copilot.SessionConfig{Model: "gpt-4.1"})
 response, _ := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: "Hello!"})
-fmt.Println(*response.Data.Content)
+if response != nil {
+    if d, ok := response.Data.(*copilot.AssistantMessageData); ok {
+        fmt.Println(d.Content)
+    }
+}
 ```
 
 </details>
@@ -113,7 +136,11 @@ fmt.Println(*response.Data.Content)
 <summary><strong>.NET</strong></summary>
 
 ```csharp
-await using var client = new CopilotClient();
+var client = new CopilotClient(new CopilotClientOptions
+{
+    CliPath = "/usr/local/bin/copilot",
+});
+
 await using var session = await client.CreateSessionAsync(
     new SessionConfig { Model = "gpt-4.1" });
 
@@ -124,56 +151,20 @@ Console.WriteLine(response?.Data.Content);
 
 </details>
 
-That's it. The SDK handles everything: starting the CLI, authenticating, and managing the session.
-
-## What's Happening Under the Hood
-
-```mermaid
-sequenceDiagram
-    participant App as Your App
-    participant SDK as SDK Client
-    participant CLI as Copilot CLI
-    participant GH as GitHub API
-
-    App->>SDK: new CopilotClient()
-    Note over SDK: Locates CLI binary
-
-    App->>SDK: createSession()
-    SDK->>CLI: Spawn process (stdio)
-    CLI->>CLI: Load credentials from keychain
-    CLI->>GH: Authenticate
-    GH-->>CLI: ✅ Valid session
-    CLI-->>SDK: Session created
-    SDK-->>App: Session ready
-
-    App->>SDK: sendAndWait("Hello!")
-    SDK->>CLI: JSON-RPC request
-    CLI->>GH: Model API call
-    GH-->>CLI: Response
-    CLI-->>SDK: JSON-RPC response
-    SDK-->>App: Response data
-```
-
-## Configuration Options
-
-While defaults work great, you can customize the local setup:
+## Additional Options
 
 ```typescript
 const client = new CopilotClient({
-    // Override CLI location (default: bundled with @github/copilot)
     cliPath: "/usr/local/bin/copilot",
 
     // Set log level for debugging
     logLevel: "debug",
 
     // Pass extra CLI arguments
-    cliArgs: ["--disable-telemetry"],
+    cliArgs: ["--log-dir=/tmp/copilot-logs"],
 
     // Set working directory
     cwd: "/path/to/project",
-
-    // Auto-restart CLI if it crashes (default: true)
-    autoRestart: true,
 });
 ```
 
@@ -192,7 +183,7 @@ The SDK picks these up automatically — no code changes needed.
 
 ## Managing Sessions
 
-With the local CLI, sessions default to ephemeral. To create resumable sessions, provide your own session ID:
+Sessions default to ephemeral. To create resumable sessions, provide your own session ID:
 
 ```typescript
 // Create a named session
@@ -211,24 +202,13 @@ Session state is stored locally at `~/.copilot/session-state/{sessionId}/`.
 
 | Limitation | Details |
 |------------|---------|
+| **Version compatibility** | You must ensure your CLI version is compatible with the SDK |
 | **Single user** | Credentials are tied to whoever signed in to the CLI |
 | **Local only** | The CLI runs on the same machine as your app |
 | **No multi-tenant** | Can't serve multiple users from one CLI instance |
-| **Requires CLI login** | User must run `copilot` and authenticate first |
-
-## When to Move On
-
-If you need any of these, it's time to pick a more advanced setup:
-
-| Need | Next Guide |
-|------|-----------|
-| Ship your app to others | [Bundled CLI](./bundled-cli.md) |
-| Multiple users signing in | [GitHub OAuth](./github-oauth.md) |
-| Run on a server | [Backend Services](./backend-services.md) |
-| Use your own model keys | [BYOK](../auth/byok.md) |
 
 ## Next Steps
 
+- **[Default Setup](./bundled-cli.md)** — Use the SDK's built-in CLI (recommended for most use cases)
 - **[Getting Started tutorial](../getting-started.md)** — Build a complete interactive app
 - **[Authentication docs](../auth/index.md)** — All auth methods in detail
-- **[Session Persistence](../features/session-persistence.md)** — Advanced session management
