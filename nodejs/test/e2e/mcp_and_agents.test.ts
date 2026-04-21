@@ -5,8 +5,9 @@
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { describe, expect, it } from "vitest";
-import type { CustomAgentConfig, MCPLocalServerConfig, MCPServerConfig } from "../../src/index.js";
-import { approveAll } from "../../src/index.js";
+import { z } from "zod";
+import type { CustomAgentConfig, MCPStdioServerConfig, MCPServerConfig } from "../../src/index.js";
+import { approveAll, defineTool } from "../../src/index.js";
 import { createSdkTestContext } from "./harness/sdkTestContext.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,7 +15,7 @@ const __dirname = dirname(__filename);
 const TEST_MCP_SERVER = resolve(__dirname, "../../../test/harness/test-mcp-server.mjs");
 
 describe("MCP Servers and Custom Agents", async () => {
-    const { copilotClient: client } = await createSdkTestContext();
+    const { copilotClient: client, openAiEndpoint } = await createSdkTestContext();
 
     describe("MCP Servers", () => {
         it("should accept MCP server configuration on session create", async () => {
@@ -24,7 +25,7 @@ describe("MCP Servers and Custom Agents", async () => {
                     command: "echo",
                     args: ["hello"],
                     tools: ["*"],
-                } as MCPLocalServerConfig,
+                } as MCPStdioServerConfig,
             };
 
             const session = await client.createSession({
@@ -56,7 +57,7 @@ describe("MCP Servers and Custom Agents", async () => {
                     command: "echo",
                     args: ["hello"],
                     tools: ["*"],
-                } as MCPLocalServerConfig,
+                } as MCPStdioServerConfig,
             };
 
             const session2 = await client.resumeSession(sessionId, {
@@ -81,13 +82,13 @@ describe("MCP Servers and Custom Agents", async () => {
                     command: "echo",
                     args: ["server1"],
                     tools: ["*"],
-                } as MCPLocalServerConfig,
+                } as MCPStdioServerConfig,
                 server2: {
                     type: "local",
                     command: "echo",
                     args: ["server2"],
                     tools: ["*"],
-                } as MCPLocalServerConfig,
+                } as MCPStdioServerConfig,
             };
 
             const session = await client.createSession({
@@ -107,7 +108,7 @@ describe("MCP Servers and Custom Agents", async () => {
                     args: [TEST_MCP_SERVER],
                     tools: ["*"],
                     env: { TEST_SECRET: "hunter2" },
-                } as MCPLocalServerConfig,
+                } as MCPStdioServerConfig,
             };
 
             const session = await client.createSession({
@@ -219,7 +220,7 @@ describe("MCP Servers and Custom Agents", async () => {
                             command: "echo",
                             args: ["agent-mcp"],
                             tools: ["*"],
-                        } as MCPLocalServerConfig,
+                        } as MCPStdioServerConfig,
                     },
                 },
             ];
@@ -268,7 +269,7 @@ describe("MCP Servers and Custom Agents", async () => {
                     command: "echo",
                     args: ["shared"],
                     tools: ["*"],
-                } as MCPLocalServerConfig,
+                } as MCPStdioServerConfig,
             };
 
             const customAgents: CustomAgentConfig[] = [
@@ -294,6 +295,74 @@ describe("MCP Servers and Custom Agents", async () => {
             expect(message?.data.content).toContain("14");
 
             await session.disconnect();
+        });
+    });
+
+    describe("Default Agent Tool Exclusion", () => {
+        it("should hide excluded tools from default agent", async () => {
+            const secretTool = defineTool("secret_tool", {
+                description: "A secret tool hidden from the default agent",
+                parameters: z.object({
+                    input: z.string().describe("Input to process"),
+                }),
+                handler: ({ input }) => `SECRET:${input}`,
+            });
+
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                tools: [secretTool],
+                defaultAgent: {
+                    excludedTools: ["secret_tool"],
+                },
+            });
+
+            // Ask about the tool — the default agent should not see it
+            const message = await session.sendAndWait({
+                prompt: "Do you have access to a tool called secret_tool? Answer yes or no.",
+            });
+
+            // Sanity-check the replayed response (not the actual exclusion assertion)
+            expect(message?.data.content?.toLowerCase()).toContain("no");
+
+            // The real assertion: verify the runtime excluded the tool from the CAPI request
+            const exchanges = await openAiEndpoint.getExchanges();
+            const toolNames = exchanges.flatMap((e) =>
+                (e.request.tools ?? []).map((t) => ("function" in t ? t.function.name : ""))
+            );
+            expect(toolNames).not.toContain("secret_tool");
+
+            await session.disconnect();
+        });
+
+        it("should accept defaultAgent configuration on session resume", async () => {
+            const session1 = await client.createSession({ onPermissionRequest: approveAll });
+            const sessionId = session1.sessionId;
+            await session1.sendAndWait({ prompt: "What is 3+3?" });
+
+            const secretTool = defineTool("secret_tool", {
+                description: "A secret tool hidden from the default agent",
+                parameters: z.object({
+                    input: z.string().describe("Input to process"),
+                }),
+                handler: ({ input }) => `SECRET:${input}`,
+            });
+
+            const session2 = await client.resumeSession(sessionId, {
+                onPermissionRequest: approveAll,
+                tools: [secretTool],
+                defaultAgent: {
+                    excludedTools: ["secret_tool"],
+                },
+            });
+
+            expect(session2.sessionId).toBe(sessionId);
+
+            const message = await session2.sendAndWait({
+                prompt: "What is 4+4?",
+            });
+            expect(message?.data.content).toContain("8");
+
+            await session2.disconnect();
         });
     });
 });
