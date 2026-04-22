@@ -60,6 +60,7 @@ class JsonRpcClient:
         self._process_exit_error: str | None = None
         self._stderr_output: list[str] = []
         self._stderr_lock = threading.Lock()
+        self.on_close: Callable[[], None] | None = None
 
     def start(self, loop: asyncio.AbstractEventLoop | None = None):
         """Start listening for messages in background thread"""
@@ -211,6 +212,8 @@ class JsonRpcClient:
         # Process exited or read failed - fail all pending requests
         if self._running:
             self._fail_pending_requests()
+            if self.on_close is not None:
+                self.on_close()
 
     def _fail_pending_requests(self):
         """Fail all pending requests when process exits"""
@@ -325,7 +328,8 @@ class JsonRpcClient:
             self._handle_request(message)
 
     def _handle_request(self, message: dict):
-        handler = self.request_handlers.get(message["method"])
+        method = message.get("method", "")
+        handler = self.request_handlers.get(method)
         if not handler:
             if self._loop:
                 asyncio.run_coroutine_threadsafe(
@@ -348,17 +352,17 @@ class JsonRpcClient:
             outcome = handler(params)
             if inspect.isawaitable(outcome):
                 outcome = await outcome
-            if outcome is None:
-                outcome = {}
-            if not isinstance(outcome, dict):
-                raise ValueError("Request handler must return a dict")
+            if outcome is not None and not isinstance(outcome, dict):
+                raise ValueError(
+                    f"Request handler must return a dict, got {type(outcome).__name__}"
+                )
             await self._send_response(message["id"], outcome)
         except JsonRpcError as exc:
             await self._send_error_response(message["id"], exc.code, exc.message, exc.data)
         except Exception as exc:  # pylint: disable=broad-except
             await self._send_error_response(message["id"], -32603, str(exc), None)
 
-    async def _send_response(self, request_id: str, result: dict):
+    async def _send_response(self, request_id: str, result: dict | None):
         response = {
             "jsonrpc": "2.0",
             "id": request_id,

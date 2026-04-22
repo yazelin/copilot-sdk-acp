@@ -72,8 +72,8 @@ public class RpcTests(E2ETestFixture fixture, ITestOutputHelper output) : E2ETes
         var before = await session.Rpc.Model.GetCurrentAsync();
         Assert.NotNull(before.ModelId);
 
-        // Switch to a different model
-        var result = await session.Rpc.Model.SwitchToAsync(modelId: "gpt-4.1");
+        // Switch to a different model with reasoning effort
+        var result = await session.Rpc.Model.SwitchToAsync(modelId: "gpt-4.1", reasoningEffort: "high");
         Assert.Equal("gpt-4.1", result.ModelId);
 
         // Verify the switch persisted
@@ -88,19 +88,17 @@ public class RpcTests(E2ETestFixture fixture, ITestOutputHelper output) : E2ETes
 
         // Get initial mode (default should be interactive)
         var initial = await session.Rpc.Mode.GetAsync();
-        Assert.Equal(SessionModeGetResultMode.Interactive, initial.Mode);
+        Assert.Equal(SessionMode.Interactive, initial);
 
         // Switch to plan mode
-        var planResult = await session.Rpc.Mode.SetAsync(SessionModeGetResultMode.Plan);
-        Assert.Equal(SessionModeGetResultMode.Plan, planResult.Mode);
+        await session.Rpc.Mode.SetAsync(SessionMode.Plan);
 
         // Verify mode persisted
         var afterPlan = await session.Rpc.Mode.GetAsync();
-        Assert.Equal(SessionModeGetResultMode.Plan, afterPlan.Mode);
+        Assert.Equal(SessionMode.Plan, afterPlan);
 
         // Switch back to interactive
-        var interactiveResult = await session.Rpc.Mode.SetAsync(SessionModeGetResultMode.Interactive);
-        Assert.Equal(SessionModeGetResultMode.Interactive, interactiveResult.Mode);
+        await session.Rpc.Mode.SetAsync(SessionMode.Interactive);
     }
 
     [Fact]
@@ -137,25 +135,25 @@ public class RpcTests(E2ETestFixture fixture, ITestOutputHelper output) : E2ETes
         var session = await CreateSessionAsync();
 
         // Initially no files
-        var initialFiles = await session.Rpc.Workspace.ListFilesAsync();
+        var initialFiles = await session.Rpc.Workspaces.ListFilesAsync();
         Assert.Empty(initialFiles.Files);
 
         // Create a file
         var fileContent = "Hello, workspace!";
-        await session.Rpc.Workspace.CreateFileAsync("test.txt", fileContent);
+        await session.Rpc.Workspaces.CreateFileAsync("test.txt", fileContent);
 
         // List files
-        var afterCreate = await session.Rpc.Workspace.ListFilesAsync();
+        var afterCreate = await session.Rpc.Workspaces.ListFilesAsync();
         Assert.Contains("test.txt", afterCreate.Files);
 
         // Read file
-        var readResult = await session.Rpc.Workspace.ReadFileAsync("test.txt");
+        var readResult = await session.Rpc.Workspaces.ReadFileAsync("test.txt");
         Assert.Equal(fileContent, readResult.Content);
 
         // Create nested file
-        await session.Rpc.Workspace.CreateFileAsync("subdir/nested.txt", "Nested content");
+        await session.Rpc.Workspaces.CreateFileAsync("subdir/nested.txt", "Nested content");
 
-        var afterNested = await session.Rpc.Workspace.ListFilesAsync();
+        var afterNested = await session.Rpc.Workspaces.ListFilesAsync();
         Assert.Contains("test.txt", afterNested.Files);
         Assert.Contains(afterNested.Files, f => f.Contains("nested.txt"));
     }
