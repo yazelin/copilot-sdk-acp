@@ -47,18 +47,16 @@ await session.sendAndWait({ prompt: "Analyze my codebase" });
 
 ```python
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 client = CopilotClient()
 await client.start()
 
 # Create a session with a meaningful ID
-session = await client.create_session({
-    "session_id": "user-123-task-456",
-    "model": "gpt-5.2-codex",
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-5.2-codex", session_id="user-123-task-456")
 
 # Do some work...
-await session.send_and_wait({"prompt": "Analyze my codebase"})
+await session.send_and_wait("Analyze my codebase")
 
 # Session state is automatically persisted
 ```
@@ -160,10 +158,10 @@ await session.sendAndWait({ prompt: "What did we discuss earlier?" });
 
 ```python
 # Resume from a different client instance (or after restart)
-session = await client.resume_session("user-123-task-456")
+session = await client.resume_session("user-123-task-456", on_permission_request=PermissionHandler.approve_all)
 
 # Continue where you left off
-await session.send_and_wait({"prompt": "What did we discuss earlier?"})
+await session.send_and_wait("What did we discuss earlier?")
 ```
 
 ### Go
@@ -416,7 +414,7 @@ Each SDK also provides idiomatic automatic cleanup patterns:
 | Language | Pattern | Example |
 |----------|---------|---------|
 | **TypeScript** | `Symbol.asyncDispose` | `await using session = await client.createSession(config);` |
-| **Python** | `async with` context manager | `async with await client.create_session(config) as session:` |
+| **Python** | `async with` context manager | `async with await client.create_session(on_permission_request=handler) as session:` |
 | **C#** | `IAsyncDisposable` | `await using var session = await client.CreateSessionAsync(config);` |
 | **Go** | `defer` | `defer session.Disconnect()` |
 
@@ -435,14 +433,26 @@ await client.deleteSession("user-123-task-456");
 
 ## Automatic Cleanup: Idle Timeout
 
-The CLI has a built-in 30-minute idle timeout. Sessions without activity are automatically cleaned up:
+By default, sessions have **no idle timeout** and live indefinitely until explicitly disconnected or deleted. You can optionally configure a server-wide idle timeout via `CopilotClientOptions.sessionIdleTimeoutSeconds`:
+
+```typescript
+const client = new CopilotClient({
+  sessionIdleTimeoutSeconds: 30 * 60, // 30 minutes
+});
+```
+
+When a timeout is configured, sessions without activity for that duration are automatically cleaned up. Set to `0` or omit to disable.
+
+> **Note:** This option only applies when the SDK spawns the runtime process. When connecting to an existing server via `cliUrl`, the server's own timeout configuration applies.
 
 ```mermaid
 flowchart LR
-    A["⚡ Last Activity"] --> B["⏳ 25 min<br/>timeout_warning"] --> C["🧹 30 min<br/>destroyed"]
+    A["⚡ Last Activity"] --> B["⏳ ~5 min before<br/>timeout_warning"] --> C["🧹 Timeout<br/>destroyed"]
 ```
 
-Listen for idle events to know when work completes:
+Sessions with active work (running commands, background agents) are always protected from idle cleanup, regardless of the timeout setting.
+
+Listen for idle events to react to session inactivity:
 
 ```typescript
 session.on("session.idle", (event) => {
