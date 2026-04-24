@@ -92,8 +92,11 @@ describe("Session RPC", async () => {
         const before = await session.rpc.model.getCurrent();
         expect(before.modelId).toBeDefined();
 
-        // Switch to a different model
-        const result = await session.rpc.model.switchTo({ modelId: "gpt-4.1" });
+        // Switch to a different model with reasoning effort
+        const result = await session.rpc.model.switchTo({
+            modelId: "gpt-4.1",
+            reasoningEffort: "high",
+        });
         expect(result.modelId).toBe("gpt-4.1");
 
         // Verify the switch persisted
@@ -106,19 +109,21 @@ describe("Session RPC", async () => {
 
         // Get initial mode (default should be interactive)
         const initial = await session.rpc.mode.get();
-        expect(initial.mode).toBe("interactive");
+        expect(initial).toBe("interactive");
 
         // Switch to plan mode
-        const planResult = await session.rpc.mode.set({ mode: "plan" });
-        expect(planResult.mode).toBe("plan");
+        await session.rpc.mode.set({ mode: "plan" });
 
         // Verify mode persisted
         const afterPlan = await session.rpc.mode.get();
-        expect(afterPlan.mode).toBe("plan");
+        expect(afterPlan).toBe("plan");
 
         // Switch back to interactive
-        const interactiveResult = await session.rpc.mode.set({ mode: "interactive" });
-        expect(interactiveResult.mode).toBe("interactive");
+        await session.rpc.mode.set({ mode: "interactive" });
+
+        // Verify switch back
+        const afterInteractive = await session.rpc.mode.get();
+        expect(afterInteractive).toBe("interactive");
     });
 
     it("should read, update, and delete plan", async () => {
@@ -151,28 +156,28 @@ describe("Session RPC", async () => {
         const session = await client.createSession({ onPermissionRequest: approveAll });
 
         // Initially no files
-        const initialFiles = await session.rpc.workspace.listFiles();
+        const initialFiles = await session.rpc.workspaces.listFiles();
         expect(initialFiles.files).toEqual([]);
 
         // Create a file
         const fileContent = "Hello, workspace!";
-        await session.rpc.workspace.createFile({ path: "test.txt", content: fileContent });
+        await session.rpc.workspaces.createFile({ path: "test.txt", content: fileContent });
 
         // List files
-        const afterCreate = await session.rpc.workspace.listFiles();
+        const afterCreate = await session.rpc.workspaces.listFiles();
         expect(afterCreate.files).toContain("test.txt");
 
         // Read file
-        const readResult = await session.rpc.workspace.readFile({ path: "test.txt" });
+        const readResult = await session.rpc.workspaces.readFile({ path: "test.txt" });
         expect(readResult.content).toBe(fileContent);
 
         // Create nested file
-        await session.rpc.workspace.createFile({
+        await session.rpc.workspaces.createFile({
             path: "subdir/nested.txt",
             content: "Nested content",
         });
 
-        const afterNested = await session.rpc.workspace.listFiles();
+        const afterNested = await session.rpc.workspaces.listFiles();
         expect(afterNested.files).toContain("test.txt");
         expect(afterNested.files.some((f) => f.includes("nested.txt"))).toBe(true);
     });

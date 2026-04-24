@@ -35,18 +35,18 @@ type UserPromptSubmittedHandler = (
 
 <!-- docs-validate: hidden -->
 ```python
-from copilot.types import UserPromptSubmittedHookInput, HookInvocation, UserPromptSubmittedHookOutput
+from copilot.session import UserPromptSubmittedHookInput, UserPromptSubmittedHookOutput
 from typing import Callable, Awaitable
 
 UserPromptSubmittedHandler = Callable[
-    [UserPromptSubmittedHookInput, HookInvocation],
+    [UserPromptSubmittedHookInput, dict[str, str]],
     Awaitable[UserPromptSubmittedHookOutput | None]
 ]
 ```
 <!-- /docs-validate: hidden -->
 ```python
 UserPromptSubmittedHandler = Callable[
-    [UserPromptSubmittedHookInput, HookInvocation],
+    [UserPromptSubmittedHookInput, dict[str, str]],
     Awaitable[UserPromptSubmittedHookOutput | None]
 ]
 ```
@@ -99,6 +99,17 @@ public delegate Task<UserPromptSubmittedHookOutput?> UserPromptSubmittedHandler(
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.json.*;
+
+UserPromptSubmittedHandler userPromptSubmittedHandler;
+```
+
+</details>
+
 ## Input
 
 | Field | Type | Description |
@@ -141,13 +152,13 @@ const session = await client.createSession({
 <summary><strong>Python</strong></summary>
 
 ```python
+from copilot.session import PermissionHandler
+
 async def on_user_prompt_submitted(input_data, invocation):
     print(f"[{invocation['session_id']}] User: {input_data['prompt']}")
     return None
 
-session = await client.create_session({
-    "hooks": {"on_user_prompt_submitted": on_user_prompt_submitted}
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, hooks={"on_user_prompt_submitted": on_user_prompt_submitted})
 ```
 
 </details>
@@ -232,6 +243,29 @@ var session = await client.CreateSessionAsync(new SessionConfig
         },
     },
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.*;
+import com.github.copilot.sdk.json.*;
+import java.util.concurrent.CompletableFuture;
+
+var hooks = new SessionHooks()
+    .setOnUserPromptSubmitted((input, invocation) -> {
+        System.out.println("[" + invocation.getSessionId() + "] User: " + input.prompt());
+        return CompletableFuture.completedFuture(null);
+    });
+
+var session = client.createSession(
+    new SessionConfig()
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+        .setHooks(hooks)
+).get();
 ```
 
 </details>
