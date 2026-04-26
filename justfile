@@ -9,7 +9,7 @@ format: format-go format-python format-nodejs format-dotnet
 lint: lint-go lint-python lint-nodejs lint-dotnet
 
 # Run tests for all languages
-test: test-go test-python test-nodejs test-dotnet
+test: test-go test-python test-nodejs test-dotnet test-corrections
 
 # Format Go code
 format-go:
@@ -71,15 +71,44 @@ test-dotnet:
     @echo "=== Testing .NET code ==="
     @cd dotnet && dotnet test test/GitHub.Copilot.SDK.Test.csproj
 
-# Install all dependencies
-install:
-    @echo "=== Installing dependencies ==="
-    @cd nodejs && npm ci
-    @cd python && uv pip install -e ".[dev]"
-    @cd go && go mod download
-    @cd dotnet && dotnet restore
-    @cd test/harness && npm ci --ignore-scripts
+# Test correction collection scripts
+test-corrections:
+    @echo "=== Testing correction scripts ==="
+    @cd scripts/corrections && npm test
+
+# Install all dependencies across all languages
+install: install-go install-python install-nodejs install-dotnet install-corrections
     @echo "✅ All dependencies installed"
+
+# Install Go dependencies and prerequisites for tests
+install-go: install-nodejs install-test-harness
+    @echo "=== Installing Go dependencies ==="
+    @cd go && go mod download
+
+# Install Python dependencies and prerequisites for tests
+install-python: install-nodejs install-test-harness
+    @echo "=== Installing Python dependencies ==="
+    @cd python && uv pip install -e ".[dev]"
+
+# Install .NET dependencies and prerequisites for tests
+install-dotnet: install-nodejs install-test-harness
+    @echo "=== Installing .NET dependencies ==="
+    @cd dotnet && dotnet restore
+
+# Install Node.js dependencies
+install-nodejs:
+    @echo "=== Installing Node.js dependencies ==="
+    @cd nodejs && npm ci
+
+# Install test harness dependencies (used by E2E tests in all languages)
+install-test-harness:
+    @echo "=== Installing test harness dependencies ==="
+    @cd test/harness && npm ci --ignore-scripts
+
+# Install correction collection script dependencies
+install-corrections:
+    @echo "=== Installing correction script dependencies ==="
+    @cd scripts/corrections && npm ci
 
 # Run interactive SDK playground
 playground:
