@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 using GitHub.Copilot.SDK.Test.Harness;
+using GitHub.Copilot.SDK.Rpc;
 using Microsoft.Extensions.AI;
 using System.ComponentModel;
 using Xunit;
@@ -15,7 +16,7 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
     [Fact]
     public async Task ShouldCreateAndDisconnectSessions()
     {
-        var session = await CreateSessionAsync(new SessionConfig { Model = "fake-test-model" });
+        var session = await CreateSessionAsync(new SessionConfig { Model = "claude-sonnet-4.5" });
 
         Assert.Matches(@"^[a-f0-9-]+$", session.SessionId);
 
@@ -91,6 +92,37 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
     }
 
     [Fact]
+    public async Task Should_Create_A_Session_With_Customized_SystemMessage_Config()
+    {
+        var customTone = "Respond in a warm, professional tone. Be thorough in explanations.";
+        var appendedContent = "Always mention quarterly earnings.";
+        var session = await CreateSessionAsync(new SessionConfig
+        {
+            SystemMessage = new SystemMessageConfig
+            {
+                Mode = SystemMessageMode.Customize,
+                Sections = new Dictionary<string, SectionOverride>
+                {
+                    [SystemPromptSections.Tone] = new() { Action = SectionOverrideAction.Replace, Content = customTone },
+                    [SystemPromptSections.CodeChangeRules] = new() { Action = SectionOverrideAction.Remove },
+                },
+                Content = appendedContent
+            }
+        });
+
+        await session.SendAsync(new MessageOptions { Prompt = "Who are you?" });
+        var assistantMessage = await TestHelper.GetFinalAssistantMessageAsync(session);
+        Assert.NotNull(assistantMessage);
+
+        var traffic = await Ctx.GetExchangesAsync();
+        Assert.NotEmpty(traffic);
+        var systemMessage = GetSystemMessage(traffic[0]);
+        Assert.Contains(customTone, systemMessage);
+        Assert.Contains(appendedContent, systemMessage);
+        Assert.DoesNotContain("<code_change_instructions>", systemMessage);
+    }
+
+    [Fact]
     public async Task Should_Create_A_Session_With_AvailableTools()
     {
         var session = await CreateSessionAsync(new SessionConfig
@@ -131,6 +163,35 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
     }
 
     [Fact]
+    public async Task Should_Create_A_Session_With_DefaultAgent_ExcludedTools()
+    {
+        var session = await CreateSessionAsync(new SessionConfig
+        {
+            Tools =
+            [
+                AIFunctionFactory.Create(
+                    (string input) => "SECRET",
+                    "secret_tool",
+                    "A secret tool hidden from the default agent"),
+            ],
+            DefaultAgent = new DefaultAgentConfig
+            {
+                ExcludedTools = ["secret_tool"],
+            },
+        });
+
+        await session.SendAsync(new MessageOptions { Prompt = "What is 1+1?" });
+        await TestHelper.GetFinalAssistantMessageAsync(session);
+
+        // The real assertion: verify the runtime excluded the tool from the CAPI request
+        var traffic = await Ctx.GetExchangesAsync();
+        Assert.NotEmpty(traffic);
+
+        var toolNames = GetToolNames(traffic[0]);
+        Assert.DoesNotContain("secret_tool", toolNames);
+    }
+
+    [Fact]
     public async Task Should_Create_Session_With_Custom_Tool()
     {
         var session = await CreateSessionAsync(new SessionConfig
@@ -164,7 +225,7 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
         var session2 = await ResumeSessionAsync(sessionId);
         Assert.Equal(sessionId, session2.SessionId);
 
-        var answer2 = await TestHelper.GetFinalAssistantMessageAsync(session2);
+        var answer2 = await TestHelper.GetFinalAssistantMessageAsync(session2, alreadyIdle: true);
         Assert.NotNull(answer2);
         Assert.Contains("2", answer2!.Data.Content ?? string.Empty);
 
@@ -244,12 +305,44 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
     [Fact]
     public async Task Should_Receive_Session_Events()
     {
-        var session = await CreateSessionAsync();
+        // Use OnEvent to capture events dispatched during session creation.
+        // session.start is emitted during the session.create RPC; if the session
+        // weren't registered in the sessions map before the RPC, it would be dropped.
+        var earlyEvents = new List<SessionEvent>();
+        var sessionStartReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = await CreateSessionAsync(new SessionConfig
+        {
+            OnEvent = evt =>
+            {
+                earlyEvents.Add(evt);
+                if (evt is SessionStartEvent)
+                    sessionStartReceived.TrySetResult(true);
+            },
+        });
+
+        // session.start is dispatched asynchronously via the event channel;
+        // wait briefly for the consumer to deliver it.
+        var started = await Task.WhenAny(sessionStartReceived.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Equal(sessionStartReceived.Task, started);
+        Assert.Contains(earlyEvents, evt => evt is SessionStartEvent);
+
         var receivedEvents = new List<SessionEvent>();
-        var idleReceived = new TaskCompletionSource<bool>();
+        var idleReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var concurrentCount = 0;
+        var maxConcurrent = 0;
 
         session.On(evt =>
         {
+            // Track concurrent handler invocations to verify serial dispatch.
+            var current = Interlocked.Increment(ref concurrentCount);
+            var seenMax = Volatile.Read(ref maxConcurrent);
+            if (current > seenMax)
+                Interlocked.CompareExchange(ref maxConcurrent, current, seenMax);
+
+            Thread.Sleep(10);
+
+            Interlocked.Decrement(ref concurrentCount);
+
             receivedEvents.Add(evt);
             if (evt is SessionIdleEvent)
             {
@@ -261,8 +354,7 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
         await session.SendAsync(new MessageOptions { Prompt = "What is 100+200?" });
 
         // Wait for session to become idle (indicating message processing is complete)
-        var completed = await Task.WhenAny(idleReceived.Task, Task.Delay(TimeSpan.FromSeconds(60)));
-        Assert.Equal(idleReceived.Task, completed);
+        await idleReceived.Task.WaitAsync(TimeSpan.FromSeconds(60));
 
         // Should have received multiple events (user message, assistant message, idle, etc.)
         Assert.NotEmpty(receivedEvents);
@@ -270,8 +362,13 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
         Assert.Contains(receivedEvents, evt => evt is AssistantMessageEvent);
         Assert.Contains(receivedEvents, evt => evt is SessionIdleEvent);
 
-        // Verify the assistant response contains the expected answer
-        var assistantMessage = await TestHelper.GetFinalAssistantMessageAsync(session);
+        // Events must be dispatched serially — never more than one handler invocation at a time.
+        Assert.Equal(1, maxConcurrent);
+
+        // Verify the assistant response contains the expected answer.
+        // session.idle is ephemeral and not in getEvents(), but we already
+        // confirmed idle via the live event handler above.
+        var assistantMessage = await TestHelper.GetFinalAssistantMessageAsync(session, alreadyIdle: true);
         Assert.NotNull(assistantMessage);
         Assert.Contains("300", assistantMessage!.Data.Content);
 
@@ -329,7 +426,7 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
         var sessions = await Client.ListSessionsAsync();
         Assert.NotEmpty(sessions);
 
-        var ourSession = sessions.Find(s => s.SessionId == session.SessionId);
+        var ourSession = sessions.FirstOrDefault(s => s.SessionId == session.SessionId);
         Assert.NotNull(ourSession);
 
         // Context may be present on sessions that have been persisted with workspace.yaml
@@ -340,15 +437,42 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
     }
 
     [Fact]
+    public async Task Should_Get_Session_Metadata_By_Id()
+    {
+        var session = await CreateSessionAsync();
+
+        // Send a message to persist the session to disk
+        await session.SendAndWaitAsync(new MessageOptions { Prompt = "Say hello" });
+        await Task.Delay(200);
+
+        var metadata = await Client.GetSessionMetadataAsync(session.SessionId);
+        Assert.NotNull(metadata);
+        Assert.Equal(session.SessionId, metadata.SessionId);
+        Assert.NotEqual(default, metadata.StartTime);
+        Assert.NotEqual(default, metadata.ModifiedTime);
+
+        // Verify non-existent session returns null
+        var notFound = await Client.GetSessionMetadataAsync("non-existent-session-id");
+        Assert.Null(notFound);
+    }
+
+    [Fact]
     public async Task SendAndWait_Throws_On_Timeout()
     {
         var session = await CreateSessionAsync();
+
+        var sessionIdleTask = TestHelper.GetNextEventOfTypeAsync<SessionIdleEvent>(session);
 
         // Use a slow command to ensure timeout triggers before completion
         var ex = await Assert.ThrowsAsync<TimeoutException>(() =>
             session.SendAndWaitAsync(new MessageOptions { Prompt = "Run 'sleep 2 && echo done'" }, TimeSpan.FromMilliseconds(100)));
 
         Assert.Contains("timed out", ex.Message);
+
+        // The timeout only cancels the client-side wait; abort the agent and wait for idle
+        // so leftover requests don't leak into subsequent tests.
+        await session.AbortAsync();
+        await sessionIdleTask;
     }
 
     [Fact]
@@ -358,6 +482,7 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
 
         // Set up wait for tool execution to start BEFORE sending
         var toolStartTask = TestHelper.GetNextEventOfTypeAsync<ToolExecutionStartEvent>(session);
+        var sessionIdleTask = TestHelper.GetNextEventOfTypeAsync<SessionIdleEvent>(session);
 
         using var cts = new CancellationTokenSource();
 
@@ -373,6 +498,12 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sendTask);
+
+        // Cancelling the token only cancels the client-side wait, not the server-side agent loop.
+        // Explicitly abort so the agent stops, then wait for idle to ensure we're not still
+        // running this agent's operations in the context of a subsequent test.
+        await session.AbortAsync();
+        await sessionIdleTask;
     }
 
     [Fact]
@@ -403,5 +534,139 @@ public class SessionTests(E2ETestFixture fixture, ITestOutputHelper output) : E2
         // Verify a model_change event was emitted with the new model
         var modelChanged = await modelChangedTask;
         Assert.Equal("gpt-4.1", modelChanged.Data.NewModel);
+    }
+
+    [Fact]
+    public async Task Should_Set_Model_With_ReasoningEffort()
+    {
+        var session = await CreateSessionAsync();
+
+        var modelChangedTask = TestHelper.GetNextEventOfTypeAsync<SessionModelChangeEvent>(session);
+
+        await session.SetModelAsync("gpt-4.1", "high");
+
+        var modelChanged = await modelChangedTask;
+        Assert.Equal("gpt-4.1", modelChanged.Data.NewModel);
+        Assert.Equal("high", modelChanged.Data.ReasoningEffort);
+    }
+
+    [Fact]
+    public async Task Should_Log_Messages_At_Various_Levels()
+    {
+        var session = await CreateSessionAsync();
+        var events = new List<SessionEvent>();
+        session.On(evt => events.Add(evt));
+
+        await session.LogAsync("Info message");
+        await session.LogAsync("Warning message", level: SessionLogLevel.Warning);
+        await session.LogAsync("Error message", level: SessionLogLevel.Error);
+        await session.LogAsync("Ephemeral message", ephemeral: true);
+
+        // Poll until all 4 notification events arrive
+        await WaitForAsync(() =>
+        {
+            var notifications = events.Where(e =>
+                e is SessionInfoEvent info && info.Data.InfoType == "notification" ||
+                e is SessionWarningEvent warn && warn.Data.WarningType == "notification" ||
+                e is SessionErrorEvent err && err.Data.ErrorType == "notification"
+            ).ToList();
+            return notifications.Count >= 4;
+        }, timeout: TimeSpan.FromSeconds(10));
+
+        var infoEvent = events.OfType<SessionInfoEvent>().First(e => e.Data.Message == "Info message");
+        Assert.Equal("notification", infoEvent.Data.InfoType);
+
+        var warningEvent = events.OfType<SessionWarningEvent>().First(e => e.Data.Message == "Warning message");
+        Assert.Equal("notification", warningEvent.Data.WarningType);
+
+        var errorEvent = events.OfType<SessionErrorEvent>().First(e => e.Data.Message == "Error message");
+        Assert.Equal("notification", errorEvent.Data.ErrorType);
+
+        var ephemeralEvent = events.OfType<SessionInfoEvent>().First(e => e.Data.Message == "Ephemeral message");
+        Assert.Equal("notification", ephemeralEvent.Data.InfoType);
+    }
+
+    [Fact]
+    public async Task Handler_Exception_Does_Not_Halt_Event_Delivery()
+    {
+        var session = await CreateSessionAsync();
+        var eventCount = 0;
+        var gotIdle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        session.On(evt =>
+        {
+            eventCount++;
+
+            // Throw on the first event to verify the loop keeps going.
+            if (eventCount == 1)
+                throw new InvalidOperationException("boom");
+
+            if (evt is SessionIdleEvent)
+                gotIdle.TrySetResult();
+        });
+
+        await session.SendAsync(new MessageOptions { Prompt = "What is 1+1?" });
+
+        await gotIdle.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Handler saw more than just the first (throwing) event.
+        Assert.True(eventCount > 1);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_From_Handler_Does_Not_Deadlock()
+    {
+        var session = await CreateSessionAsync();
+        var disposed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        session.On(evt =>
+        {
+            if (evt is UserMessageEvent)
+            {
+                // Call DisposeAsync from within a handler — must not deadlock.
+                session.DisposeAsync().AsTask().ContinueWith(_ => disposed.TrySetResult());
+            }
+        });
+
+        await session.SendAsync(new MessageOptions { Prompt = "What is 1+1?" });
+
+        // If this times out, we deadlocked.
+        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task Should_Accept_Blob_Attachments()
+    {
+        var pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        await File.WriteAllBytesAsync(Path.Join(Ctx.WorkDir, "test-pixel.png"), Convert.FromBase64String(pngBase64));
+
+        var session = await CreateSessionAsync();
+
+        await session.SendAndWaitAsync(new MessageOptions
+        {
+            Prompt = "Describe this image",
+            Attachments =
+            [
+                new UserMessageAttachmentBlob
+                {
+                    Data = pngBase64,
+                    MimeType = "image/png",
+                    DisplayName = "test-pixel.png",
+                },
+            ],
+        });
+
+        await session.DisposeAsync();
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"Condition not met within {timeout}");
+            await Task.Delay(100);
+        }
     }
 }
