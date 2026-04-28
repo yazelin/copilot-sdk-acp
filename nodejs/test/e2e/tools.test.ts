@@ -144,7 +144,7 @@ describe("Custom tools", async () => {
             ],
             onPermissionRequest: (request) => {
                 permissionRequests.push(request);
-                return { kind: "approved" };
+                return { kind: "approve-once" };
             },
         });
 
@@ -157,6 +157,32 @@ describe("Custom tools", async () => {
         const customToolRequests = permissionRequests.filter((req) => req.kind === "custom-tool");
         expect(customToolRequests.length).toBeGreaterThan(0);
         expect(customToolRequests[0].toolName).toBe("encrypt_string");
+    });
+
+    it("skipPermission sent in tool definition", async () => {
+        let didRunPermissionRequest = false;
+        const session = await client.createSession({
+            onPermissionRequest: () => {
+                didRunPermissionRequest = true;
+                return { kind: "no-result" };
+            },
+            tools: [
+                defineTool("safe_lookup", {
+                    description: "A safe lookup that skips permission",
+                    parameters: z.object({
+                        id: z.string().describe("ID to look up"),
+                    }),
+                    handler: ({ id }) => `RESULT: ${id}`,
+                    skipPermission: true,
+                }),
+            ],
+        });
+
+        const assistantMessage = await session.sendAndWait({
+            prompt: "Use safe_lookup to look up 'test123'",
+        });
+        expect(assistantMessage?.data.content).toContain("RESULT: test123");
+        expect(didRunPermissionRequest).toBe(false);
     });
 
     it("overrides built-in tool with custom tool", async () => {
@@ -197,7 +223,7 @@ describe("Custom tools", async () => {
                 }),
             ],
             onPermissionRequest: () => {
-                return { kind: "denied-interactively-by-user" };
+                return { kind: "reject" };
             },
         });
 

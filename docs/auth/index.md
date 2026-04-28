@@ -85,6 +85,19 @@ await using var client = new CopilotClient();
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+
+// Default: uses logged-in user credentials
+var client = new CopilotClient();
+client.start().get();
+```
+
+</details>
+
 **When to use:**
 - Desktop applications where users interact directly
 - Development and testing environments
@@ -97,7 +110,7 @@ Use an OAuth GitHub App to authenticate users through your application and pass 
 **How it works:**
 1. User authorizes your OAuth GitHub App
 2. Your app receives a user access token (`gho_` or `ghu_` prefix)
-3. Pass the token to the SDK via `githubToken` option
+3. Pass the token to the SDK via `gitHubToken` option
 
 **SDK Configuration:**
 
@@ -108,7 +121,7 @@ Use an OAuth GitHub App to authenticate users through your application and pass 
 import { CopilotClient } from "@github/copilot-sdk";
 
 const client = new CopilotClient({
-    githubToken: userAccessToken,  // Token from OAuth flow
+    gitHubToken: userAccessToken,  // Token from OAuth flow
     useLoggedInUser: false,        // Don't use stored CLI credentials
 });
 ```
@@ -185,6 +198,22 @@ await using var client = new CopilotClient(new CopilotClientOptions
     GithubToken = userAccessToken,     // Token from OAuth flow
     UseLoggedInUser = false,           // Don't use stored CLI credentials
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.json.*;
+
+var client = new CopilotClient(new CopilotClientOptions()
+    .setGitHubToken(userAccessToken)  // Token from OAuth flow
+    .setUseLoggedInUser(false)        // Don't use stored CLI credentials
+);
+client.start().get();
 ```
 
 </details>
@@ -270,7 +299,7 @@ BYOK allows you to use your own API keys from model providers like Azure AI Foun
 
 When multiple authentication methods are available, the SDK uses them in this priority order:
 
-1. **Explicit `githubToken`** - Token passed directly to SDK constructor
+1. **Explicit `gitHubToken`** - Token passed directly to SDK constructor
 2. **HMAC key** - `CAPI_HMAC_KEY` or `COPILOT_HMAC_KEY` environment variables
 3. **Direct API token** - `GITHUB_COPILOT_API_TOKEN` with `COPILOT_API_URL`
 4. **Environment variable tokens** - `COPILOT_GITHUB_TOKEN` → `GH_TOKEN` → `GITHUB_TOKEN`
@@ -347,6 +376,21 @@ await using var client = new CopilotClient(new CopilotClientOptions
 {
     UseLoggedInUser = false,  // Only use explicit tokens
 });
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.json.*;
+
+var client = new CopilotClient(new CopilotClientOptions()
+    .setUseLoggedInUser(false)  // Only use explicit tokens
+);
+client.start().get();
 ```
 
 </details>
