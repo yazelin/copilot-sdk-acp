@@ -9,7 +9,7 @@ import { basename, dirname, join, resolve } from "path";
 import { rimraf } from "rimraf";
 import { fileURLToPath } from "url";
 import { afterAll, afterEach, beforeEach, onTestFailed, TestContext } from "vitest";
-import { CopilotClient } from "../../../src";
+import { CopilotClient, CopilotClientOptions } from "../../../src";
 import { CapiProxy } from "./CapiProxy";
 import { retry } from "./sdkTestHelper";
 
@@ -22,12 +22,15 @@ const SNAPSHOTS_DIR = resolve(__dirname, "../../../../test/snapshots");
 export async function createSdkTestContext({
     logLevel,
     useStdio,
+    copilotClientOptions,
 }: {
     logLevel?: "error" | "none" | "warning" | "info" | "debug" | "all";
     cliPath?: string;
     useStdio?: boolean;
+    copilotClientOptions?: CopilotClientOptions;
 } = {}) {
     const homeDir = realpathSync(fs.mkdtempSync(join(os.tmpdir(), "copilot-test-config-")));
+    const copilotHomeDir = realpathSync(fs.mkdtempSync(join(os.tmpdir(), "copilot-test-home-")));
     const workDir = realpathSync(fs.mkdtempSync(join(os.tmpdir(), "copilot-test-work-")));
 
     const openAiEndpoint = new CapiProxy();
@@ -35,6 +38,7 @@ export async function createSdkTestContext({
     const env = {
         ...process.env,
         COPILOT_API_URL: proxyUrl,
+        COPILOT_HOME: copilotHomeDir,
 
         // TODO: I'm not convinced the SDK should default to using whatever config you happen to have in your homedir.
         // The SDK config should be independent of the regular CLI app. Likewise it shouldn't mix sessions from the
@@ -49,8 +53,9 @@ export async function createSdkTestContext({
         logLevel: logLevel || "error",
         cliPath: process.env.COPILOT_CLI_PATH,
         // Use fake token in CI to allow cached responses without real auth
-        githubToken: isCI ? "fake-token-for-e2e-tests" : undefined,
+        gitHubToken: isCI ? "fake-token-for-e2e-tests" : undefined,
         useStdio: useStdio,
+        ...copilotClientOptions,
     });
 
     const harness = { homeDir, workDir, openAiEndpoint, copilotClient, env };
@@ -83,6 +88,7 @@ export async function createSdkTestContext({
     afterAll(async () => {
         await copilotClient.stop();
         await openAiEndpoint.stop(anyTestFailed);
+        await rmDir("remove e2e test copilotHomeDir", copilotHomeDir);
         await rmDir("remove e2e test homeDir", homeDir);
         await rmDir("remove e2e test workDir", workDir);
     });

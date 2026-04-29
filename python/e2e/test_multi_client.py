@@ -13,13 +13,10 @@ import pytest
 import pytest_asyncio
 from pydantic import BaseModel, Field
 
-from copilot import (
-    CopilotClient,
-    PermissionHandler,
-    PermissionRequestResult,
-    ToolInvocation,
-    define_tool,
-)
+from copilot import CopilotClient, define_tool
+from copilot.client import ExternalServerConfig, SubprocessConfig
+from copilot.session import PermissionHandler, PermissionRequestResult
+from copilot.tools import ToolInvocation
 
 from .testharness import get_final_assistant_message
 from .testharness.proxy import CapiProxy
@@ -54,19 +51,19 @@ class MultiClientContext:
         )
 
         # Client 1 uses TCP mode so a second client can connect to the same server
-        opts: dict = {
-            "cli_path": self.cli_path,
-            "cwd": self.work_dir,
-            "env": self.get_env(),
-            "use_stdio": False,
-        }
-        if github_token:
-            opts["github_token"] = github_token
-        self._client1 = CopilotClient(opts)
+        self._client1 = CopilotClient(
+            SubprocessConfig(
+                cli_path=self.cli_path,
+                cwd=self.work_dir,
+                env=self.get_env(),
+                use_stdio=False,
+                github_token=github_token,
+            )
+        )
 
         # Trigger connection by creating and disconnecting an init session
         init_session = await self._client1.create_session(
-            {"on_permission_request": PermissionHandler.approve_all}
+            on_permission_request=PermissionHandler.approve_all
         )
         await init_session.disconnect()
 
@@ -74,7 +71,7 @@ class MultiClientContext:
         actual_port = self._client1.actual_port
         assert actual_port is not None, "Client 1 should have an actual port after connecting"
 
-        self._client2 = CopilotClient({"cli_url": f"localhost:{actual_port}"})
+        self._client2 = CopilotClient(ExternalServerConfig(url=f"localhost:{actual_port}"))
 
     async def teardown(self, test_failed: bool = False):
         if self._client2:
@@ -132,6 +129,7 @@ class MultiClientContext:
         env.update(
             {
                 "COPILOT_API_URL": self.proxy_url,
+                "COPILOT_HOME": self.home_dir,
                 "XDG_CONFIG_HOME": self.home_dir,
                 "XDG_STATE_HOME": self.home_dir,
             }
@@ -197,24 +195,20 @@ class TestMultiClientBroadcast:
 
         # Client 1 creates a session with a custom tool
         session1 = await mctx.client1.create_session(
-            {"on_permission_request": PermissionHandler.approve_all, "tools": [magic_number]}
+            on_permission_request=PermissionHandler.approve_all, tools=[magic_number]
         )
 
         # Client 2 resumes with NO tools — should not overwrite client 1's tools
         session2 = await mctx.client2.resume_session(
-            session1.session_id, {"on_permission_request": PermissionHandler.approve_all}
+            session1.session_id, on_permission_request=PermissionHandler.approve_all
         )
-
-        # Track events seen by each client
         client1_events = []
         client2_events = []
         session1.on(lambda event: client1_events.append(event))
         session2.on(lambda event: client2_events.append(event))
 
         # Send a prompt that triggers the custom tool
-        await session1.send(
-            {"prompt": "Use the magic_number tool with seed 'hello' and tell me the result"}
-        )
+        await session1.send("Use the magic_number tool with seed 'hello' and tell me the result")
         response = await get_final_assistant_message(session1)
         assert "MAGIC_hello_42" in (response.data.content or "")
 
@@ -240,17 +234,15 @@ class TestMultiClientBroadcast:
 
         # Client 1 creates a session and manually approves permission requests
         session1 = await mctx.client1.create_session(
-            {
-                "on_permission_request": lambda request, invocation: (
-                    permission_requests.append(request) or PermissionRequestResult(kind="approved")
-                ),
-            }
+            on_permission_request=lambda request, invocation: (
+                permission_requests.append(request) or PermissionRequestResult(kind="approve-once")
+            ),
         )
 
         # Client 2 resumes — its handler never resolves, so only client 1's approval takes effect
         session2 = await mctx.client2.resume_session(
             session1.session_id,
-            {"on_permission_request": lambda request, invocation: asyncio.Future()},
+            on_permission_request=lambda request, invocation: asyncio.Future(),
         )
 
         client1_events = []
@@ -259,9 +251,7 @@ class TestMultiClientBroadcast:
         session2.on(lambda event: client2_events.append(event))
 
         # Send a prompt that triggers a write operation (requires permission)
-        await session1.send(
-            {"prompt": "Create a file called hello.txt containing the text 'hello world'"}
-        )
+        await session1.send("Create a file called hello.txt containing the text 'hello world'")
         response = await get_final_assistant_message(session1)
         assert response.data.content
 
@@ -290,17 +280,15 @@ class TestMultiClientBroadcast:
         """One client rejects a permission request and both see the result."""
         # Client 1 creates a session and denies all permission requests
         session1 = await mctx.client1.create_session(
-            {
-                "on_permission_request": lambda request, invocation: PermissionRequestResult(
-                    kind="denied-interactively-by-user"
-                ),
-            }
+            on_permission_request=lambda request, invocation: PermissionRequestResult(
+                kind="reject"
+            ),
         )
 
         # Client 2 resumes — its handler never resolves
         session2 = await mctx.client2.resume_session(
             session1.session_id,
-            {"on_permission_request": lambda request, invocation: asyncio.Future()},
+            on_permission_request=lambda request, invocation: asyncio.Future(),
         )
 
         client1_events = []
@@ -313,7 +301,7 @@ class TestMultiClientBroadcast:
         with open(test_file, "w") as f:
             f.write("protected content")
 
-        await session1.send({"prompt": "Edit protected.txt and replace 'protected' with 'hacked'."})
+        await session1.send("Edit protected.txt and replace 'protected' with 'hacked'.")
         await get_final_assistant_message(session1)
 
         # Verify the file was NOT modified (permission was denied)
@@ -357,28 +345,25 @@ class TestMultiClientBroadcast:
 
         # Client 1 creates a session with tool A
         session1 = await mctx.client1.create_session(
-            {"on_permission_request": PermissionHandler.approve_all, "tools": [city_lookup]}
+            on_permission_request=PermissionHandler.approve_all, tools=[city_lookup]
         )
 
         # Client 2 resumes with tool B (different tool, union should have both)
         session2 = await mctx.client2.resume_session(
             session1.session_id,
-            {"on_permission_request": PermissionHandler.approve_all, "tools": [currency_lookup]},
+            on_permission_request=PermissionHandler.approve_all,
+            tools=[currency_lookup],
         )
 
         # Send prompts sequentially to avoid nondeterministic tool_call ordering
         await session1.send(
-            {"prompt": "Use the city_lookup tool with countryCode 'US' and tell me the result."}
+            "Use the city_lookup tool with countryCode 'US' and tell me the result."
         )
         response1 = await get_final_assistant_message(session1)
         assert "CITY_FOR_US" in (response1.data.content or "")
 
         await session1.send(
-            {
-                "prompt": (
-                    "Now use the currency_lookup tool with countryCode 'US' and tell me the result."
-                )
-            }
+            "Now use the currency_lookup tool with countryCode 'US' and tell me the result."
         )
         response2 = await get_final_assistant_message(session1)
         assert "CURRENCY_FOR_US" in (response2.data.content or "")
@@ -408,30 +393,23 @@ class TestMultiClientBroadcast:
 
         # Client 1 creates a session with stable_tool
         session1 = await mctx.client1.create_session(
-            {"on_permission_request": PermissionHandler.approve_all, "tools": [stable_tool]}
+            on_permission_request=PermissionHandler.approve_all, tools=[stable_tool]
         )
 
         # Client 2 resumes with ephemeral_tool
         await mctx.client2.resume_session(
             session1.session_id,
-            {"on_permission_request": PermissionHandler.approve_all, "tools": [ephemeral_tool]},
+            on_permission_request=PermissionHandler.approve_all,
+            tools=[ephemeral_tool],
         )
 
         # Verify both tools work before disconnect.
         # Sequential prompts avoid nondeterministic tool_call ordering.
-        await session1.send(
-            {
-                "prompt": "Use the stable_tool with input 'test1' and tell me the result.",
-            }
-        )
+        await session1.send("Use the stable_tool with input 'test1' and tell me the result.")
         stable_response = await get_final_assistant_message(session1)
         assert "STABLE_test1" in (stable_response.data.content or "")
 
-        await session1.send(
-            {
-                "prompt": "Use the ephemeral_tool with input 'test2' and tell me the result.",
-            }
-        )
+        await session1.send("Use the ephemeral_tool with input 'test2' and tell me the result.")
         ephemeral_response = await get_final_assistant_message(session1)
         assert "EPHEMERAL_test2" in (ephemeral_response.data.content or "")
 
@@ -443,17 +421,13 @@ class TestMultiClientBroadcast:
 
         # Recreate client2 for future tests (but don't rejoin the session)
         actual_port = mctx.client1.actual_port
-        mctx._client2 = CopilotClient({"cli_url": f"localhost:{actual_port}"})
+        mctx._client2 = CopilotClient(ExternalServerConfig(url=f"localhost:{actual_port}"))
 
         # Now only stable_tool should be available
         await session1.send(
-            {
-                "prompt": (
-                    "Use the stable_tool with input 'still_here'."
-                    " Also try using ephemeral_tool"
-                    " if it is available."
-                )
-            }
+            "Use the stable_tool with input 'still_here'."
+            " Also try using ephemeral_tool"
+            " if it is available."
         )
         after_response = await get_final_assistant_message(session1)
         assert "STABLE_still_here" in (after_response.data.content or "")

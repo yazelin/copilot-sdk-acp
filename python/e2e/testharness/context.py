@@ -9,8 +9,10 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from copilot import CopilotClient
+from copilot.client import SubprocessConfig
 
 from .proxy import CapiProxy
 
@@ -64,12 +66,12 @@ class E2ETestContext:
             "fake-token-for-e2e-tests" if os.environ.get("GITHUB_ACTIONS") == "true" else None
         )
         self._client = CopilotClient(
-            {
-                "cli_path": self.cli_path,
-                "cwd": self.work_dir,
-                "env": self.get_env(),
-                "github_token": github_token,
-            }
+            SubprocessConfig(
+                cli_path=self.cli_path,
+                cwd=self.work_dir,
+                env=self.get_env(),
+                github_token=github_token,
+            )
         )
 
     async def teardown(self, test_failed: bool = False):
@@ -131,6 +133,7 @@ class E2ETestContext:
         env.update(
             {
                 "COPILOT_API_URL": self.proxy_url,
+                "COPILOT_HOME": self.home_dir,
                 "XDG_CONFIG_HOME": self.home_dir,
                 "XDG_STATE_HOME": self.home_dir,
             }
@@ -143,6 +146,12 @@ class E2ETestContext:
         if not self._client:
             raise RuntimeError("Context not set up. Call setup() first.")
         return self._client
+
+    async def set_copilot_user_by_token(self, token: str, response: dict[str, Any]) -> None:
+        """Register a per-token response for the /copilot_internal/user endpoint."""
+        if not self._proxy:
+            raise RuntimeError("Proxy not started")
+        await self._proxy.set_copilot_user_by_token(token, response)
 
     async def get_exchanges(self):
         """Retrieve the captured HTTP exchanges from the proxy."""

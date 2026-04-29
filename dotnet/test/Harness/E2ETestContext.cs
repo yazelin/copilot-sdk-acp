@@ -4,6 +4,7 @@
 
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 
 namespace GitHub.Copilot.SDK.Test.Harness;
 
@@ -12,6 +13,9 @@ public sealed class E2ETestContext : IAsyncDisposable
     public string HomeDir { get; }
     public string WorkDir { get; }
     public string ProxyUrl { get; }
+
+    /// <summary>Optional logger injected by tests; applied to all clients created via <see cref="CreateClient"/>.</summary>
+    public ILogger? Logger { get; set; }
 
     private readonly CapiProxy _proxy;
     private readonly string _repoRoot;
@@ -79,6 +83,11 @@ public sealed class E2ETestContext : IAsyncDisposable
         return _proxy.GetExchangesAsync();
     }
 
+    public Task SetCopilotUserByTokenAsync(string token, CopilotUserConfig response)
+    {
+        return _proxy.SetCopilotUserByTokenAsync(token, response);
+    }
+
     public IReadOnlyDictionary<string, string> GetEnvironment()
     {
         var env = Environment.GetEnvironmentVariables()
@@ -86,22 +95,35 @@ public sealed class E2ETestContext : IAsyncDisposable
             .ToDictionary(e => (string)e.Key, e => e.Value?.ToString());
 
         env["COPILOT_API_URL"] = ProxyUrl;
+        env["COPILOT_HOME"] = HomeDir;
         env["XDG_CONFIG_HOME"] = HomeDir;
         env["XDG_STATE_HOME"] = HomeDir;
 
         return env!;
     }
 
-    public CopilotClient CreateClient(bool useStdio = true)
+    public CopilotClient CreateClient(bool useStdio = true, CopilotClientOptions? options = null)
     {
-        return new(new CopilotClientOptions
+        options ??= new CopilotClientOptions();
+
+        options.Cwd ??= WorkDir;
+        options.Environment ??= GetEnvironment();
+        options.UseStdio = useStdio;
+        options.Logger ??= Logger;
+
+        if (string.IsNullOrEmpty(options.CliUrl))
         {
-            Cwd = WorkDir,
-            CliPath = GetCliPath(_repoRoot),
-            Environment = GetEnvironment(),
-            UseStdio = useStdio,
-            GitHubToken = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")) ? "fake-token-for-e2e-tests" : null,
-        });
+            options.CliPath ??= GetCliPath(_repoRoot);
+        }
+
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"))
+            && string.IsNullOrEmpty(options.GitHubToken)
+            && string.IsNullOrEmpty(options.CliUrl))
+        {
+            options.GitHubToken = "fake-token-for-e2e-tests";
+        }
+
+        return new(options);
     }
 
     public async ValueTask DisposeAsync()
