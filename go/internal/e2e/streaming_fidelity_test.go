@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	copilot "github.com/github/copilot-sdk/go"
@@ -25,8 +26,11 @@ func TestStreamingFidelity(t *testing.T) {
 		}
 
 		var events []copilot.SessionEvent
+		var mu sync.Mutex
 		session.On(func(event copilot.SessionEvent) {
+			mu.Lock()
 			events = append(events, event)
+			mu.Unlock()
 		})
 
 		_, err = session.SendAndWait(t.Context(), copilot.MessageOptions{Prompt: "Count from 1 to 5, separated by commas."})
@@ -34,9 +38,14 @@ func TestStreamingFidelity(t *testing.T) {
 			t.Fatalf("Failed to send message: %v", err)
 		}
 
+		mu.Lock()
+		snapshot := make([]copilot.SessionEvent, len(events))
+		copy(snapshot, events)
+		mu.Unlock()
+
 		// Should have streaming deltas before the final message
 		var deltaEvents []copilot.SessionEvent
-		for _, e := range events {
+		for _, e := range snapshot {
 			if e.Type == "assistant.message_delta" {
 				deltaEvents = append(deltaEvents, e)
 			}
@@ -47,14 +56,14 @@ func TestStreamingFidelity(t *testing.T) {
 
 		// Deltas should have content
 		for _, delta := range deltaEvents {
-			if delta.Data.DeltaContent == nil {
+			if dd, ok := delta.Data.(*copilot.AssistantMessageDeltaData); !ok || dd.DeltaContent == "" {
 				t.Error("Expected delta to have content")
 			}
 		}
 
 		// Should still have a final assistant.message
 		hasAssistantMessage := false
-		for _, e := range events {
+		for _, e := range snapshot {
 			if e.Type == "assistant.message" {
 				hasAssistantMessage = true
 				break
@@ -67,7 +76,7 @@ func TestStreamingFidelity(t *testing.T) {
 		// Deltas should come before the final message
 		firstDeltaIdx := -1
 		lastAssistantIdx := -1
-		for i, e := range events {
+		for i, e := range snapshot {
 			if e.Type == "assistant.message_delta" && firstDeltaIdx == -1 {
 				firstDeltaIdx = i
 			}
@@ -92,8 +101,11 @@ func TestStreamingFidelity(t *testing.T) {
 		}
 
 		var events []copilot.SessionEvent
+		var mu sync.Mutex
 		session.On(func(event copilot.SessionEvent) {
+			mu.Lock()
 			events = append(events, event)
+			mu.Unlock()
 		})
 
 		_, err = session.SendAndWait(t.Context(), copilot.MessageOptions{Prompt: "Say 'hello world'."})
@@ -101,9 +113,14 @@ func TestStreamingFidelity(t *testing.T) {
 			t.Fatalf("Failed to send message: %v", err)
 		}
 
+		mu.Lock()
+		snapshot := make([]copilot.SessionEvent, len(events))
+		copy(snapshot, events)
+		mu.Unlock()
+
 		// No deltas when streaming is off
 		var deltaEvents []copilot.SessionEvent
-		for _, e := range events {
+		for _, e := range snapshot {
 			if e.Type == "assistant.message_delta" {
 				deltaEvents = append(deltaEvents, e)
 			}
@@ -114,7 +131,7 @@ func TestStreamingFidelity(t *testing.T) {
 
 		// But should still have a final assistant.message
 		var assistantEvents []copilot.SessionEvent
-		for _, e := range events {
+		for _, e := range snapshot {
 			if e.Type == "assistant.message" {
 				assistantEvents = append(assistantEvents, e)
 			}
@@ -153,21 +170,31 @@ func TestStreamingFidelity(t *testing.T) {
 		}
 
 		var events []copilot.SessionEvent
+		var mu sync.Mutex
 		session2.On(func(event copilot.SessionEvent) {
+			mu.Lock()
 			events = append(events, event)
+			mu.Unlock()
 		})
 
 		answer, err := session2.SendAndWait(t.Context(), copilot.MessageOptions{Prompt: "Now if you double that, what do you get?"})
 		if err != nil {
 			t.Fatalf("Failed to send follow-up message: %v", err)
 		}
-		if answer == nil || answer.Data.Content == nil || !strings.Contains(*answer.Data.Content, "18") {
+		if answer == nil {
+			t.Errorf("Expected answer to contain '18', got nil")
+		} else if ad, ok := answer.Data.(*copilot.AssistantMessageData); !ok || !strings.Contains(ad.Content, "18") {
 			t.Errorf("Expected answer to contain '18', got %v", answer)
 		}
 
+		mu.Lock()
+		snapshot := make([]copilot.SessionEvent, len(events))
+		copy(snapshot, events)
+		mu.Unlock()
+
 		// Should have streaming deltas before the final message
 		var deltaEvents []copilot.SessionEvent
-		for _, e := range events {
+		for _, e := range snapshot {
 			if e.Type == "assistant.message_delta" {
 				deltaEvents = append(deltaEvents, e)
 			}
@@ -178,7 +205,7 @@ func TestStreamingFidelity(t *testing.T) {
 
 		// Deltas should have content
 		for _, delta := range deltaEvents {
-			if delta.Data.DeltaContent == nil {
+			if dd, ok := delta.Data.(*copilot.AssistantMessageDeltaData); !ok || dd.DeltaContent == "" {
 				t.Error("Expected delta to have content")
 			}
 		}

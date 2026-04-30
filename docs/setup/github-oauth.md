@@ -26,7 +26,7 @@ sequenceDiagram
     GH-->>App: Access token (gho_xxx)
 
     App->>SDK: Create client with token
-    SDK->>CLI: Start with githubToken
+    SDK->>CLI: Start with gitHubToken
     CLI->>API: Request (as user)
     API-->>CLI: Response
     CLI-->>SDK: Result
@@ -124,7 +124,7 @@ import { CopilotClient } from "@github/copilot-sdk";
 // Create a client for an authenticated user
 function createClientForUser(userToken: string): CopilotClient {
     return new CopilotClient({
-        githubToken: userToken,
+        gitHubToken: userToken,
         useLoggedInUser: false,  // Don't fall back to CLI login
     });
 }
@@ -146,6 +146,7 @@ const response = await session.sendAndWait({ prompt: "Hello!" });
 
 ```python
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 def create_client_for_user(user_token: str) -> CopilotClient:
     return CopilotClient({
@@ -157,12 +158,9 @@ def create_client_for_user(user_token: str) -> CopilotClient:
 client = create_client_for_user("gho_user_access_token")
 await client.start()
 
-session = await client.create_session({
-    "session_id": f"user-{user_id}-session",
-    "model": "gpt-4.1",
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-4.1", session_id=f"user-{user_id}-session")
 
-response = await session.send_and_wait({"prompt": "Hello!"})
+response = await session.send_and_wait("Hello!")
 ```
 
 </details>
@@ -277,6 +275,39 @@ var response = await session.SendAndWaitAsync(
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+CopilotClient createClientForUser(String userToken) throws Exception {
+    var client = new CopilotClient(new CopilotClientOptions()
+        .setGitHubToken(userToken)
+        .setUseLoggedInUser(false)
+    );
+    client.start().get();
+    return client;
+}
+
+// Usage — use try-with-resources to ensure cleanup
+var userId = "user1";
+try (var client = createClientForUser("gho_user_access_token")) {
+    var session = client.createSession(new SessionConfig()
+        .setSessionId(String.format("user-%s-session", userId))
+        .setModel("gpt-4.1")
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    ).get();
+
+    var response = session.sendAndWait(new MessageOptions()
+        .setPrompt("Hello!")).get();
+}
+```
+
+</details>
+
 ## Enterprise & Organization Access
 
 GitHub OAuth naturally supports enterprise scenarios. When users authenticate with GitHub, their org memberships and enterprise associations come along.
@@ -342,7 +373,7 @@ For GitHub Enterprise Managed Users, the flow is identical — EMU users authent
 // No special SDK configuration needed for EMU
 // Enterprise policies are enforced server-side by GitHub
 const client = new CopilotClient({
-    githubToken: emuUserToken,  // Works the same as regular tokens
+    gitHubToken: emuUserToken,  // Works the same as regular tokens
     useLoggedInUser: false,
 });
 ```
@@ -407,7 +438,7 @@ const clients = new Map<string, CopilotClient>();
 function getClientForUser(userId: string, token: string): CopilotClient {
     if (!clients.has(userId)) {
         clients.set(userId, new CopilotClient({
-            githubToken: token,
+            gitHubToken: token,
             useLoggedInUser: false,
         }));
     }

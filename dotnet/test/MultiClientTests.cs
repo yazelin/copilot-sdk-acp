@@ -109,10 +109,10 @@ public class MultiClientTests : IClassFixture<MultiClientTestFixture>, IAsyncLif
         });
 
         // Set up event waiters BEFORE sending the prompt to avoid race conditions
-        var client1Requested = new TaskCompletionSource<bool>();
-        var client2Requested = new TaskCompletionSource<bool>();
-        var client1Completed = new TaskCompletionSource<bool>();
-        var client2Completed = new TaskCompletionSource<bool>();
+        var client1Requested = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client2Requested = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client1Completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client2Completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         using var sub1 = session1.On(evt =>
         {
@@ -134,11 +134,9 @@ public class MultiClientTests : IClassFixture<MultiClientTestFixture>, IAsyncLif
         Assert.Contains("MAGIC_hello_42", response!.Data.Content ?? string.Empty);
 
         // Wait for all broadcast events to arrive on both clients
-        var timeout = Task.Delay(TimeSpan.FromSeconds(10));
-        var allEvents = Task.WhenAll(
+        await Task.WhenAll(
             client1Requested.Task, client2Requested.Task,
-            client1Completed.Task, client2Completed.Task);
-        Assert.Equal(allEvents, await Task.WhenAny(allEvents, timeout));
+            client1Completed.Task, client2Completed.Task).WaitAsync(TimeSpan.FromSeconds(10));
 
         await session2.DisposeAsync();
 
@@ -172,6 +170,9 @@ public class MultiClientTests : IClassFixture<MultiClientTestFixture>, IAsyncLif
         var client1Events = new ConcurrentBag<SessionEvent>();
         var client2Events = new ConcurrentBag<SessionEvent>();
 
+        // Wait for PermissionCompletedEvent on client2 which may arrive slightly after session1 goes idle
+        var client2PermissionCompleted = TestHelper.GetNextEventOfTypeAsync<PermissionCompletedEvent>(session2);
+
         using var sub1 = session1.On(evt => client1Events.Add(evt));
         using var sub2 = session2.On(evt => client2Events.Add(evt));
 
@@ -183,6 +184,8 @@ public class MultiClientTests : IClassFixture<MultiClientTestFixture>, IAsyncLif
         Assert.NotNull(response);
         Assert.NotEmpty(client1PermissionRequests);
 
+        await client2PermissionCompleted;
+
         Assert.Contains(client1Events, e => e is PermissionRequestedEvent);
         Assert.Contains(client2Events, e => e is PermissionRequestedEvent);
         Assert.Contains(client1Events, e => e is PermissionCompletedEvent);
@@ -191,7 +194,7 @@ public class MultiClientTests : IClassFixture<MultiClientTestFixture>, IAsyncLif
         foreach (var evt in client1Events.OfType<PermissionCompletedEvent>()
             .Concat(client2Events.OfType<PermissionCompletedEvent>()))
         {
-            Assert.Equal(PermissionCompletedDataResultKind.Approved, evt.Data.Result.Kind);
+            Assert.IsType<PermissionResultApproved>(evt.Data.Result);
         }
 
         await session2.DisposeAsync();
@@ -204,7 +207,7 @@ public class MultiClientTests : IClassFixture<MultiClientTestFixture>, IAsyncLif
         {
             OnPermissionRequest = (_, _) => Task.FromResult(new PermissionRequestResult
             {
-                Kind = PermissionRequestResultKind.DeniedInteractivelyByUser,
+                Kind = PermissionRequestResultKind.Rejected,
             }),
         });
 
@@ -216,6 +219,9 @@ public class MultiClientTests : IClassFixture<MultiClientTestFixture>, IAsyncLif
 
         var client1Events = new ConcurrentBag<SessionEvent>();
         var client2Events = new ConcurrentBag<SessionEvent>();
+
+        // Wait for PermissionCompletedEvent on client2 which may arrive slightly after session1 goes idle
+        var client2PermissionCompleted = TestHelper.GetNextEventOfTypeAsync<PermissionCompletedEvent>(session2);
 
         using var sub1 = session1.On(evt => client1Events.Add(evt));
         using var sub2 = session2.On(evt => client2Events.Add(evt));
@@ -232,13 +238,15 @@ public class MultiClientTests : IClassFixture<MultiClientTestFixture>, IAsyncLif
         var content = await File.ReadAllTextAsync(Path.Combine(Ctx.WorkDir, "protected.txt"));
         Assert.Equal("protected content", content);
 
+        await client2PermissionCompleted;
+
         Assert.Contains(client1Events, e => e is PermissionRequestedEvent);
         Assert.Contains(client2Events, e => e is PermissionRequestedEvent);
 
         foreach (var evt in client1Events.OfType<PermissionCompletedEvent>()
             .Concat(client2Events.OfType<PermissionCompletedEvent>()))
         {
-            Assert.Equal(PermissionCompletedDataResultKind.DeniedInteractivelyByUser, evt.Data.Result.Kind);
+            Assert.IsType<PermissionResultDeniedInteractivelyByUser>(evt.Data.Result);
         }
 
         await session2.DisposeAsync();

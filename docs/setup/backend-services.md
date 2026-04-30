@@ -67,15 +67,21 @@ copilot --headless
 # Output: Listening on http://localhost:52431
 ```
 
+By default the headless server only accepts connections from loopback (`127.0.0.1`). To accept connections from other hosts — for example from another machine on your network — bind to a non-loopback address with `--host`:
+
+```bash
+copilot --headless --host 0.0.0.0 --port 4321
+```
+
 For production, run it as a system service or in a container:
 
 ```bash
-# Docker
+# Docker — must bind to 0.0.0.0 so the container's published port is reachable
 docker run -d --name copilot-cli \
     -p 4321:4321 \
     -e COPILOT_GITHUB_TOKEN="$TOKEN" \
     ghcr.io/github/copilot-cli:latest \
-    --headless --port 4321
+    --headless --host 0.0.0.0 --port 4321
 
 # systemd
 [Service]
@@ -111,19 +117,15 @@ res.json({ content: response?.data.content });
 <summary><strong>Python</strong></summary>
 
 ```python
-from copilot import CopilotClient
+from copilot import CopilotClient, ExternalServerConfig
+from copilot.session import PermissionHandler
 
-client = CopilotClient({
-    "cli_url": "localhost:4321",
-})
+client = CopilotClient(ExternalServerConfig(url="localhost:4321"))
 await client.start()
 
-session = await client.create_session({
-    "session_id": f"user-{user_id}-{int(time.time())}",
-    "model": "gpt-4.1",
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-4.1", session_id=f"user-{user_id}-{int(time.time())}")
 
-response = await session.send_and_wait({"prompt": message})
+response = await session.send_and_wait(message)
 ```
 
 </details>
@@ -227,6 +229,39 @@ var response = await session.SendAndWaitAsync(
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+var userId = "user1";
+var message = "Hello!";
+
+var client = new CopilotClient(new CopilotClientOptions()
+    .setCliUrl("localhost:4321")
+);
+
+try {
+    client.start().get();
+
+    var session = client.createSession(new SessionConfig()
+        .setSessionId(String.format("user-%s-%d", userId, System.currentTimeMillis() / 1000))
+        .setModel("gpt-4.1")
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    ).get();
+
+    var response = session.sendAndWait(new MessageOptions()
+        .setPrompt(message)).get();
+} finally {
+    client.stop().get();
+}
+```
+
+</details>
+
 ## Authentication for Backend Services
 
 ### Environment Variable Tokens
@@ -261,7 +296,7 @@ Pass individual user tokens when creating sessions. See [GitHub OAuth](./github-
 app.post("/chat", authMiddleware, async (req, res) => {
     const client = new CopilotClient({
         cliUrl: "localhost:4321",
-        githubToken: req.user.githubToken,
+        gitHubToken: req.user.githubToken,
         useLoggedInUser: false,
     });
 
@@ -386,7 +421,7 @@ version: "3.8"
 services:
   copilot-cli:
     image: ghcr.io/github/copilot-cli:latest
-    command: ["--headless", "--port", "4321"]
+    command: ["--headless", "--host", "0.0.0.0", "--port", "4321"]
     environment:
       - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN}
     ports:

@@ -97,7 +97,7 @@ public partial class ToolsTests(E2ETestFixture fixture, ITestOutputHelper output
         Assert.Single(toolResults);
         var toolResult = toolResults[0];
         Assert.Equal(toolCall.Id, toolResult.ToolCallId);
-        Assert.DoesNotContain("Melbourne", toolResult.Content);
+        Assert.DoesNotContain("Melbourne", toolResult.StringContent);
 
         // Importantly, we're checking that the assistant does not see the
         // exception information as if it was the tool's output.
@@ -181,6 +181,42 @@ public partial class ToolsTests(E2ETestFixture fixture, ITestOutputHelper output
             => $"CUSTOM_GREP_RESULT: {query}";
     }
 
+    [Fact]
+    public async Task SkipPermission_Sent_In_Tool_Definition()
+    {
+        [Description("A tool that skips permission")]
+        static string SafeLookup([Description("Lookup ID")] string id)
+            => $"RESULT: {id}";
+
+        var tool = AIFunctionFactory.Create((Delegate)SafeLookup, new AIFunctionFactoryOptions
+        {
+            Name = "safe_lookup",
+            AdditionalProperties = new ReadOnlyDictionary<string, object?>(
+                new Dictionary<string, object?> { ["skip_permission"] = true })
+        });
+
+        var didRunPermissionRequest = false;
+        var session = await CreateSessionAsync(new SessionConfig
+        {
+            Tools = [tool],
+            OnPermissionRequest = (_, _) =>
+            {
+                didRunPermissionRequest = true;
+                return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.NoResult });
+            }
+        });
+
+        await session.SendAsync(new MessageOptions
+        {
+            Prompt = "Use safe_lookup to look up 'test123'"
+        });
+
+        var assistantMessage = await TestHelper.GetFinalAssistantMessageAsync(session);
+        Assert.NotNull(assistantMessage);
+        Assert.Contains("RESULT", assistantMessage!.Data.Content ?? string.Empty);
+        Assert.False(didRunPermissionRequest);
+    }
+
     [Fact(Skip = "Behaves as if no content was in the result. Likely that binary results aren't fully implemented yet.")]
     public async Task Can_Return_Binary_Result()
     {
@@ -237,11 +273,9 @@ public partial class ToolsTests(E2ETestFixture fixture, ITestOutputHelper output
         Assert.Contains("HELLO", assistantMessage!.Data.Content ?? string.Empty);
 
         // Should have received a custom-tool permission request with the correct tool name
-        var customToolRequest = permissionRequests.FirstOrDefault(r => r.Kind == "custom-tool");
+        var customToolRequest = permissionRequests.OfType<PermissionRequestCustomTool>().FirstOrDefault();
         Assert.NotNull(customToolRequest);
-        Assert.True(customToolRequest!.ExtensionData?.ContainsKey("toolName") ?? false);
-        var toolName = ((JsonElement)customToolRequest.ExtensionData!["toolName"]).GetString();
-        Assert.Equal("encrypt_string", toolName);
+        Assert.Equal("encrypt_string", customToolRequest!.ToolName);
 
         [Description("Encrypts a string")]
         static string EncryptStringForPermission([Description("String to encrypt")] string input)
@@ -256,7 +290,7 @@ public partial class ToolsTests(E2ETestFixture fixture, ITestOutputHelper output
         var session = await Client.CreateSessionAsync(new SessionConfig
         {
             Tools = [AIFunctionFactory.Create(EncryptStringDenied, "encrypt_string")],
-            OnPermissionRequest = async (request, invocation) => new() { Kind = PermissionRequestResultKind.DeniedInteractivelyByUser },
+            OnPermissionRequest = async (request, invocation) => new() { Kind = PermissionRequestResultKind.Rejected },
         });
 
         await session.SendAsync(new MessageOptions
