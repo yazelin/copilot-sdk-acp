@@ -94,6 +94,20 @@ var client = new CopilotClient(new CopilotClientOptions
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.json.*;
+
+var client = new CopilotClient(new CopilotClientOptions()
+    .setLogLevel("debug")
+);
+```
+
+</details>
+
 ### Log Directory
 
 The CLI writes logs to a directory. You can specify a custom location:
@@ -157,6 +171,17 @@ var client = new CopilotClient(new CopilotClientOptions
 
 </details>
 
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+// The Java SDK does not currently support passing extra CLI arguments.
+// For custom log directories, run the CLI manually with --log-dir
+// and connect via cliUrl.
+```
+
+</details>
+
 ---
 
 ## Common Issues
@@ -215,6 +240,16 @@ var client = new CopilotClient(new CopilotClientOptions
    ```
    </details>
 
+   <details>
+   <summary><strong>Java</strong></summary>
+
+   ```java
+   var client = new CopilotClient(new CopilotClientOptions()
+       .setCliPath("/usr/local/bin/copilot")
+   );
+   ```
+   </details>
+
 ### "Not authenticated"
 
 **Cause:** The CLI is not authenticated with GitHub.
@@ -233,7 +268,7 @@ var client = new CopilotClient(new CopilotClientOptions
 
    ```typescript
    const client = new CopilotClient({
-     githubToken: process.env.GITHUB_TOKEN,
+     gitHubToken: process.env.GITHUB_TOKEN,
    });
    ```
    </details>
@@ -268,6 +303,16 @@ var client = new CopilotClient(new CopilotClientOptions
    ```
    </details>
 
+   <details>
+   <summary><strong>Java</strong></summary>
+
+   ```java
+   var client = new CopilotClient(new CopilotClientOptions()
+       .setGitHubToken(System.getenv("GITHUB_TOKEN"))
+   );
+   ```
+   </details>
+
 ### "Session not found"
 
 **Cause:** Attempting to use a session that was destroyed or doesn't exist.
@@ -297,14 +342,7 @@ var client = new CopilotClient(new CopilotClientOptions
    copilot --server --stdio
    ```
 
-2. Enable auto-restart (enabled by default):
-   ```typescript
-   const client = new CopilotClient({
-     autoRestart: true,
-   });
-   ```
-
-3. Check for port conflicts if using TCP mode:
+2. Check for port conflicts if using TCP mode:
    ```typescript
    const client = new CopilotClient({
      useStdio: false,

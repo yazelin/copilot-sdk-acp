@@ -144,6 +144,11 @@ func (c *TestContext) GetExchanges() ([]ParsedHttpExchange, error) {
 	return c.proxy.GetExchanges()
 }
 
+// SetCopilotUserByToken registers a per-token user configuration on the proxy.
+func (c *TestContext) SetCopilotUserByToken(token string, response map[string]interface{}) error {
+	return c.proxy.SetCopilotUserByToken(token, response)
+}
+
 // Env returns environment variables configured for isolated testing.
 func (c *TestContext) Env() []string {
 	env := os.Environ()
@@ -151,6 +156,7 @@ func (c *TestContext) Env() []string {
 	// Add overrides (later values take precedence in most systems)
 	env = append(env,
 		"COPILOT_API_URL="+c.ProxyURL,
+		"COPILOT_HOME="+c.HomeDir,
 		"XDG_CONFIG_HOME="+c.HomeDir,
 		"XDG_STATE_HOME="+c.HomeDir,
 	)
@@ -158,15 +164,20 @@ func (c *TestContext) Env() []string {
 }
 
 // NewClient creates a CopilotClient configured for this test context.
-func (c *TestContext) NewClient() *copilot.Client {
+// Optional overrides can be applied to the default ClientOptions via the opts function.
+func (c *TestContext) NewClient(opts ...func(*copilot.ClientOptions)) *copilot.Client {
 	options := &copilot.ClientOptions{
 		CLIPath: c.CLIPath,
 		Cwd:     c.WorkDir,
 		Env:     c.Env(),
 	}
 
-	// Use fake token in CI to allow cached responses without real auth
-	if os.Getenv("GITHUB_ACTIONS") == "true" {
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	// Use fake token in CI to allow cached responses without real auth for spawned subprocess clients.
+	if os.Getenv("GITHUB_ACTIONS") == "true" && options.GitHubToken == "" && options.CLIUrl == "" {
 		options.GitHubToken = "fake-token-for-e2e-tests"
 	}
 

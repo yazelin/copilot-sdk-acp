@@ -117,7 +117,7 @@ func TestPermissions(t *testing.T) {
 		ctx.ConfigureForTest(t)
 
 		onPermissionRequest := func(request copilot.PermissionRequest, invocation copilot.PermissionInvocation) (copilot.PermissionRequestResult, error) {
-			return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindDeniedInteractivelyByUser}, nil
+			return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindRejected}, nil
 		}
 
 		session, err := client.CreateSession(t.Context(), &copilot.SessionConfig{
@@ -162,7 +162,7 @@ func TestPermissions(t *testing.T) {
 
 		session, err := client.CreateSession(t.Context(), &copilot.SessionConfig{
 			OnPermissionRequest: func(request copilot.PermissionRequest, invocation copilot.PermissionInvocation) (copilot.PermissionRequestResult, error) {
-				return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindDeniedCouldNotRequestFromUser}, nil
+				return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindUserNotAvailable}, nil
 			},
 		})
 		if err != nil {
@@ -173,13 +173,15 @@ func TestPermissions(t *testing.T) {
 		permissionDenied := false
 
 		session.On(func(event copilot.SessionEvent) {
-			if event.Type == copilot.ToolExecutionComplete &&
-				event.Data.Success != nil && !*event.Data.Success &&
-				event.Data.Error != nil && event.Data.Error.ErrorClass != nil &&
-				strings.Contains(event.Data.Error.ErrorClass.Message, "Permission denied") {
-				mu.Lock()
-				permissionDenied = true
-				mu.Unlock()
+			if event.Type == copilot.SessionEventTypeToolExecutionComplete {
+				if d, ok := event.Data.(*copilot.ToolExecutionCompleteData); ok &&
+					!d.Success &&
+					d.Error != nil &&
+					strings.Contains(d.Error.Message, "Permission denied") {
+					mu.Lock()
+					permissionDenied = true
+					mu.Unlock()
+				}
 			}
 		})
 
@@ -212,7 +214,7 @@ func TestPermissions(t *testing.T) {
 
 		session2, err := client.ResumeSession(t.Context(), sessionID, &copilot.ResumeSessionConfig{
 			OnPermissionRequest: func(request copilot.PermissionRequest, invocation copilot.PermissionInvocation) (copilot.PermissionRequestResult, error) {
-				return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindDeniedCouldNotRequestFromUser}, nil
+				return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindUserNotAvailable}, nil
 			},
 		})
 		if err != nil {
@@ -223,13 +225,15 @@ func TestPermissions(t *testing.T) {
 		permissionDenied := false
 
 		session2.On(func(event copilot.SessionEvent) {
-			if event.Type == copilot.ToolExecutionComplete &&
-				event.Data.Success != nil && !*event.Data.Success &&
-				event.Data.Error != nil && event.Data.Error.ErrorClass != nil &&
-				strings.Contains(event.Data.Error.ErrorClass.Message, "Permission denied") {
-				mu.Lock()
-				permissionDenied = true
-				mu.Unlock()
+			if event.Type == copilot.SessionEventTypeToolExecutionComplete {
+				if d, ok := event.Data.(*copilot.ToolExecutionCompleteData); ok &&
+					!d.Success &&
+					d.Error != nil &&
+					strings.Contains(d.Error.Message, "Permission denied") {
+					mu.Lock()
+					permissionDenied = true
+					mu.Unlock()
+				}
 			}
 		})
 
@@ -266,8 +270,12 @@ func TestPermissions(t *testing.T) {
 			t.Fatalf("Failed to get final message: %v", err)
 		}
 
-		if message.Data.Content == nil || !strings.Contains(*message.Data.Content, "4") {
-			t.Errorf("Expected message to contain '4', got: %v", message.Data.Content)
+		if md, ok := message.Data.(*copilot.AssistantMessageData); !ok || !strings.Contains(md.Content, "4") {
+			var content string
+			if ok {
+				content = md.Content
+			}
+			t.Errorf("Expected message to contain '4', got: %v", content)
 		}
 	})
 }
