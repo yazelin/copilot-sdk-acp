@@ -4,6 +4,7 @@
 
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 
 namespace GitHub.Copilot.SDK.Test.Harness;
 
@@ -12,6 +13,9 @@ public sealed class E2ETestContext : IAsyncDisposable
     public string HomeDir { get; }
     public string WorkDir { get; }
     public string ProxyUrl { get; }
+
+    /// <summary>Optional logger injected by tests; applied to all clients created via <see cref="CreateClient"/>.</summary>
+    public ILogger? Logger { get; set; }
 
     private readonly CapiProxy _proxy;
     private readonly string _repoRoot;
@@ -35,10 +39,77 @@ public sealed class E2ETestContext : IAsyncDisposable
         Directory.CreateDirectory(homeDir);
         Directory.CreateDirectory(workDir);
 
+        // Resolve symlinks (e.g., macOS /var -> /private/var) so paths
+        // match what spawned subprocesses see when they resolve their cwd.
+        homeDir = ResolveSymlinks(homeDir);
+        workDir = ResolveSymlinks(workDir);
+
         var proxy = new CapiProxy();
         var proxyUrl = await proxy.StartAsync();
 
         return new E2ETestContext(homeDir, workDir, proxyUrl, proxy, repoRoot);
+    }
+
+    /// <summary>
+    /// Returns a canonical path with symlinks resolved in every directory
+    /// component. .NET has no built-in equivalent of POSIX <c>realpath</c>
+    /// that walks all parents, so we walk the components ourselves and use
+    /// <see cref="DirectoryInfo.ResolveLinkTarget(bool)"/> on each one.
+    /// On Windows, where the test temp paths don't traverse symlinks,
+    /// <see cref="Path.GetFullPath(string)"/> is sufficient.
+    /// </summary>
+    private static string ResolveSymlinks(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return Path.GetFullPath(path);
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var root = Path.GetPathRoot(fullPath);
+            if (string.IsNullOrEmpty(root))
+            {
+                return fullPath;
+            }
+
+            var components = fullPath
+                .Substring(root.Length)
+                .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+
+            var resolved = root;
+            foreach (var component in components)
+            {
+                resolved = Path.Join(resolved, component);
+                try
+                {
+                    var info = new DirectoryInfo(resolved);
+                    if (info.Exists && info.LinkTarget != null)
+                    {
+                        var target = info.ResolveLinkTarget(returnFinalTarget: true);
+                        if (target != null && !string.IsNullOrEmpty(target.FullName))
+                        {
+                            resolved = target.FullName;
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Component we can't inspect; keep what we have and continue.
+                }
+            }
+
+            return resolved;
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            return Path.GetFullPath(path);
+        }
     }
 
     private static string FindRepoRoot()
@@ -79,6 +150,11 @@ public sealed class E2ETestContext : IAsyncDisposable
         return _proxy.GetExchangesAsync();
     }
 
+    public Task SetCopilotUserByTokenAsync(string token, CopilotUserConfig response)
+    {
+        return _proxy.SetCopilotUserByTokenAsync(token, response);
+    }
+
     public IReadOnlyDictionary<string, string> GetEnvironment()
     {
         var env = Environment.GetEnvironmentVariables()
@@ -86,22 +162,36 @@ public sealed class E2ETestContext : IAsyncDisposable
             .ToDictionary(e => (string)e.Key, e => e.Value?.ToString());
 
         env["COPILOT_API_URL"] = ProxyUrl;
+        env["COPILOT_HOME"] = HomeDir;
         env["XDG_CONFIG_HOME"] = HomeDir;
         env["XDG_STATE_HOME"] = HomeDir;
 
         return env!;
     }
 
-    public CopilotClient CreateClient(bool useStdio = true)
+    public CopilotClient CreateClient(bool useStdio = true, CopilotClientOptions? options = null, bool autoInjectGitHubToken = true)
     {
-        return new(new CopilotClientOptions
+        options ??= new CopilotClientOptions();
+
+        options.Cwd ??= WorkDir;
+        options.Environment ??= GetEnvironment();
+        options.UseStdio = useStdio;
+        options.Logger ??= Logger;
+
+        if (string.IsNullOrEmpty(options.CliUrl))
         {
-            Cwd = WorkDir,
-            CliPath = GetCliPath(_repoRoot),
-            Environment = GetEnvironment(),
-            UseStdio = useStdio,
-            GitHubToken = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")) ? "fake-token-for-e2e-tests" : null,
-        });
+            options.CliPath ??= GetCliPath(_repoRoot);
+        }
+
+        if (autoInjectGitHubToken
+            && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"))
+            && string.IsNullOrEmpty(options.GitHubToken)
+            && string.IsNullOrEmpty(options.CliUrl))
+        {
+            options.GitHubToken = "fake-token-for-e2e-tests";
+        }
+
+        return new(options);
     }
 
     public async ValueTask DisposeAsync()

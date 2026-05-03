@@ -2,6 +2,7 @@ package testharness
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -159,8 +160,9 @@ func (p *CapiProxy) GetExchanges() ([]ParsedHttpExchange, error) {
 
 // ParsedHttpExchange represents a captured HTTP exchange.
 type ParsedHttpExchange struct {
-	Request  ChatCompletionRequest   `json:"request"`
-	Response *ChatCompletionResponse `json:"response,omitempty"`
+	Request        ChatCompletionRequest      `json:"request"`
+	Response       *ChatCompletionResponse    `json:"response,omitempty"`
+	RequestHeaders map[string]json.RawMessage `json:"requestHeaders,omitempty"`
 }
 
 // ChatCompletionRequest represents an OpenAI chat completion request.
@@ -172,10 +174,35 @@ type ChatCompletionRequest struct {
 
 // ChatCompletionMessage represents a message in the chat completion request.
 type ChatCompletionMessage struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Role       string          `json:"role"`
+	Content    string          `json:"content,omitempty"`
+	RawContent json.RawMessage `json:"-"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+}
+
+// UnmarshalJSON handles Content being either a plain string or an array of
+// content parts (e.g. multimodal messages with image_url entries).
+func (m *ChatCompletionMessage) UnmarshalJSON(data []byte) error {
+	type Alias ChatCompletionMessage
+	aux := &struct {
+		Content json.RawMessage `json:"content,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(m),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	m.RawContent = aux.Content
+	m.Content = ""
+	if len(aux.Content) > 0 {
+		var s string
+		if json.Unmarshal(aux.Content, &s) == nil {
+			m.Content = s
+		}
+	}
+	return nil
 }
 
 // ToolCall represents a tool call in an assistant message.
@@ -225,4 +252,33 @@ func (p *CapiProxy) URL() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.proxyURL
+}
+
+// SetCopilotUserByToken registers a per-token user configuration on the proxy.
+func (p *CapiProxy) SetCopilotUserByToken(token string, response map[string]interface{}) error {
+	p.mu.Lock()
+	url := p.proxyURL
+	p.mu.Unlock()
+
+	if url == "" {
+		return fmt.Errorf("proxy not started")
+	}
+
+	body := map[string]interface{}{
+		"token":    token,
+		"response": response,
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(url+"/copilot-user-config", "application/json", bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("setCopilotUserByToken: unexpected status %d", resp.StatusCode)
+	}
+	return nil
 }
