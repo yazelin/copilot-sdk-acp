@@ -1,13 +1,26 @@
 import { spawn } from "child_process";
 import { resolve } from "path";
 import { expect } from "vitest";
-import { ParsedHttpExchange } from "../../../../test/harness/replayingCapiProxy";
+import {
+    CopilotUserResponse,
+    ParsedHttpExchange,
+} from "../../../../test/harness/replayingCapiProxy";
 
 const HARNESS_SERVER_PATH = resolve(__dirname, "../../../../test/harness/server.ts");
 
 // Manages a child process that acts as a replaying proxy to the underlying AI endpoints
 export class CapiProxy {
     private proxyUrl: string | undefined;
+
+    /**
+     * Returns the URL of the running proxy. Throws if the proxy has not been started.
+     */
+    get url(): string {
+        if (!this.proxyUrl) {
+            throw new Error("CapiProxy has not been started; call start() first.");
+        }
+        return this.proxyUrl;
+    }
 
     async start(): Promise<string> {
         const serverProcess = spawn("npx", ["tsx", HARNESS_SERVER_PATH], {
@@ -49,5 +62,19 @@ export class CapiProxy {
             : `${this.proxyUrl}/stop`;
         const response = await fetch(url, { method: "POST" });
         expect(response.ok).toBe(true);
+    }
+
+    /**
+     * Register a per-token response for the `/copilot_internal/user` endpoint.
+     * When a request with `Authorization: Bearer <token>` arrives at the proxy,
+     * the matching response is returned.
+     */
+    async setCopilotUserByToken(token: string, response: CopilotUserResponse): Promise<void> {
+        const res = await fetch(`${this.proxyUrl}/copilot-user-config`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ token, response }),
+        });
+        expect(res.ok).toBe(true);
     }
 }

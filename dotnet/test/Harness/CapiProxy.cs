@@ -104,10 +104,11 @@ public sealed partial class CapiProxy : IAsyncDisposable
 
         if (_process is { HasExited: false })
         {
-            try { _process.Kill(); await _process.WaitForExitAsync(); }
+            try { _process.Kill(entireProcessTree: true); await _process.WaitForExitAsync(); }
             catch { /* Ignore */ }
         }
 
+        _process?.Dispose();
         _process = null;
         _startupTask = null;
     }
@@ -132,6 +133,16 @@ public sealed partial class CapiProxy : IAsyncDisposable
                ?? [];
     }
 
+    public async Task SetCopilotUserByTokenAsync(string token, CopilotUserConfig response)
+    {
+        var url = await (_startupTask ?? throw new InvalidOperationException("Proxy not started"));
+
+        using var client = new HttpClient();
+        var payload = new CopilotUserByTokenRequest(token, response);
+        var resp = await client.PostAsJsonAsync($"{url}/copilot-user-config", payload, CapiProxyJsonContext.Default.CopilotUserByTokenRequest);
+        resp.EnsureSuccessStatusCode();
+    }
+
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
@@ -152,10 +163,46 @@ public sealed partial class CapiProxy : IAsyncDisposable
     [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
     [JsonSerializable(typeof(ConfigureRequest))]
     [JsonSerializable(typeof(List<ParsedHttpExchange>))]
+    [JsonSerializable(typeof(CopilotUserByTokenRequest))]
+    [JsonSerializable(typeof(Dictionary<string, CopilotUserQuotaSnapshot>))]
     private partial class CapiProxyJsonContext : JsonSerializerContext;
 }
 
-public record ParsedHttpExchange(ChatCompletionRequest Request, ChatCompletionResponse? Response);
+public record CopilotUserByTokenRequest(string Token, CopilotUserConfig Response);
+
+public record CopilotUserConfig(
+    string Login,
+    [property: JsonPropertyName("copilot_plan")]
+    string CopilotPlan,
+    CopilotUserEndpoints Endpoints,
+    [property: JsonPropertyName("analytics_tracking_id")]
+    string AnalyticsTrackingId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonPropertyName("quota_snapshots")]
+    IReadOnlyDictionary<string, CopilotUserQuotaSnapshot>? QuotaSnapshots = null);
+
+public record CopilotUserEndpoints(string Api, string Telemetry);
+
+public record CopilotUserQuotaSnapshot(
+    [property: JsonPropertyName("entitlement")]
+    int Entitlement,
+    [property: JsonPropertyName("overage_count")]
+    int OverageCount,
+    [property: JsonPropertyName("overage_permitted")]
+    bool OveragePermitted,
+    [property: JsonPropertyName("percent_remaining")]
+    double PercentRemaining,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonPropertyName("timestamp_utc")]
+    string? TimestampUtc = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonPropertyName("unlimited")]
+    bool? Unlimited = null);
+
+public record ParsedHttpExchange(
+    ChatCompletionRequest Request,
+    ChatCompletionResponse? Response,
+    Dictionary<string, JsonElement>? RequestHeaders);
 
 public record ChatCompletionRequest(
     string Model,
@@ -164,9 +211,16 @@ public record ChatCompletionRequest(
 
 public record ChatCompletionMessage(
     string Role,
-    string? Content,
+    JsonElement? Content,
     [property: JsonPropertyName("tool_call_id")] string? ToolCallId,
-    [property: JsonPropertyName("tool_calls")] List<ChatCompletionToolCall>? ToolCalls);
+    [property: JsonPropertyName("tool_calls")] List<ChatCompletionToolCall>? ToolCalls)
+{
+    /// <summary>
+    /// Returns Content as a string when the JSON value is a string, or null otherwise.
+    /// </summary>
+    [JsonIgnore]
+    public string? StringContent => Content is { ValueKind: JsonValueKind.String } c ? c.GetString() : null;
+}
 
 public record ChatCompletionToolCall(string Id, string Type, ChatCompletionToolCallFunction Function);
 
