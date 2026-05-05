@@ -519,8 +519,8 @@ spec:
     spec:
       containers:
         - name: copilot-cli
-          image: ghcr.io/github/copilot-cli:latest
-          args: ["--headless", "--port", "4321"]
+          image: your-registry/copilot-cli:latest  # See backend-services.md for how to build and push this image
+          args: ["--headless", "--host", "0.0.0.0", "--port", "4321"]
           env:
             - name: COPILOT_GITHUB_TOKEN
               valueFrom:
@@ -576,8 +576,8 @@ flowchart TB
 ```yaml
 containers:
   - name: copilot-cli
-    image: ghcr.io/github/copilot-cli:latest
-    command: ["copilot", "--headless", "--port", "4321"]
+    image: your-registry/copilot-cli:latest  # See backend-services.md for how to build and push this image
+    command: ["copilot", "--headless", "--host", "0.0.0.0", "--port", "4321"]
     volumeMounts:
       - name: session-storage
         mountPath: /root/.copilot/session-state

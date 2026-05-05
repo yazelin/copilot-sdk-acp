@@ -2,3 +2,9 @@
 # Documentation validation output
 docs/.validation/
 .DS_Store
+
+# Visual Studio
+.vs/
+
+# C# Dev Kit
+*.csproj.lscache

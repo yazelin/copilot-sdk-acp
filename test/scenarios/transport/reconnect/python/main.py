@@ -2,12 +2,13 @@ import asyncio
 import os
 import sys
 from copilot import CopilotClient
+from copilot.client import ExternalServerConfig
 
 
 async def main():
-    client = CopilotClient({
-        "cli_url": os.environ.get("COPILOT_CLI_URL", "localhost:3000"),
-    })
+    client = CopilotClient(ExternalServerConfig(
+        url=os.environ.get("COPILOT_CLI_URL", "localhost:3000"),
+    ))
 
     try:
         # First session
@@ -15,7 +16,7 @@ async def main():
         session1 = await client.create_session({"model": "claude-haiku-4.5"})
 
         response1 = await session1.send_and_wait(
-            {"prompt": "What is the capital of France?"}
+            "What is the capital of France?"
         )
 
         if response1 and response1.data.content:
@@ -32,7 +33,7 @@ async def main():
         session2 = await client.create_session({"model": "claude-haiku-4.5"})
 
         response2 = await session2.send_and_wait(
-            {"prompt": "What is the capital of France?"}
+            "What is the capital of France?"
         )
 
         if response2 and response2.data.content:
