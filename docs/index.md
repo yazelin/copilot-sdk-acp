@@ -22,8 +22,8 @@ Step-by-step tutorial that takes you from zero to a working Copilot app with str
 
 How to configure and deploy the SDK for your use case.
 
-- [Local CLI](./setup/local-cli.md) — simplest path, uses your signed-in CLI
-- [Bundled CLI](./setup/bundled-cli.md) — ship the CLI with your app
+- [Default Setup (Bundled CLI)](./setup/bundled-cli.md) — the SDK includes the CLI automatically
+- [Local CLI](./setup/local-cli.md) — use your own CLI binary or running instance
 - [Backend Services](./setup/backend-services.md) — server-side with headless CLI over TCP
 - [GitHub OAuth](./setup/github-oauth.md) — implement the OAuth flow
 - [Azure Managed Identity](./setup/azure-managed-identity.md) — BYOK with Azure AI Foundry
@@ -48,6 +48,7 @@ Guides for building with the SDK's capabilities.
 - [Streaming Events](./features/streaming-events.md) — real-time event reference
 - [Steering & Queueing](./features/steering-and-queueing.md) — message delivery modes
 - [Session Persistence](./features/session-persistence.md) — resume sessions across restarts
+- [Remote Sessions](./features/remote-sessions.md) — share sessions to GitHub web and mobile
 
 ### [Hooks Reference](./hooks/index.md)
 
@@ -67,7 +68,7 @@ Detailed API reference for each session hook.
 
 ### [Observability](./observability/opentelemetry.md)
 
-- [OpenTelemetry Instrumentation](./observability/opentelemetry.md) — add tracing to your SDK usage
+- [OpenTelemetry Instrumentation](./observability/opentelemetry.md) — built-in TelemetryConfig and trace context propagation
 
 ### [Integrations](./integrations/microsoft-agent-framework.md)
 
