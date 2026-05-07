@@ -11,6 +11,7 @@
         <PackageProjectUrl>https://github.com/github/copilot-sdk</PackageProjectUrl>
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <RepositoryUrl>https://github.com/github/copilot-sdk</RepositoryUrl>
+        <PackageIcon>copilot.png</PackageIcon>
         <PackageTags>github;copilot;sdk;jsonrpc;agent</PackageTags>
         <IsAotCompatible>true</IsAotCompatible>
         <IncludeSymbols>true</IncludeSymbols>
@@ -19,19 +20,23 @@
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
     </PropertyGroup>
 
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);GHCP001</NoWarn>
+  </PropertyGroup>
+
     <PropertyGroup Condition="'$(CI)' == 'true' or '$(TF_BUILD)' == 'true'">
         <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     </PropertyGroup>
 
     <ItemGroup>
         <None Include="../README.md" Pack="true" PackagePath="/" />
+        <None Include="../../assets/copilot.png" Pack="true" PackagePath="/" />
     </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
-        <PackageReference Include="StreamJsonRpc" PrivateAssets="compile" />
         <PackageReference Include="System.Text.Json" />
     </ItemGroup>
 
