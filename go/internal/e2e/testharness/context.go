@@ -59,11 +59,19 @@ func NewTestContext(t *testing.T) *TestContext {
 	if err != nil {
 		t.Fatalf("Failed to create temp home dir: %v", err)
 	}
+	if resolved, err := filepath.EvalSymlinks(homeDir); err == nil {
+		homeDir = resolved
+	}
 
 	workDir, err := os.MkdirTemp("", "copilot-test-work-")
 	if err != nil {
 		os.RemoveAll(homeDir)
 		t.Fatalf("Failed to create temp work dir: %v", err)
+	}
+	// Resolve symlinks (e.g., macOS /var -> /private/var) so paths
+	// match what spawned subprocesses see when they resolve their cwd.
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
 	}
 
 	proxy := NewCapiProxy()
@@ -103,8 +111,9 @@ func (c *TestContext) ConfigureForTest(t *testing.T) {
 		t.Fatal("Failed to get caller information")
 	}
 
-	// Extract test file name: ask_user_test.go -> ask_user
+	// Extract test file name: ask_user_test.go -> ask_user, ask_user_e2e_test.go -> ask_user
 	testFile := strings.TrimSuffix(filepath.Base(callerFile), "_test.go")
+	testFile = strings.TrimSuffix(testFile, "_e2e")
 
 	// Extract and sanitize the subtest name from t.Name()
 	// t.Name() returns "TestAskUser/should_handle_freeform_user_input_response"
@@ -144,29 +153,48 @@ func (c *TestContext) GetExchanges() ([]ParsedHttpExchange, error) {
 	return c.proxy.GetExchanges()
 }
 
+// SetCopilotUserByToken registers a per-token user configuration on the proxy.
+func (c *TestContext) SetCopilotUserByToken(token string, response map[string]interface{}) error {
+	return c.proxy.SetCopilotUserByToken(token, response)
+}
+
 // Env returns environment variables configured for isolated testing.
 func (c *TestContext) Env() []string {
 	env := os.Environ()
 
 	// Add overrides (later values take precedence in most systems)
+	env = append(env, c.proxy.ProxyEnv()...)
 	env = append(env,
 		"COPILOT_API_URL="+c.ProxyURL,
+		"COPILOT_HOME="+c.HomeDir,
+		"GH_CONFIG_DIR="+c.HomeDir,
 		"XDG_CONFIG_HOME="+c.HomeDir,
 		"XDG_STATE_HOME="+c.HomeDir,
 	)
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		env = append(env,
+			"GH_TOKEN=fake-token-for-e2e-tests",
+			"GITHUB_TOKEN=fake-token-for-e2e-tests",
+		)
+	}
 	return env
 }
 
 // NewClient creates a CopilotClient configured for this test context.
-func (c *TestContext) NewClient() *copilot.Client {
+// Optional overrides can be applied to the default ClientOptions via the opts function.
+func (c *TestContext) NewClient(opts ...func(*copilot.ClientOptions)) *copilot.Client {
 	options := &copilot.ClientOptions{
 		CLIPath: c.CLIPath,
 		Cwd:     c.WorkDir,
 		Env:     c.Env(),
 	}
 
-	// Use fake token in CI to allow cached responses without real auth
-	if os.Getenv("GITHUB_ACTIONS") == "true" {
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	// Use fake token in CI to allow cached responses without real auth for spawned subprocess clients.
+	if os.Getenv("GITHUB_ACTIONS") == "true" && options.GitHubToken == "" && options.CLIUrl == "" {
 		options.GitHubToken = "fake-token-for-e2e-tests"
 	}
 

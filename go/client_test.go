@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"sync"
 	"testing"
+
+	"github.com/github/copilot-sdk/go/rpc"
 )
 
 // This file is for unit tests. Where relevant, prefer to add e2e tests in e2e/*.test.go instead
@@ -223,6 +225,48 @@ func TestClient_URLParsing(t *testing.T) {
 	})
 }
 
+func TestClient_SessionFsConfig(t *testing.T) {
+	t.Run("should throw error when InitialCwd is missing", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("Expected panic for missing SessionFs.InitialCwd")
+			} else {
+				matched, _ := regexp.MatchString("SessionFs.InitialCwd is required", r.(string))
+				if !matched {
+					t.Errorf("Expected panic message to contain 'SessionFs.InitialCwd is required', got: %v", r)
+				}
+			}
+		}()
+
+		NewClient(&ClientOptions{
+			SessionFs: &SessionFsConfig{
+				SessionStatePath: "/session-state",
+				Conventions:      rpc.SessionFSSetProviderConventionsPosix,
+			},
+		})
+	})
+
+	t.Run("should throw error when SessionStatePath is missing", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("Expected panic for missing SessionFs.SessionStatePath")
+			} else {
+				matched, _ := regexp.MatchString("SessionFs.SessionStatePath is required", r.(string))
+				if !matched {
+					t.Errorf("Expected panic message to contain 'SessionFs.SessionStatePath is required', got: %v", r)
+				}
+			}
+		}()
+
+		NewClient(&ClientOptions{
+			SessionFs: &SessionFsConfig{
+				InitialCwd:  "/",
+				Conventions: rpc.SessionFSSetProviderConventionsPosix,
+			},
+		})
+	})
+}
+
 func TestClient_AuthOptions(t *testing.T) {
 	t.Run("should accept GitHubToken option", func(t *testing.T) {
 		client := NewClient(&ClientOptions{
@@ -300,6 +344,26 @@ func TestClient_AuthOptions(t *testing.T) {
 	})
 }
 
+func TestClient_CopilotHome(t *testing.T) {
+	t.Run("should accept CopilotHome option", func(t *testing.T) {
+		client := NewClient(&ClientOptions{
+			CopilotHome: "/custom/copilot/home",
+		})
+
+		if client.options.CopilotHome != "/custom/copilot/home" {
+			t.Errorf("Expected CopilotHome to be '/custom/copilot/home', got %q", client.options.CopilotHome)
+		}
+	})
+
+	t.Run("should default CopilotHome to empty string", func(t *testing.T) {
+		client := NewClient(&ClientOptions{})
+
+		if client.options.CopilotHome != "" {
+			t.Errorf("Expected CopilotHome to be empty, got %q", client.options.CopilotHome)
+		}
+	})
+}
+
 func TestClient_EnvOptions(t *testing.T) {
 	t.Run("should store custom environment variables", func(t *testing.T) {
 		client := NewClient(&ClientOptions{
@@ -343,6 +407,26 @@ func TestClient_EnvOptions(t *testing.T) {
 		}
 		if len(client.options.Env) != 0 {
 			t.Errorf("Expected 0 environment variables, got %d", len(client.options.Env))
+		}
+	})
+}
+
+func TestClient_SessionIdleTimeoutSeconds(t *testing.T) {
+	t.Run("should store SessionIdleTimeoutSeconds option", func(t *testing.T) {
+		client := NewClient(&ClientOptions{
+			SessionIdleTimeoutSeconds: 600,
+		})
+
+		if client.options.SessionIdleTimeoutSeconds != 600 {
+			t.Errorf("Expected SessionIdleTimeoutSeconds to be 600, got %d", client.options.SessionIdleTimeoutSeconds)
+		}
+	})
+
+	t.Run("should default SessionIdleTimeoutSeconds to zero", func(t *testing.T) {
+		client := NewClient(&ClientOptions{})
+
+		if client.options.SessionIdleTimeoutSeconds != 0 {
+			t.Errorf("Expected SessionIdleTimeoutSeconds to be 0, got %d", client.options.SessionIdleTimeoutSeconds)
 		}
 	})
 }
@@ -464,6 +548,65 @@ func TestResumeSessionRequest_Agent(t *testing.T) {
 		json.Unmarshal(data, &m)
 		if _, ok := m["agent"]; ok {
 			t.Error("Expected agent to be omitted when empty")
+		}
+	})
+}
+
+func TestCreateSessionRequest_InstructionDirectories(t *testing.T) {
+	t.Run("includes instructionDirectories in JSON when set", func(t *testing.T) {
+		req := createSessionRequest{InstructionDirectories: []string{`C:\extra-instructions`, `C:\more-instructions`}}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		got := m["instructionDirectories"].([]any)
+		if len(got) != 2 || got[0] != `C:\extra-instructions` || got[1] != `C:\more-instructions` {
+			t.Errorf("Expected instructionDirectories to be serialized, got %v", got)
+		}
+	})
+
+	t.Run("omits instructionDirectories from JSON when empty", func(t *testing.T) {
+		req := createSessionRequest{}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["instructionDirectories"]; ok {
+			t.Error("Expected instructionDirectories to be omitted when empty")
+		}
+	})
+}
+
+func TestResumeSessionRequest_InstructionDirectories(t *testing.T) {
+	t.Run("includes instructionDirectories in JSON when set", func(t *testing.T) {
+		req := resumeSessionRequest{
+			SessionID:              "s1",
+			InstructionDirectories: []string{`C:\resume-instructions`},
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		got := m["instructionDirectories"].([]any)
+		if len(got) != 1 || got[0] != `C:\resume-instructions` {
+			t.Errorf("Expected instructionDirectories to be serialized, got %v", got)
+		}
+	})
+
+	t.Run("omits instructionDirectories from JSON when empty", func(t *testing.T) {
+		req := resumeSessionRequest{SessionID: "s1"}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["instructionDirectories"]; ok {
+			t.Error("Expected instructionDirectories to be omitted when empty")
 		}
 	})
 }
@@ -608,6 +751,32 @@ func TestListModelsHandlerCachesResults(t *testing.T) {
 	}
 }
 
+func TestClient_StartContextCancellationDoesNotKillProcess(t *testing.T) {
+	cliPath := findCLIPathForTest()
+	if cliPath == "" {
+		t.Skip("CLI not found")
+	}
+
+	client := NewClient(&ClientOptions{CLIPath: cliPath})
+	t.Cleanup(func() { client.ForceStop() })
+
+	// Start with a context, then cancel it after the client is connected.
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	cancel() // cancel the context that was used for Start
+
+	// The CLI process should still be alive and responsive.
+	resp, err := client.Ping(t.Context(), "still alive")
+	if err != nil {
+		t.Fatalf("Ping after context cancellation failed: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil ping response")
+	}
+}
+
 func TestClient_StartStopRace(t *testing.T) {
 	cliPath := findCLIPathForTest()
 	if cliPath == "" {
@@ -647,4 +816,484 @@ func TestClient_StartStopRace(t *testing.T) {
 	if err := <-errChan; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestCreateSessionRequest_Commands(t *testing.T) {
+	t.Run("forwards commands in session.create RPC", func(t *testing.T) {
+		req := createSessionRequest{
+			Commands: []wireCommand{
+				{Name: "deploy", Description: "Deploy the app"},
+				{Name: "rollback", Description: "Rollback last deploy"},
+			},
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		cmds, ok := m["commands"].([]any)
+		if !ok {
+			t.Fatalf("Expected commands to be an array, got %T", m["commands"])
+		}
+		if len(cmds) != 2 {
+			t.Fatalf("Expected 2 commands, got %d", len(cmds))
+		}
+		cmd0 := cmds[0].(map[string]any)
+		if cmd0["name"] != "deploy" {
+			t.Errorf("Expected first command name 'deploy', got %v", cmd0["name"])
+		}
+		if cmd0["description"] != "Deploy the app" {
+			t.Errorf("Expected first command description 'Deploy the app', got %v", cmd0["description"])
+		}
+	})
+
+	t.Run("omits commands from JSON when empty", func(t *testing.T) {
+		req := createSessionRequest{}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["commands"]; ok {
+			t.Error("Expected commands to be omitted when empty")
+		}
+	})
+}
+
+func TestResumeSessionRequest_Commands(t *testing.T) {
+	t.Run("forwards commands in session.resume RPC", func(t *testing.T) {
+		req := resumeSessionRequest{
+			SessionID: "s1",
+			Commands: []wireCommand{
+				{Name: "deploy", Description: "Deploy the app"},
+			},
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		cmds, ok := m["commands"].([]any)
+		if !ok {
+			t.Fatalf("Expected commands to be an array, got %T", m["commands"])
+		}
+		if len(cmds) != 1 {
+			t.Fatalf("Expected 1 command, got %d", len(cmds))
+		}
+		cmd0 := cmds[0].(map[string]any)
+		if cmd0["name"] != "deploy" {
+			t.Errorf("Expected command name 'deploy', got %v", cmd0["name"])
+		}
+	})
+
+	t.Run("omits commands from JSON when empty", func(t *testing.T) {
+		req := resumeSessionRequest{SessionID: "s1"}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["commands"]; ok {
+			t.Error("Expected commands to be omitted when empty")
+		}
+	})
+}
+
+func TestCreateSessionRequest_RequestElicitation(t *testing.T) {
+	t.Run("sends requestElicitation flag when OnElicitationRequest is provided", func(t *testing.T) {
+		req := createSessionRequest{
+			RequestElicitation: Bool(true),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["requestElicitation"] != true {
+			t.Errorf("Expected requestElicitation to be true, got %v", m["requestElicitation"])
+		}
+	})
+
+	t.Run("does not send requestElicitation when no handler provided", func(t *testing.T) {
+		req := createSessionRequest{}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["requestElicitation"]; ok {
+			t.Error("Expected requestElicitation to be omitted when not set")
+		}
+	})
+}
+
+func TestCreateSessionRequest_ModeCallbackFlags(t *testing.T) {
+	t.Run("sends mode callback flags when handlers are provided", func(t *testing.T) {
+		req := createSessionRequest{
+			RequestExitPlanMode:   Bool(true),
+			RequestAutoModeSwitch: Bool(true),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["requestExitPlanMode"] != true {
+			t.Errorf("Expected requestExitPlanMode to be true, got %v", m["requestExitPlanMode"])
+		}
+		if m["requestAutoModeSwitch"] != true {
+			t.Errorf("Expected requestAutoModeSwitch to be true, got %v", m["requestAutoModeSwitch"])
+		}
+	})
+
+	t.Run("omits mode callback flags when handlers are not provided", func(t *testing.T) {
+		req := createSessionRequest{}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["requestExitPlanMode"]; ok {
+			t.Error("Expected requestExitPlanMode to be omitted when not set")
+		}
+		if _, ok := m["requestAutoModeSwitch"]; ok {
+			t.Error("Expected requestAutoModeSwitch to be omitted when not set")
+		}
+	})
+}
+
+func TestResumeSessionRequest_RequestElicitation(t *testing.T) {
+	t.Run("sends requestElicitation flag when OnElicitationRequest is provided", func(t *testing.T) {
+		req := resumeSessionRequest{
+			SessionID:          "s1",
+			RequestElicitation: Bool(true),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["requestElicitation"] != true {
+			t.Errorf("Expected requestElicitation to be true, got %v", m["requestElicitation"])
+		}
+	})
+
+	t.Run("does not send requestElicitation when no handler provided", func(t *testing.T) {
+		req := resumeSessionRequest{SessionID: "s1"}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["requestElicitation"]; ok {
+			t.Error("Expected requestElicitation to be omitted when not set")
+		}
+	})
+}
+
+func TestResumeSessionRequest_ModeCallbackFlags(t *testing.T) {
+	req := resumeSessionRequest{
+		SessionID:             "s1",
+		RequestExitPlanMode:   Bool(true),
+		RequestAutoModeSwitch: Bool(true),
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Failed to marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+	if m["requestExitPlanMode"] != true {
+		t.Errorf("Expected requestExitPlanMode to be true, got %v", m["requestExitPlanMode"])
+	}
+	if m["requestAutoModeSwitch"] != true {
+		t.Errorf("Expected requestAutoModeSwitch to be true, got %v", m["requestAutoModeSwitch"])
+	}
+}
+
+func TestModeCallbackRequestHandlers(t *testing.T) {
+	session := &Session{SessionID: "s1"}
+	client := &Client{sessions: map[string]*Session{"s1": session}}
+
+	expectedSummary := "Review the plan"
+	expectedPlanContent := "Plan body"
+	expectedActions := []string{"interactive", "autopilot"}
+	expectedRecommendedAction := "autopilot"
+	session.registerExitPlanModeHandler(func(request ExitPlanModeRequest, invocation ExitPlanModeInvocation) (ExitPlanModeResult, error) {
+		if invocation.SessionID != "s1" {
+			t.Fatalf("Expected session ID s1, got %s", invocation.SessionID)
+		}
+		if request.Summary != expectedSummary {
+			t.Fatalf("Expected summary, got %q", request.Summary)
+		}
+		if request.PlanContent != expectedPlanContent {
+			t.Fatalf("Expected plan content, got %q", request.PlanContent)
+		}
+		if !reflect.DeepEqual(request.Actions, expectedActions) {
+			t.Fatalf("Expected actions to round-trip, got %#v", request.Actions)
+		}
+		if request.RecommendedAction != expectedRecommendedAction {
+			t.Fatalf("Expected recommended action, got %q", request.RecommendedAction)
+		}
+		return ExitPlanModeResult{
+			Approved:       true,
+			SelectedAction: "interactive",
+			Feedback:       "Looks good",
+		}, nil
+	})
+
+	errorCode := "user_weekly_rate_limited"
+	retryAfter := float64(3600)
+	session.registerAutoModeSwitchHandler(func(request AutoModeSwitchRequest, invocation AutoModeSwitchInvocation) (AutoModeSwitchResponse, error) {
+		if invocation.SessionID != "s1" {
+			t.Fatalf("Expected session ID s1, got %s", invocation.SessionID)
+		}
+		if request.ErrorCode == nil || *request.ErrorCode != errorCode {
+			t.Fatalf("Expected error code %q, got %#v", errorCode, request.ErrorCode)
+		}
+		if request.RetryAfterSeconds == nil || *request.RetryAfterSeconds != retryAfter {
+			t.Fatalf("Expected retry-after %v, got %#v", retryAfter, request.RetryAfterSeconds)
+		}
+		return AutoModeSwitchResponseYesAlways, nil
+	})
+
+	exitResult, rpcErr := client.handleExitPlanModeRequest(exitPlanModeRequest{
+		SessionID:         "s1",
+		Summary:           "Review the plan",
+		PlanContent:       "Plan body",
+		Actions:           []string{"interactive", "autopilot"},
+		RecommendedAction: "autopilot",
+	})
+	if rpcErr != nil {
+		t.Fatalf("Unexpected RPC error: %v", rpcErr)
+	}
+	if !exitResult.Approved || exitResult.SelectedAction != "interactive" || exitResult.Feedback != "Looks good" {
+		t.Fatalf("Unexpected exit-plan-mode result: %#v", exitResult)
+	}
+
+	expectedSummary = ""
+	expectedPlanContent = ""
+	expectedActions = nil
+	expectedRecommendedAction = "autopilot"
+	exitResult, rpcErr = client.handleExitPlanModeRequest(exitPlanModeRequest{
+		SessionID: "s1",
+	})
+	if rpcErr != nil {
+		t.Fatalf("Unexpected RPC error for minimal exit-plan-mode request: %v", rpcErr)
+	}
+	if !exitResult.Approved {
+		t.Fatalf("Unexpected minimal exit-plan-mode result: %#v", exitResult)
+	}
+
+	autoResult, rpcErr := client.handleAutoModeSwitchRequest(autoModeSwitchRequest{
+		SessionID:         "s1",
+		ErrorCode:         &errorCode,
+		RetryAfterSeconds: &retryAfter,
+	})
+	if rpcErr != nil {
+		t.Fatalf("Unexpected RPC error: %v", rpcErr)
+	}
+	if autoResult.Response != AutoModeSwitchResponseYesAlways {
+		t.Fatalf("Expected yes_always, got %q", autoResult.Response)
+	}
+}
+
+func TestResumeSessionRequest_ContinuePendingWork(t *testing.T) {
+	t.Run("forwards continuePendingWork when true", func(t *testing.T) {
+		req := resumeSessionRequest{
+			SessionID:           "s1",
+			ContinuePendingWork: Bool(true),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["continuePendingWork"] != true {
+			t.Errorf("Expected continuePendingWork to be true, got %v", m["continuePendingWork"])
+		}
+	})
+
+	t.Run("omits continuePendingWork when not set", func(t *testing.T) {
+		req := resumeSessionRequest{SessionID: "s1"}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["continuePendingWork"]; ok {
+			t.Error("Expected continuePendingWork to be omitted when not set")
+		}
+	})
+}
+
+func TestCreateSessionRequest_EnableSessionTelemetry(t *testing.T) {
+	t.Run("forwards enableSessionTelemetry when false", func(t *testing.T) {
+		req := createSessionRequest{
+			EnableSessionTelemetry: Bool(false),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["enableSessionTelemetry"] != false {
+			t.Errorf("Expected enableSessionTelemetry to be false, got %v", m["enableSessionTelemetry"])
+		}
+	})
+
+	t.Run("omits enableSessionTelemetry when not set", func(t *testing.T) {
+		req := createSessionRequest{}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["enableSessionTelemetry"]; ok {
+			t.Error("Expected enableSessionTelemetry to be omitted when not set")
+		}
+	})
+}
+
+func TestCreateSessionRequest_IncludeSubAgentStreamingEvents(t *testing.T) {
+	t.Run("defaults to true when nil", func(t *testing.T) {
+		req := createSessionRequest{
+			IncludeSubAgentStreamingEvents: Bool(true),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["includeSubAgentStreamingEvents"] != true {
+			t.Errorf("Expected includeSubAgentStreamingEvents to be true, got %v", m["includeSubAgentStreamingEvents"])
+		}
+	})
+
+	t.Run("preserves explicit false", func(t *testing.T) {
+		req := createSessionRequest{
+			IncludeSubAgentStreamingEvents: Bool(false),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["includeSubAgentStreamingEvents"] != false {
+			t.Errorf("Expected includeSubAgentStreamingEvents to be false, got %v", m["includeSubAgentStreamingEvents"])
+		}
+	})
+}
+
+func TestResumeSessionRequest_EnableSessionTelemetry(t *testing.T) {
+	t.Run("forwards enableSessionTelemetry when false", func(t *testing.T) {
+		req := resumeSessionRequest{
+			SessionID:              "s1",
+			EnableSessionTelemetry: Bool(false),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["enableSessionTelemetry"] != false {
+			t.Errorf("Expected enableSessionTelemetry to be false, got %v", m["enableSessionTelemetry"])
+		}
+	})
+
+	t.Run("omits enableSessionTelemetry when not set", func(t *testing.T) {
+		req := resumeSessionRequest{SessionID: "s1"}
+		data, _ := json.Marshal(req)
+		var m map[string]any
+		json.Unmarshal(data, &m)
+		if _, ok := m["enableSessionTelemetry"]; ok {
+			t.Error("Expected enableSessionTelemetry to be omitted when not set")
+		}
+	})
+}
+
+func TestResumeSessionRequest_IncludeSubAgentStreamingEvents(t *testing.T) {
+	t.Run("defaults to true when nil", func(t *testing.T) {
+		req := resumeSessionRequest{
+			SessionID:                      "s1",
+			IncludeSubAgentStreamingEvents: Bool(true),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["includeSubAgentStreamingEvents"] != true {
+			t.Errorf("Expected includeSubAgentStreamingEvents to be true, got %v", m["includeSubAgentStreamingEvents"])
+		}
+	})
+
+	t.Run("preserves explicit false", func(t *testing.T) {
+		req := resumeSessionRequest{
+			SessionID:                      "s1",
+			IncludeSubAgentStreamingEvents: Bool(false),
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if m["includeSubAgentStreamingEvents"] != false {
+			t.Errorf("Expected includeSubAgentStreamingEvents to be false, got %v", m["includeSubAgentStreamingEvents"])
+		}
+	})
+}
+
+func TestCreateSessionResponse_Capabilities(t *testing.T) {
+	t.Run("reads capabilities from session.create response", func(t *testing.T) {
+		responseJSON := `{"sessionId":"s1","workspacePath":"/tmp","capabilities":{"ui":{"elicitation":true}}}`
+		var response createSessionResponse
+		if err := json.Unmarshal([]byte(responseJSON), &response); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if response.Capabilities == nil {
+			t.Fatal("Expected capabilities to be non-nil")
+		}
+		if response.Capabilities.UI == nil {
+			t.Fatal("Expected capabilities.UI to be non-nil")
+		}
+		if !response.Capabilities.UI.Elicitation {
+			t.Errorf("Expected capabilities.UI.Elicitation to be true")
+		}
+	})
+
+	t.Run("defaults capabilities when not present", func(t *testing.T) {
+		responseJSON := `{"sessionId":"s1","workspacePath":"/tmp"}`
+		var response createSessionResponse
+		if err := json.Unmarshal([]byte(responseJSON), &response); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if response.Capabilities != nil && response.Capabilities.UI != nil && response.Capabilities.UI.Elicitation {
+			t.Errorf("Expected capabilities.UI.Elicitation to be falsy when not injected")
+		}
+	})
 }
