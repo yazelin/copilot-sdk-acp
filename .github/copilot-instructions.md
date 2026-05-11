@@ -25,6 +25,7 @@
   - Python: `cd python && uv pip install -e ".[dev]"` → `uv run pytest` (E2E tests use the test harness)
   - Go: `cd go && go test ./...`
   - .NET: `cd dotnet && dotnet test test/GitHub.Copilot.SDK.Test.csproj`
+  - **.NET testing note:** Never add `InternalsVisibleTo` to any project file when writing tests. Tests must only access public APIs.
 
 ## Testing & E2E tips ⚙️
 
@@ -47,7 +48,7 @@
 
 ## Where to add new code or tests 🧭
 
-- SDK code: `nodejs/src`, `python/copilot`, `go`, `dotnet/src`
-- Unit tests: `nodejs/test`, `python/*`, `go/*`, `dotnet/test`
+- SDK code: `nodejs/src`, `python/copilot`, `go`, `dotnet/src`, `rust/src`
+- Unit tests: `nodejs/test`, `python/*`, `go/*`, `dotnet/test`, `rust/tests`
 - E2E tests: `*/e2e/` folders that use the shared replay proxy and `test/snapshots/`
 - Generated types: update schema in `@github/copilot` then run `cd nodejs && npm run generate:session-types` and commit generated files in `src/generated` or language generated location.
