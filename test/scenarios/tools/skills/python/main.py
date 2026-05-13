@@ -3,30 +3,29 @@ import os
 from pathlib import Path
 
 from copilot import CopilotClient
+from copilot.client import SubprocessConfig
 
 
 async def main():
-    opts = {"github_token": os.environ.get("GITHUB_TOKEN")}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        github_token=os.environ.get("GITHUB_TOKEN"),
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
         skills_dir = str(Path(__file__).resolve().parent.parent / "sample-skills")
 
         session = await client.create_session(
-            {
-                "model": "claude-haiku-4.5",
-                "skill_directories": [skills_dir],
-                "on_permission_request": lambda _: {"kind": "approved"},
-                "hooks": {
-                    "on_pre_tool_use": lambda _: {"permission_decision": "allow"},
-                },
-            }
+            on_permission_request=lambda _, __: {"kind": "approved"},
+            model="claude-haiku-4.5",
+            skill_directories=[skills_dir],
+            hooks={
+                "on_pre_tool_use": lambda _, __: {"permissionDecision": "allow"},
+            },
         )
 
         response = await session.send_and_wait(
-            {"prompt": "Use the greeting skill to greet someone named Alice."}
+            "Use the greeting skill to greet someone named Alice."
         )
 
         if response:
