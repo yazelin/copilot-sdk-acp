@@ -1,16 +1,16 @@
-# Azure Managed Identity with BYOK
+# Azure managed identity with BYOK
 
 The Copilot SDK's [BYOK mode](../auth/byok.md) accepts static API keys, but Azure deployments often use **Managed Identity** (Entra ID) instead of long-lived keys. Since the SDK doesn't natively support Entra ID authentication, you can use a short-lived bearer token via the `bearer_token` provider config field.
 
 This guide shows how to use `DefaultAzureCredential` from the [Azure Identity](https://learn.microsoft.com/python/api/azure-identity/azure.identity.defaultazurecredential) library to authenticate with Azure AI Foundry models through the Copilot SDK.
 
-## How It Works
+## How it works
 
 Azure AI Foundry's OpenAI-compatible endpoint accepts bearer tokens from Entra ID in place of static API keys. The pattern is:
 
 1. Use `DefaultAzureCredential` to obtain a token for the `https://cognitiveservices.azure.com/.default` scope
-2. Pass the token as the `bearer_token` in the BYOK provider config
-3. Refresh the token before it expires (tokens are typically valid for ~1 hour)
+1. Pass the token as the `bearer_token` in the BYOK provider config
+1. Refresh the token before it expires (tokens are typically valid for ~1 hour)
 
 ```mermaid
 sequenceDiagram
@@ -27,7 +27,7 @@ sequenceDiagram
     SDK-->>App: Session events
 ```
 
-## Python Example
+## Python example
 
 ### Prerequisites
 
@@ -35,14 +35,15 @@ sequenceDiagram
 pip install github-copilot-sdk azure-identity
 ```
 
-### Basic Usage
+### Basic usage
 
 ```python
 import asyncio
 import os
 
 from azure.identity import DefaultAzureCredential
-from copilot import CopilotClient, ProviderConfig, SessionConfig
+from copilot import CopilotClient
+from copilot.session import PermissionHandler, ProviderConfig
 
 COGNITIVE_SERVICES_SCOPE = "https://cognitiveservices.azure.com/.default"
 
@@ -58,18 +59,17 @@ async def main():
     await client.start()
 
     session = await client.create_session(
-        SessionConfig(
-            model="gpt-4.1",
-            provider=ProviderConfig(
-                type="openai",
-                base_url=f"{foundry_url.rstrip('/')}/openai/v1/",
-                bearer_token=token,  # Short-lived bearer token
-                wire_api="responses",
-            ),
-        )
+        on_permission_request=PermissionHandler.approve_all,
+        model="gpt-4.1",
+        provider=ProviderConfig(
+            type="openai",
+            base_url=f"{foundry_url.rstrip('/')}/openai/v1/",
+            bearer_token=token,  # Short-lived bearer token
+            wire_api="responses",
+        ),
     )
 
-    response = await session.send_and_wait({"prompt": "Hello from Managed Identity!"})
+    response = await session.send_and_wait("Hello from Managed Identity!")
     print(response.data.content)
 
     await client.stop()
@@ -78,13 +78,14 @@ async def main():
 asyncio.run(main())
 ```
 
-### Token Refresh for Long-Running Applications
+### Token refresh for long-running applications
 
 Bearer tokens expire (typically after ~1 hour). For servers or long-running agents, refresh the token before creating each session:
 
 ```python
 from azure.identity import DefaultAzureCredential
-from copilot import CopilotClient, ProviderConfig, SessionConfig
+from copilot import CopilotClient
+from copilot.session import PermissionHandler, ProviderConfig
 
 COGNITIVE_SERVICES_SCOPE = "https://cognitiveservices.azure.com/.default"
 
@@ -98,32 +99,32 @@ class ManagedIdentityCopilotAgent:
         self.credential = DefaultAzureCredential()
         self.client = CopilotClient()
 
-    def _get_session_config(self) -> SessionConfig:
-        """Build a SessionConfig with a fresh bearer token."""
+    def _get_provider_config(self) -> ProviderConfig:
+        """Build a ProviderConfig with a fresh bearer token."""
         token = self.credential.get_token(COGNITIVE_SERVICES_SCOPE).token
-        return SessionConfig(
-            model=self.model,
-            provider=ProviderConfig(
-                type="openai",
-                base_url=f"{self.foundry_url}/openai/v1/",
-                bearer_token=token,
-                wire_api="responses",
-            ),
+        return ProviderConfig(
+            type="openai",
+            base_url=f"{self.foundry_url}/openai/v1/",
+            bearer_token=token,
+            wire_api="responses",
         )
 
     async def chat(self, prompt: str) -> str:
         """Send a prompt and return the response text."""
         # Fresh token for each session
-        config = self._get_session_config()
-        session = await self.client.create_session(config)
+        session = await self.client.create_session(
+            on_permission_request=PermissionHandler.approve_all,
+            model=self.model,
+            provider=self._get_provider_config(),
+        )
 
-        response = await session.send_and_wait({"prompt": prompt})
+        response = await session.send_and_wait(prompt)
         await session.disconnect()
 
         return response.data.content if response else ""
 ```
 
-## Node.js / TypeScript Example
+## Node.js / TypeScript example
 
 <!-- docs-validate: skip -->
 ```typescript
@@ -153,7 +154,7 @@ console.log(response?.data.content);
 await client.stop();
 ```
 
-## .NET Example
+## .NET example
 
 <!-- docs-validate: skip -->
 ```csharp
@@ -185,22 +186,22 @@ var response = await session.SendAndWaitAsync(
 Console.WriteLine(response?.Data.Content);
 ```
 
-## Environment Configuration
+## Environment configuration
 
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `AZURE_AI_FOUNDRY_RESOURCE_URL` | Your Azure AI Foundry resource URL | `https://myresource.openai.azure.com` |
 
-No API key environment variable is needed — authentication is handled by `DefaultAzureCredential`, which automatically supports:
+No API key environment variable is needed—authentication is handled by `DefaultAzureCredential`, which automatically supports:
 
-- **Managed Identity** (system-assigned or user-assigned) — for Azure-hosted apps
-- **Azure CLI** (`az login`) — for local development
-- **Environment variables** (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET`) — for service principals
-- **Workload Identity** — for Kubernetes
+* **Managed Identity** (system-assigned or user-assigned): for Azure-hosted apps
+* **Azure CLI** (`az login`): for local development
+* **Environment variables** (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET`): for service principals
+* **Workload Identity**: for Kubernetes
 
 See the [DefaultAzureCredential documentation](https://learn.microsoft.com/python/api/azure-identity/azure.identity.defaultazurecredential) for the full credential chain.
 
-## When to Use This Pattern
+## When to use this pattern
 
 | Scenario | Recommendation |
 |----------|----------------|
@@ -210,8 +211,8 @@ See the [DefaultAzureCredential documentation](https://learn.microsoft.com/pytho
 | Non-Azure environment with static API key | Use [standard BYOK](../auth/byok.md) |
 | GitHub Copilot subscription available | Use [GitHub OAuth](./github-oauth.md) |
 
-## See Also
+## See also
 
-- [BYOK Setup Guide](../auth/byok.md) — Static API key configuration
-- [Backend Services](./backend-services.md) — Server-side deployment
-- [Azure Identity documentation](https://learn.microsoft.com/python/api/overview/azure/identity-readme)
+* [BYOK Setup Guide](../auth/byok.md): Static API key configuration
+* [Backend Services](./backend-services.md): Server-side deployment
+* [Azure Identity documentation](https://learn.microsoft.com/python/api/overview/azure/identity-readme)
