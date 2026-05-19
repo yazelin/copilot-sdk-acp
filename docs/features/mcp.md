@@ -1,20 +1,21 @@
-# Using MCP Servers with the GitHub Copilot SDK
+# Using MCP servers with the GitHub Copilot SDK
 
 The Copilot SDK can integrate with **MCP servers** (Model Context Protocol) to extend the assistant's capabilities with external tools. MCP servers run as separate processes and expose tools (functions) that Copilot can invoke during conversations.
 
-> **Note:** This is an evolving feature. See [issue #36](https://github.com/github/copilot-sdk/issues/36) for ongoing discussion.
+> [!NOTE]
+> This is an evolving feature. See [issue #36](https://github.com/github/copilot-sdk/issues/36) for ongoing discussion.
 
 ## What is MCP?
 
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) is an open standard for connecting AI assistants to external tools and data sources. MCP servers can:
 
-- Execute code or scripts
-- Query databases
-- Access file systems
-- Call external APIs
-- And much more
+* Execute code or scripts
+* Query databases
+* Access file systems
+* Call external APIs
+* And much more
 
-## Server Types
+## Server types
 
 The SDK supports two types of MCP servers:
 
@@ -60,37 +61,33 @@ const session = await client.createSession({
 ```python
 import asyncio
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 async def main():
     client = CopilotClient()
     await client.start()
 
-    session = await client.create_session({
-        "model": "gpt-5",
-        "mcp_servers": {
-            # Local MCP server (stdio)
-            "my-local-server": {
-                "type": "local",
-                "command": "python",
-                "args": ["./mcp_server.py"],
-                "env": {"DEBUG": "true"},
-                "cwd": "./servers",
-                "tools": ["*"],
-                "timeout": 30000,
-            },
-            # Remote MCP server (HTTP)
-            "github": {
-                "type": "http",
-                "url": "https://api.githubcopilot.com/mcp/",
-                "headers": {"Authorization": "Bearer ${TOKEN}"},
-                "tools": ["*"],
-            },
+    session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-5", mcp_servers={
+        # Local MCP server (stdio)
+        "my-local-server": {
+            "type": "local",
+            "command": "python",
+            "args": ["./mcp_server.py"],
+            "env": {"DEBUG": "true"},
+            "cwd": "./servers",
+            "tools": ["*"],
+            "timeout": 30000,
+        },
+        # Remote MCP server (HTTP)
+        "github": {
+            "type": "http",
+            "url": "https://api.githubcopilot.com/mcp/",
+            "headers": {"Authorization": "Bearer ${TOKEN}"},
+            "tools": ["*"],
         },
     })
 
-    response = await session.send_and_wait({
-        "prompt": "List my recent GitHub notifications"
-    })
+    response = await session.send_and_wait("List my recent GitHub notifications")
     print(response.data.content)
 
     await client.stop()
@@ -117,15 +114,13 @@ func main() {
     }
     defer client.Stop()
 
-    // MCPServerConfig is map[string]any for flexibility
     session, err := client.CreateSession(ctx, &copilot.SessionConfig{
         Model: "gpt-5",
         MCPServers: map[string]copilot.MCPServerConfig{
-            "my-local-server": {
-                "type":    "local",
-                "command": "node",
-                "args":    []string{"./mcp-server.js"},
-                "tools":   []string{"*"},
+            "my-local-server": copilot.MCPStdioServerConfig{
+                Command: "node",
+                Args:    []string{"./mcp-server.js"},
+                Tools:   []string{"*"},
             },
         },
     })
@@ -147,11 +142,10 @@ await using var client = new CopilotClient();
 await using var session = await client.CreateSessionAsync(new SessionConfig
 {
     Model = "gpt-5",
-    McpServers = new Dictionary<string, object>
+    McpServers = new Dictionary<string, McpServerConfig>
     {
-        ["my-local-server"] = new McpLocalServerConfig
+        ["my-local-server"] = new McpStdioServerConfig
         {
-            Type = "local",
             Command = "node",
             Args = new List<string> { "./mcp-server.js" },
             Tools = new List<string> { "*" },
@@ -160,7 +154,42 @@ await using var session = await client.CreateSessionAsync(new SessionConfig
 });
 ```
 
-## Quick Start: Filesystem MCP Server
+## Tool configuration
+
+You can control which tools are available to an MCP server using the `tools` field.
+
+### Allow all tools
+
+Use `"*"` to enable all tools provided by the MCP server:
+
+```typescript
+tools: ["*"]
+```
+
+### Allow specific tools
+
+Provide a list of tool names to restrict access:
+
+```typescript
+tools: ["bash", "edit"]
+```
+
+Only the listed tools will be available to the agent.
+
+### Disable all tools
+
+Use an empty array to disable all tools:
+
+```typescript
+tools: []
+```
+
+### Notes
+
+* The `tools` field defines which tools are allowed.
+* There is no separate `allow` or `disallow` configuration—tool access is controlled directly through this list.
+
+## Quick start: filesystem MCP server
 
 Here's a complete working example using the official [`@modelcontextprotocol/server-filesystem`](https://www.npmjs.com/package/@modelcontextprotocol/server-filesystem) MCP server:
 
@@ -206,11 +235,12 @@ and subdirectories including temporary system files, log files, and
 directories for different applications.
 ```
 
-> **Tip:** You can use any MCP server from the [MCP Servers Directory](https://github.com/modelcontextprotocol/servers). Popular options include `@modelcontextprotocol/server-github`, `@modelcontextprotocol/server-sqlite`, and `@modelcontextprotocol/server-puppeteer`.
+> [!TIP]
+> You can use any MCP server from the [MCP Servers Directory](https://github.com/modelcontextprotocol/servers). Popular options include `@modelcontextprotocol/server-github`, `@modelcontextprotocol/server-sqlite`, and `@modelcontextprotocol/server-puppeteer`.
 
-## Configuration Options
+## Configuration options
 
-### Local/Stdio Server
+### Local/stdio server
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
@@ -222,7 +252,7 @@ directories for different applications.
 | `tools` | `string[]` | No | Tools to enable (`["*"]` for all, `[]` for none) |
 | `timeout` | `number` | No | Timeout in milliseconds |
 
-### Remote Server (HTTP/SSE)
+### Remote server (HTTP/SSE)
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
@@ -237,17 +267,17 @@ directories for different applications.
 ### Tools not showing up or not being invoked
 
 1. **Verify the MCP server starts correctly**
-   - Check that the command and args are correct
-   - Ensure the server process doesn't crash on startup
-   - Look for error output in stderr
+   * Check that the command and args are correct
+   * Ensure the server process doesn't crash on startup
+   * Look for error output in stderr
 
-2. **Check tool configuration**
-   - Make sure `tools` is set to `["*"]` or lists the specific tools you need
-   - An empty array `[]` means no tools are enabled
+1. **Check tool configuration**
+   * Make sure `tools` is set to `["*"]` or lists the specific tools you need
+   * An empty array `[]` means no tools are enabled
 
-3. **Verify connectivity for remote servers**
-   - Ensure the URL is accessible
-   - Check that authentication headers are correct
+1. **Verify connectivity for remote servers**
+   * Ensure the URL is accessible
+   * Check that authentication headers are correct
 
 ### Common issues
 
@@ -260,16 +290,16 @@ directories for different applications.
 
 For detailed debugging guidance, see the **[MCP Debugging Guide](../troubleshooting/mcp-debugging.md)**.
 
-## Related Resources
+## Related resources
 
-- [Model Context Protocol Specification](https://modelcontextprotocol.io/)
-- [MCP Servers Directory](https://github.com/modelcontextprotocol/servers) - Community MCP servers
-- [GitHub MCP Server](https://github.com/github/github-mcp-server) - Official GitHub MCP server
-- [Getting Started Guide](../getting-started.md) - SDK basics and custom tools
-- [General Debugging Guide](.../troubleshooting/mcp-debugging.md) - SDK-wide debugging
+* [Model Context Protocol Specification](https://modelcontextprotocol.io/)
+* [MCP Servers Directory](https://github.com/modelcontextprotocol/servers) - Community MCP servers
+* [GitHub MCP Server](https://github.com/github/github-mcp-server) - Official GitHub MCP server
+* [Getting Started Guide](../getting-started.md) - SDK basics and custom tools
+* [General Debugging Guide](../troubleshooting/debugging.md) - SDK-wide debugging
 
-## See Also
+## See also
 
-- [MCP Debugging Guide](../troubleshooting/mcp-debugging.md) - Detailed MCP troubleshooting
-- [Issue #9](https://github.com/github/copilot-sdk/issues/9) - Original MCP tools usage question
-- [Issue #36](https://github.com/github/copilot-sdk/issues/36) - MCP documentation tracking issue
+* [MCP Debugging Guide](../troubleshooting/mcp-debugging.md) - Detailed MCP troubleshooting
+* [Issue #9](https://github.com/github/copilot-sdk/issues/9) - Original MCP tools usage question
+* [Issue #36](https://github.com/github/copilot-sdk/issues/36) - MCP documentation tracking issue
