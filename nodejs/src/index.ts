@@ -10,27 +10,73 @@
 
 export { CopilotClient } from "./client.js";
 export { CopilotSession, type AssistantMessageEvent } from "./session.js";
-export { defineTool, approveAll } from "./types.js";
+export {
+    defineTool,
+    approveAll,
+    convertMcpCallToolResult,
+    createSessionFsAdapter,
+    SYSTEM_PROMPT_SECTIONS,
+} from "./types.js";
+// Re-export the generated session-event types (every *Event interface and
+// its corresponding *Data payload type, plus supporting unions/aliases) so
+// consumers can import them directly from "@github/copilot-sdk" instead of
+// reaching into the package's internal dist layout. See issue #1156.
+//
+// Three names from this file are also explicitly exported elsewhere in this
+// module — `SessionEvent` (re-exported below from `./types.js`),
+// `PermissionRequest` (re-exported below from `./types.js`), and
+// `AssistantMessageEvent` (re-exported above from `./session.js`). Per the
+// ECMAScript module spec, the explicit named re-exports shadow the names
+// arriving via `export type *`, so the hand-authored public API surface for
+// those three identifiers is preserved unchanged.
+export type * from "./generated/session-events.js";
 export type {
+    CommandContext,
+    CommandDefinition,
+    CommandHandler,
+    CloudSessionOptions,
+    CloudSessionRepository,
+    AutoModeSwitchHandler,
+    AutoModeSwitchRequest,
+    AutoModeSwitchResponse,
     ConnectionState,
     CopilotClientOptions,
     CustomAgentConfig,
+    ElicitationFieldValue,
+    ElicitationHandler,
+    ElicitationParams,
+    ElicitationContext,
+    ElicitationResult,
+    ElicitationSchema,
+    ElicitationSchemaField,
+    ExitPlanModeHandler,
+    ExitPlanModeRequest,
+    ExitPlanModeResult,
     ForegroundSessionInfo,
     GetAuthStatusResponse,
     GetStatusResponse,
     InfiniteSessionConfig,
-    MCPLocalServerConfig,
-    MCPRemoteServerConfig,
+    InputOptions,
+    MCPStdioServerConfig,
+    MCPHTTPServerConfig,
     MCPServerConfig,
+    DefaultAgentConfig,
     MessageOptions,
     ModelBilling,
     ModelCapabilities,
+    ModelCapabilitiesOverride,
     ModelInfo,
     ModelPolicy,
     PermissionHandler,
     PermissionRequest,
     PermissionRequestResult,
+    ProviderConfig,
+    RemoteSessionMode,
     ResumeSessionConfig,
+    SectionOverride,
+    SectionOverrideAction,
+    SectionTransformFn,
+    SessionCapabilities,
     SessionConfig,
     SessionEvent,
     SessionEventHandler,
@@ -42,9 +88,21 @@ export type {
     SessionContext,
     SessionListFilter,
     SessionMetadata,
+    SessionUiApi,
+    SessionFsConfig,
+    SessionFsProvider,
+    SessionFsFileInfo,
+    SessionFsSqliteQueryResult,
+    SessionFsSqliteQueryType,
+    SessionFsSqliteProvider,
     SystemMessageAppendConfig,
     SystemMessageConfig,
+    SystemMessageCustomizeConfig,
     SystemMessageReplaceConfig,
+    SystemPromptSection,
+    TelemetryConfig,
+    TraceContext,
+    TraceContextProvider,
     Tool,
     ToolHandler,
     ToolInvocation,
