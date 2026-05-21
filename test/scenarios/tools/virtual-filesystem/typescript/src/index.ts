@@ -1,4 +1,4 @@
-import { CopilotClient, defineTool } from "@github/copilot-sdk";
+import { CopilotClient, defineTool , RuntimeConnection } from "@github/copilot-sdk";
 import { z } from "zod";
 
 // In-memory virtual filesystem
@@ -39,10 +39,8 @@ const listFiles = defineTool("list_files", {
 
 async function main() {
   const client = new CopilotClient({
-    ...(process.env.COPILOT_CLI_PATH && {
-      cliPath: process.env.COPILOT_CLI_PATH,
-    }),
-    githubToken: process.env.GITHUB_TOKEN,
+    connection: RuntimeConnection.forStdio({ path: process.env.COPILOT_CLI_PATH }),
+    gitHubToken: process.env.GITHUB_TOKEN,
   });
 
   try {
@@ -51,7 +49,7 @@ async function main() {
       // Remove all built-in tools — only our custom virtual FS tools are available
       availableTools: [],
       tools: [createFile, readFile, listFiles],
-      onPermissionRequest: async () => ({ kind: "approved" as const }),
+      onPermissionRequest: async () => ({ kind: "approve-once" as const }),
       hooks: {
         onPreToolUse: async () => ({ permissionDecision: "allow" as const }),
       },

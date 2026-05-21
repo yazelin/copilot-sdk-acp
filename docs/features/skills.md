@@ -1,18 +1,18 @@
-# Custom Skills
+# Custom skills
 
 Skills are reusable prompt modules that extend Copilot's capabilities. Load skills from directories to give Copilot specialized abilities for specific domains or workflows.
 
 ## Overview
 
-A skill is a named directory containing a `SKILL.md` file — a markdown document that provides instructions to Copilot. When loaded, the skill's content is injected into the session context.
+A skill is a named directory containing a `SKILL.md` file—a markdown document that provides instructions to Copilot. When loaded, the skill's content is injected into the session context.
 
 Skills allow you to:
-- Package domain expertise into reusable modules
-- Share specialized behaviors across projects
-- Organize complex agent configurations
-- Enable/disable capabilities per session
+* Package domain expertise into reusable modules
+* Share specialized behaviors across projects
+* Organize complex agent configurations
+* Enable/disable capabilities per session
 
-## Loading Skills
+## Loading skills
 
 Specify directories containing skills when creating a session:
 
@@ -29,7 +29,7 @@ const session = await client.createSession({
         "./skills/code-review",
         "./skills/documentation",
     ],
-    onPermissionRequest: async () => ({ kind: "approved" }),
+    onPermissionRequest: async () => ({ kind: "approve-once" }),
 });
 
 // Copilot now has access to skills in those directories
@@ -43,23 +43,23 @@ await session.sendAndWait({ prompt: "Review this code for security issues" });
 
 ```python
 from copilot import CopilotClient
-from copilot.types import PermissionRequestResult
+from copilot.session import PermissionRequestResult
 
 async def main():
     client = CopilotClient()
     await client.start()
 
-    session = await client.create_session({
-        "model": "gpt-4.1",
-        "skill_directories": [
+    session = await client.create_session(
+        on_permission_request=lambda req, inv: PermissionRequestResult(kind="approve-once"),
+        model="gpt-4.1",
+        skill_directories=[
             "./skills/code-review",
             "./skills/documentation",
         ],
-        "on_permission_request": lambda req, inv: PermissionRequestResult(kind="approved"),
-    })
+    )
 
     # Copilot now has access to skills in those directories
-    await session.send_and_wait({"prompt": "Review this code for security issues"})
+    await session.send_and_wait("Review this code for security issues")
 
     await client.stop()
 ```
@@ -116,7 +116,7 @@ func main() {
 <summary><strong>.NET</strong></summary>
 
 ```csharp
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 await using var client = new CopilotClient();
 await using var session = await client.CreateSessionAsync(new SessionConfig
@@ -140,7 +140,38 @@ await session.SendAndWaitAsync(new MessageOptions
 
 </details>
 
-## Disabling Skills
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+import java.util.List;
+
+try (var client = new CopilotClient()) {
+    client.start().get();
+
+    var session = client.createSession(
+        new SessionConfig()
+            .setModel("gpt-4.1")
+            .setSkillDirectories(List.of(
+                "./skills/code-review",
+                "./skills/documentation"
+            ))
+            .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    ).get();
+
+    // Copilot now has access to skills in those directories
+    session.sendAndWait(new MessageOptions()
+        .setPrompt("Review this code for security issues")
+    ).get();
+}
+```
+
+</details>
+
+## Disabling skills
 
 Disable specific skills while keeping others active:
 
@@ -160,10 +191,13 @@ const session = await client.createSession({
 <summary><strong>Python</strong></summary>
 
 ```python
-session = await client.create_session({
-    "skill_directories": ["./skills"],
-    "disabled_skills": ["experimental-feature", "deprecated-tool"],
-})
+from copilot.session import PermissionHandler
+
+session = await client.create_session(
+    on_permission_request=PermissionHandler.approve_all,
+    skill_directories=["./skills"],
+    disabled_skills=["experimental-feature", "deprecated-tool"],
+)
 ```
 
 </details>
@@ -210,7 +244,7 @@ session, _ := client.CreateSession(context.Background(), &copilot.SessionConfig{
 
 <!-- docs-validate: hidden -->
 ```csharp
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 public static class SkillsExample
 {
@@ -240,7 +274,24 @@ var session = await client.CreateSessionAsync(new SessionConfig
 
 </details>
 
-## Skill Directory Structure
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.json.*;
+import java.util.List;
+
+var session = client.createSession(
+    new SessionConfig()
+        .setSkillDirectories(List.of("./skills"))
+        .setDisabledSkills(List.of("experimental-feature", "deprecated-tool"))
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+).get();
+```
+
+</details>
+
+## Skill directory structure
 
 Each skill is a named subdirectory containing a `SKILL.md` file:
 
@@ -254,7 +305,7 @@ skills/
 
 The `skillDirectories` option points to the parent directory (e.g., `./skills`). The CLI discovers all `SKILL.md` files in immediate subdirectories.
 
-### SKILL.md Format
+### SKILL.md format
 
 A `SKILL.md` file is a markdown document with optional YAML frontmatter:
 
@@ -277,14 +328,14 @@ Provide specific line-number references and suggested fixes.
 ```
 
 The frontmatter fields:
-- **`name`** — The skill's identifier (used with `disabledSkills` to selectively disable it). If omitted, the directory name is used.
-- **`description`** — A short description of what the skill does.
+* **`name`**: The skill's identifier (used with `disabledSkills` to selectively disable it). If omitted, the directory name is used.
+* **`description`**: A short description of what the skill does.
 
 The markdown body contains the instructions that are injected into the session context when the skill is loaded.
 
-## Configuration Options
+## Configuration options
 
-### SessionConfig Skill Fields
+### SessionConfig skill fields
 
 | Language | Field | Type | Description |
 |----------|-------|------|-------------|
@@ -297,23 +348,23 @@ The markdown body contains the instructions that are injected into the session c
 | .NET | `SkillDirectories` | `List<string>` | Directories to load skills from |
 | .NET | `DisabledSkills` | `List<string>` | Skills to disable |
 
-## Best Practices
+## Best practices
 
 1. **Organize by domain** - Group related skills together (e.g., `skills/security/`, `skills/testing/`)
 
-2. **Use frontmatter** - Include `name` and `description` in YAML frontmatter for clarity
+1. **Use frontmatter** - Include `name` and `description` in YAML frontmatter for clarity
 
-3. **Document dependencies** - Note any tools or MCP servers a skill requires
+1. **Document dependencies** - Note any tools or MCP servers a skill requires
 
-4. **Test skills in isolation** - Verify skills work before combining them
+1. **Test skills in isolation** - Verify skills work before combining them
 
-5. **Use relative paths** - Keep skills portable across environments
+1. **Use relative paths** - Keep skills portable across environments
 
-## Combining with Other Features
+## Combining with other features
 
-### Skills + Custom Agents
+### Skills + custom agents
 
-Skills work alongside custom agents:
+Skills listed in an agent's `skills` field are **eagerly preloaded**—their full content is injected into the agent's context at startup, so the agent has access to the skill instructions immediately without needing to invoke a skill tool. Skill names are resolved from the session-level `skillDirectories`.
 
 ```typescript
 const session = await client.createSession({
@@ -322,12 +373,15 @@ const session = await client.createSession({
         name: "security-auditor",
         description: "Security-focused code reviewer",
         prompt: "Focus on OWASP Top 10 vulnerabilities",
+        skills: ["security-scan", "dependency-check"],
     }],
-    onPermissionRequest: async () => ({ kind: "approved" }),
+    onPermissionRequest: async () => ({ kind: "approve-once" }),
 });
 ```
+> [!NOTE]
+> Skills are opt-in—when `skills` is omitted, no skill content is injected. Sub-agents do not inherit skills from the parent; you must list them explicitly per agent.
 
-### Skills + MCP Servers
+### Skills + MCP servers
 
 Skills can complement MCP server capabilities:
 
@@ -342,27 +396,27 @@ const session = await client.createSession({
             tools: ["*"],
         },
     },
-    onPermissionRequest: async () => ({ kind: "approved" }),
+    onPermissionRequest: async () => ({ kind: "approve-once" }),
 });
 ```
 
 ## Troubleshooting
 
-### Skills Not Loading
+### Skills not loading
 
 1. **Check path exists** - Verify the skill directory path is correct and contains subdirectories with `SKILL.md` files
-2. **Check permissions** - Ensure the SDK can read the directory
-3. **Check SKILL.md format** - Verify the markdown is well-formed and any YAML frontmatter uses valid syntax
-4. **Enable debug logging** - Set `logLevel: "debug"` to see skill loading logs
+1. **Check permissions** - Ensure the SDK can read the directory
+1. **Check SKILL.md format** - Verify the markdown is well-formed and any YAML frontmatter uses valid syntax
+1. **Enable debug logging** - Set `logLevel: "debug"` to see skill loading logs
 
-### Skill Conflicts
+### Skill conflicts
 
 If multiple skills provide conflicting instructions:
-- Use `disabledSkills` to exclude conflicting skills
-- Reorganize skill directories to avoid overlaps
+* Use `disabledSkills` to exclude conflicting skills
+* Reorganize skill directories to avoid overlaps
 
-## See Also
+## See also
 
-- [Custom Agents](../getting-started.md#create-custom-agents) - Define specialized AI personas
-- [Custom Tools](../getting-started.md#step-4-add-a-custom-tool) - Build your own tools
-- [MCP Servers](./mcp.md) - Connect external tool providers
+* [Custom Agents](../getting-started.md#create-custom-agents) - Define specialized AI personas
+* [Custom Tools](../getting-started.md#step-4-add-a-custom-tool) - Build your own tools
+* [MCP Servers](./mcp.md) - Connect external tool providers

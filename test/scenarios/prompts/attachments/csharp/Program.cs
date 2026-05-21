@@ -1,8 +1,8 @@
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 using var client = new CopilotClient(new CopilotClientOptions
 {
-    CliPath = Environment.GetEnvironmentVariable("COPILOT_CLI_PATH"),
+    Connection = RuntimeConnection.ForStdio(path: Environment.GetEnvironmentVariable("COPILOT_CLI_PATH")),
     GitHubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN"),
 });
 
@@ -24,7 +24,7 @@ try
         Prompt = "What languages are listed in the attached file?",
         Attachments =
         [
-            new UserMessageDataAttachmentsItemFile { Path = sampleFile, DisplayName = "sample-data.txt" },
+            new UserMessageAttachmentFile { Path = sampleFile, DisplayName = "sample-data.txt" },
         ],
     });
 

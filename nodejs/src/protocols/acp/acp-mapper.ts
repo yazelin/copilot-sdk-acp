@@ -12,7 +12,7 @@ import type {
     SessionEvent,
     SessionConfig,
     MessageOptions,
-    MCPLocalServerConfig,
+    MCPStdioServerConfig,
 } from "../../types.js";
 import type {
     AcpContentPart,
@@ -299,7 +299,7 @@ export function copilotSessionConfigToAcpParams(config: SessionConfig): AcpSessi
                 continue;
             }
 
-            const localConfig = serverConfig as MCPLocalServerConfig;
+            const localConfig = serverConfig as MCPStdioServerConfig;
             const acpConfig: AcpMcpServerConfig = {
                 command: localConfig.command,
                 args: localConfig.args,
