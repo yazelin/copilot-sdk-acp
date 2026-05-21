@@ -1,8 +1,8 @@
-# BYOK (Bring Your Own Key)
+# BYOK (bring your own key)
 
 BYOK allows you to use the Copilot SDK with your own API keys from model providers, bypassing GitHub Copilot authentication. This is useful for enterprise deployments, custom model hosting, or when you want direct billing with your model provider.
 
-## Supported Providers
+## Supported providers
 
 | Provider | Type Value | Notes |
 |----------|------------|-------|
@@ -13,7 +13,7 @@ BYOK allows you to use the Copilot SDK with your own API keys from model provide
 | Microsoft Foundry Local | `"openai"` | Run AI models locally on your device via OpenAI-compatible API |
 | Other OpenAI-compatible | `"openai"` | vLLM, LiteLLM, etc. |
 
-## Quick Start: Azure AI Foundry
+## Quick start: Azure AI Foundry
 
 Azure AI Foundry (formerly Azure OpenAI) is a common BYOK deployment target for enterprises. Here's a complete example:
 
@@ -24,6 +24,7 @@ Azure AI Foundry (formerly Azure OpenAI) is a common BYOK deployment target for 
 import asyncio
 import os
 from copilot import CopilotClient
+from copilot.session import PermissionHandler
 
 FOUNDRY_MODEL_URL = "https://your-resource.openai.azure.com/openai/v1/"
 # Set FOUNDRY_API_KEY environment variable
@@ -32,14 +33,11 @@ async def main():
     client = CopilotClient()
     await client.start()
 
-    session = await client.create_session({
-        "model": "gpt-5.2-codex",  # Your deployment name
-        "provider": {
-            "type": "openai",
-            "base_url": FOUNDRY_MODEL_URL,
-            "wire_api": "responses",  # Use "completions" for older models
-            "api_key": os.environ["FOUNDRY_API_KEY"],
-        },
+    session = await client.create_session(on_permission_request=PermissionHandler.approve_all, model="gpt-5.2-codex", provider={
+        "type": "openai",
+        "base_url": FOUNDRY_MODEL_URL,
+        "wire_api": "responses",  # Use "completions" for older models
+        "api_key": os.environ["FOUNDRY_API_KEY"],
     })
 
     done = asyncio.Event()
@@ -51,7 +49,7 @@ async def main():
             done.set()
 
     session.on(on_event)
-    await session.send({"prompt": "What is 2+2?"})
+    await session.send("What is 2+2?")
     await done.wait()
 
     await session.disconnect()
@@ -132,7 +130,9 @@ func main() {
         panic(err)
     }
 
-    fmt.Println(*response.Data.Content)
+    if d, ok := response.Data.(*copilot.AssistantMessageData); ok {
+        fmt.Println(d.Content)
+    }
 }
 ```
 
@@ -166,9 +166,39 @@ Console.WriteLine(response?.Data.Content);
 
 </details>
 
-## Provider Configuration Reference
+<details>
+<summary><strong>Java</strong></summary>
 
-### ProviderConfig Fields
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.events.*;
+import com.github.copilot.sdk.json.*;
+
+var client = new CopilotClient();
+client.start().get();
+
+var session = client.createSession(new SessionConfig()
+    .setModel("gpt-5.2-codex")  // Your deployment name
+    .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+    .setProvider(new ProviderConfig()
+        .setType("openai")
+        .setBaseUrl("https://your-resource.openai.azure.com/openai/v1/")
+        .setWireApi("responses")  // Use "completions" for older models
+        .setApiKey(System.getenv("FOUNDRY_API_KEY")))
+).get();
+
+var response = session.sendAndWait(new MessageOptions()
+    .setPrompt("What is 2+2?")).get();
+System.out.println(response.getData().content());
+
+client.stop().get();
+```
+
+</details>
+
+## Provider configuration reference
+
+### ProviderConfig fields
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -179,31 +209,31 @@ Console.WriteLine(response?.Data.Content);
 | `wireApi` / `wire_api` | `"completions"` \| `"responses"` | API format (default: `"completions"`) |
 | `azure.apiVersion` / `azure.api_version` | string | Azure API version (default: `"2024-10-21"`) |
 
-### Wire API Format
+### Wire API format
 
 The `wireApi` setting determines which OpenAI API format to use:
 
-- **`"completions"`** (default) - Chat Completions API (`/chat/completions`). Use for most models.
-- **`"responses"`** - Responses API. Use for GPT-5 series models that support the newer responses format.
+* **`"completions"`** (default) - Chat Completions API (`/chat/completions`). Use for most models.
+* **`"responses"`** - Responses API. Use for GPT-5 series models that support the newer responses format.
 
-### Type-Specific Notes
+### Type-specific notes
 
 **OpenAI (`type: "openai"`)**
-- Works with OpenAI API and any OpenAI-compatible endpoint
-- `baseUrl` should include the full path (e.g., `https://api.openai.com/v1`)
+* Works with OpenAI API and any OpenAI-compatible endpoint
+* `baseUrl` should include the full path (e.g., `https://api.openai.com/v1`)
 
 **Azure (`type: "azure"`)**
-- Use for native Azure OpenAI endpoints
-- `baseUrl` should be just the host (e.g., `https://my-resource.openai.azure.com`)
-- Do NOT include `/openai/v1` in the URL—the SDK handles path construction
+* Use for native Azure OpenAI endpoints
+* `baseUrl` should be just the host (e.g., `https://my-resource.openai.azure.com`)
+* Do NOT include `/openai/v1` in the URL—the SDK handles path construction
 
 **Anthropic (`type: "anthropic"`)**
-- For direct Anthropic API access
-- Uses Claude-specific API format
+* For direct Anthropic API access
+* Uses Claude-specific API format
 
-## Example Configurations
+## Example configurations
 
-### OpenAI Direct
+### OpenAI direct
 
 ```typescript
 provider: {
@@ -213,7 +243,7 @@ provider: {
 }
 ```
 
-### Azure OpenAI (Native Azure Endpoint)
+### Azure OpenAI (native Azure endpoint)
 
 Use `type: "azure"` for endpoints at `*.openai.azure.com`:
 
@@ -228,7 +258,7 @@ provider: {
 }
 ```
 
-### Azure AI Foundry (OpenAI-Compatible Endpoint)
+### Azure AI Foundry (OpenAI-compatible endpoint)
 
 For Azure AI Foundry deployments with `/openai/v1/` endpoints, use `type: "openai"`:
 
@@ -241,7 +271,7 @@ provider: {
 }
 ```
 
-### Ollama (Local)
+### Ollama (local)
 
 ```typescript
 provider: {
@@ -263,7 +293,8 @@ provider: {
 }
 ```
 
-> **Note:** Foundry Local starts on a **dynamic port** — the port is not fixed. Use `foundry service status` to confirm the port the service is currently listening on, then use that port in your `baseUrl`.
+> [!NOTE]
+> Foundry Local starts on a **dynamic port**—the port is not fixed. Use `foundry service status` to confirm the port the service is currently listening on, then use that port in your `baseUrl`.
 
 To get started with Foundry Local:
 
@@ -292,7 +323,7 @@ provider: {
 }
 ```
 
-### Bearer Token Authentication
+### Bearer token authentication
 
 Some providers require bearer token authentication instead of API keys:
 
@@ -304,9 +335,10 @@ provider: {
 }
 ```
 
-> **Note:** The `bearerToken` option accepts a **static token string** only. The SDK does not refresh this token automatically. If your token expires, requests will fail and you'll need to create a new session with a fresh token.
+> [!NOTE]
+> The `bearerToken` option accepts a **static token string** only. The SDK does not refresh this token automatically. If your token expires, requests will fail and you'll need to create a new session with a fresh token.
 
-## Custom Model Listing
+## Custom model listing
 
 When using BYOK, the CLI server may not know which models your provider supports. You can supply a custom `onListModels` handler at the client level so that `client.listModels()` returns your provider's models in the standard `ModelInfo` format. This lets downstream consumers discover available models without querying the CLI.
 
@@ -338,7 +370,7 @@ const client = new CopilotClient({
 
 ```python
 from copilot import CopilotClient
-from copilot.types import ModelInfo, ModelCapabilities, ModelSupports, ModelLimits
+from copilot.client import ModelInfo, ModelCapabilities, ModelSupports, ModelLimits
 
 client = CopilotClient({
     "on_list_models": lambda: [
@@ -396,7 +428,7 @@ using GitHub.Copilot.SDK;
 
 var client = new CopilotClient(new CopilotClientOptions
 {
-    OnListModels = (ct) => Task.FromResult(new List<ModelInfo>
+    OnListModels = (ct) => Task.FromResult<IList<ModelInfo>>(new List<ModelInfo>
     {
         new()
         {
@@ -414,34 +446,51 @@ var client = new CopilotClient(new CopilotClientOptions
 
 </details>
 
-Results are cached after the first call, just like the default behavior. The handler completely replaces the CLI's `models.list` RPC — no fallback to the server occurs.
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.CopilotClient;
+import com.github.copilot.sdk.json.*;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+var client = new CopilotClient(new CopilotClientOptions()
+    .setOnListModels(() -> CompletableFuture.completedFuture(List.of(
+        new ModelInfo()
+            .setId("my-custom-model")
+            .setName("My Custom Model")
+            .setCapabilities(new ModelCapabilities()
+                .setSupports(new ModelSupports().setVision(false).setReasoningEffort(false))
+                .setLimits(new ModelLimits().setMaxContextWindowTokens(128000)))
+    )))
+);
+```
+
+</details>
+
+Results are cached after the first call, just like the default behavior. The handler completely replaces the CLI's `models.list` RPC—no fallback to the server occurs.
 
 ## Limitations
 
 When using BYOK, be aware of these limitations:
 
-### Identity Limitations
+### Identity limitations
 
-BYOK authentication uses **static credentials only**. The following identity providers are NOT supported:
-
-- ❌ **Microsoft Entra ID (Azure AD)** - No support for Entra managed identities or service principals
-- ❌ **Third-party identity providers** - No OIDC, SAML, or other federated identity
-- ❌ **Managed identities** - Azure Managed Identity is not supported
+BYOK authentication uses **static credentials only**. 
 
 You must use an API key or static bearer token that you manage yourself.
 
-**Why not Entra ID?** While Entra ID does issue bearer tokens, these tokens are short-lived (typically 1 hour) and require automatic refresh via the Azure Identity SDK. The `bearerToken` option only accepts a static string—there is no callback mechanism for the SDK to request fresh tokens. For long-running workloads requiring Entra authentication, you would need to implement your own token refresh logic and create new sessions with updated tokens.
-
-### Feature Limitations
+### Feature limitations
 
 Some Copilot features may behave differently with BYOK:
 
-- **Model availability** - Only models supported by your provider are available
-- **Rate limiting** - Subject to your provider's rate limits, not Copilot's
-- **Usage tracking** - Usage is tracked by your provider, not GitHub Copilot
-- **Premium requests** - Do not count against Copilot premium request quotas
+* **Model availability** - Only models supported by your provider are available
+* **Rate limiting** - Subject to your provider's rate limits, not Copilot's
+* **Usage tracking** - Usage is tracked by your provider, not GitHub Copilot
+* **Premium requests** - Do not count against Copilot premium request quotas
 
-### Provider-Specific Limitations
+### Provider-specific limitations
 
 | Provider | Limitations |
 |----------|-------------|
@@ -452,7 +501,7 @@ Some Copilot features may behave differently with BYOK:
 
 ## Troubleshooting
 
-### "Model not specified" Error
+### "Model not specified" error
 
 When using BYOK, the `model` parameter is **required**:
 
@@ -469,7 +518,7 @@ const session = await client.createSession({
 });
 ```
 
-### Azure Endpoint Type Confusion
+### Azure endpoint type confusion
 
 For Azure OpenAI endpoints (`*.openai.azure.com`), use the correct type:
 
@@ -527,7 +576,7 @@ provider: {
 }
 ```
 
-### Connection Refused (Ollama)
+### Connection refused (Ollama)
 
 Ensure Ollama is running and accessible:
 
@@ -539,7 +588,7 @@ curl http://localhost:11434/v1/models
 ollama serve
 ```
 
-### Connection Refused (Foundry Local)
+### Connection refused (Foundry Local)
 
 Foundry Local uses a dynamic port that may change between restarts. Confirm the active port:
 
@@ -554,13 +603,13 @@ Update your `baseUrl` to match the port shown in the output. If the service is n
 foundry model run phi-4-mini
 ```
 
-### Authentication Failed
+### Authentication failed
 
 1. Verify your API key is correct and not expired
-2. Check the `baseUrl` matches your provider's expected format
-3. For bearer tokens, ensure the full token is provided (not just a prefix)
+1. Check the `baseUrl` matches your provider's expected format
+1. For bearer tokens, ensure the full token is provided (not just a prefix)
 
-## Next Steps
+## Next steps
 
-- [Authentication Overview](./index.md) - Learn about all authentication methods
-- [Getting Started Guide](../getting-started.md) - Build your first Copilot-powered app
+* [Authentication Overview](./index.md) - Learn about all authentication methods
+* [Getting Started Guide](../getting-started.md) - Build your first Copilot-powered app

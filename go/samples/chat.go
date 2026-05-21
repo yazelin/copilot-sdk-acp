@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/github/copilot-sdk/go"
+	copilot "github.com/github/copilot-sdk/go"
 )
 
 const blue = "\033[34m"
@@ -24,7 +24,6 @@ func main() {
 	defer client.Stop()
 
 	session, err := client.CreateSession(ctx, &copilot.SessionConfig{
-		CLIPath:             cliPath,
 		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
 	})
 	if err != nil {
@@ -34,22 +33,19 @@ func main() {
 
 	session.On(func(event copilot.SessionEvent) {
 		var output string
-		switch event.Type {
-		case copilot.AssistantReasoning:
-			if event.Data.Content != nil {
-				output = fmt.Sprintf("[reasoning: %s]", *event.Data.Content)
-			}
-		case copilot.ToolExecutionStart:
-			if event.Data.ToolName != nil {
-				output = fmt.Sprintf("[tool: %s]", *event.Data.ToolName)
-			}
+		switch d := event.Data.(type) {
+		case *copilot.AssistantReasoningData:
+			output = fmt.Sprintf("[reasoning: %s]", d.Content)
+		case *copilot.ToolExecutionStartData:
+			output = fmt.Sprintf("[tool: %s]", d.ToolName)
 		}
 		if output != "" {
 			fmt.Printf("%s%s%s\n", blue, output, reset)
 		}
 	})
 
-	fmt.Println("Chat with Copilot (Ctrl+C to exit)\n")
+	fmt.Println("Chat with Copilot (Ctrl+C to exit)")
+	fmt.Println()
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
@@ -65,8 +61,10 @@ func main() {
 
 		reply, _ := session.SendAndWait(ctx, copilot.MessageOptions{Prompt: input})
 		content := ""
-		if reply != nil && reply.Data.Content != nil {
-			content = *reply.Data.Content
+		if reply != nil {
+			if d, ok := reply.Data.(*copilot.AssistantMessageData); ok {
+				content = d.Content
+			}
 		}
 		fmt.Printf("\nAssistant: %s\n\n", content)
 	}
