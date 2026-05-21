@@ -127,25 +127,16 @@ jobs:
         run: |
           # GitHub Agentic Workflows (gh-aw) need COPILOT_GITHUB_TOKEN
           # which forks don't have — strip them so CI doesn't fail every sync.
-          EXCLUDE_PATHS=(
-            ".github/agents"
-            ".github/aw"
-            ".github/workflows/sdk-consistency-review.lock.yml"
-            ".github/workflows/sdk-consistency-review.md"
-            ".github/workflows/cross-repo-issue-analysis.lock.yml"
-            ".github/workflows/cross-repo-issue-analysis.md"
-            ".github/workflows/issue-triage.lock.yml"
-            ".github/workflows/issue-triage.md"
-            ".github/workflows/release-changelog.lock.yml"
-            ".github/workflows/release-changelog.md"
-          )
-          for path in "${EXCLUDE_PATHS[@]}"; do
-            if [ -e "$path" ]; then
-              echo "  排除: $path"
-              git rm -rf --ignore-unmatch "$path" 2>/dev/null || rm -rf "$path"
-            fi
+          # The set is open-ended (upstream keeps adding new agentic workflows),
+          # so use directory + suffix patterns rather than enumerating files.
+          rm -rf .github/agents .github/aw 2>/dev/null || true
+          # All gh-aw workflow lock files share the .lock.yml suffix.
+          find .github/workflows -maxdepth 1 -name "*.lock.yml" -print -delete 2>/dev/null || true
+          # Companion .md files for those workflows (best-effort enumeration).
+          for md in sdk-consistency-review cross-repo-issue-analysis issue-triage release-changelog \
+                    handle-bug handle-documentation handle-enhancement handle-question issue-classification; do
+            rm -f ".github/workflows/${md}.md" 2>/dev/null || true
           done
-          # Stage the removals (and any other resolved files)
           git add -A
 
       - name: Commit and push

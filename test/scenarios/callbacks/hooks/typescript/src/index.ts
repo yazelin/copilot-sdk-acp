@@ -1,17 +1,17 @@
-import { CopilotClient } from "@github/copilot-sdk";
+import { CopilotClient , RuntimeConnection } from "@github/copilot-sdk";
 
 async function main() {
   const hookLog: string[] = [];
 
   const client = new CopilotClient({
-    ...(process.env.COPILOT_CLI_PATH && { cliPath: process.env.COPILOT_CLI_PATH }),
-    githubToken: process.env.GITHUB_TOKEN,
+    connection: RuntimeConnection.forStdio({ path: process.env.COPILOT_CLI_PATH }),
+    gitHubToken: process.env.GITHUB_TOKEN,
   });
 
   try {
     const session = await client.createSession({
       model: "claude-haiku-4.5",
-      onPermissionRequest: async () => ({ kind: "approved" as const }),
+      onPermissionRequest: async () => ({ kind: "approve-once" as const }),
       hooks: {
         onSessionStart: async () => {
           hookLog.push("onSessionStart");

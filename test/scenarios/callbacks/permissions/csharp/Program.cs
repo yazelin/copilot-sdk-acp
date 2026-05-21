@@ -1,10 +1,10 @@
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 var permissionLog = new List<string>();
 
 using var client = new CopilotClient(new CopilotClientOptions
 {
-    CliPath = Environment.GetEnvironmentVariable("COPILOT_CLI_PATH"),
+    Connection = RuntimeConnection.ForStdio(path: Environment.GetEnvironmentVariable("COPILOT_CLI_PATH")),
     GitHubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN"),
 });
 
@@ -17,9 +17,15 @@ try
         Model = "claude-haiku-4.5",
         OnPermissionRequest = (request, invocation) =>
         {
-            var toolName = request.ExtensionData?.TryGetValue("toolName", out var value) == true
-                ? value?.ToString() ?? "unknown"
-                : "unknown";
+            var toolName = request switch
+            {
+                PermissionRequestCustomTool ct => ct.ToolName,
+                PermissionRequestShell sh => "shell",
+                PermissionRequestWrite wr => wr.FileName ?? "write",
+                PermissionRequestRead rd => rd.Path ?? "read",
+                PermissionRequestMcp mcp => mcp.ToolName ?? "mcp",
+                _ => request.Kind,
+            };
             permissionLog.Add($"approved:{toolName}");
             return Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved });
         },

@@ -1,11 +1,10 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 
 using var client = new CopilotClient(new CopilotClientOptions
 {
-    CliPath = Environment.GetEnvironmentVariable("COPILOT_CLI_PATH"),
+    Connection = RuntimeConnection.ForStdio(path: Environment.GetEnvironmentVariable("COPILOT_CLI_PATH")),
     GitHubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN"),
 });
 
@@ -17,11 +16,13 @@ try
     {
         Model = "claude-haiku-4.5",
         OnPermissionRequest = PermissionHandler.ApproveAll,
-        Tools = [AIFunctionFactory.Create((Delegate)CustomGrep, new AIFunctionFactoryOptions
+        Tools = [CopilotTool.DefineTool((Delegate)CustomGrep, new CopilotToolOptions
+        {
+            OverridesBuiltInTool = true
+        }, new AIFunctionFactoryOptions
         {
             Name = "grep",
-            AdditionalProperties = new ReadOnlyDictionary<string, object?>(
-                new Dictionary<string, object?> { ["is_override"] = true })
+            Description = "A custom grep implementation that overrides the built-in",
         })],
     });
 

@@ -1,41 +1,215 @@
-/*---------------------------------------------------------------------------------------------
+﻿/*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
+using GitHub.Copilot.Rpc;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Logging;
 
-namespace GitHub.Copilot.SDK;
+namespace GitHub.Copilot;
+
+internal static class GeneratedStringEnumJson
+{
+    internal static string ReadValue(ref Utf8JsonReader reader, Type typeToConvert)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            throw new JsonException($"Expected a string token when reading {typeToConvert.Name}, but found {reader.TokenType}.");
+        }
+
+        var value = reader.GetString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"Expected a non-empty string token when reading {typeToConvert.Name}.");
+        }
+
+        return value!;
+    }
+
+    internal static void WriteValue(Utf8JsonWriter writer, string value, Type typeToConvert)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"Expected a non-empty string value when writing {typeToConvert.Name}.");
+        }
+
+        writer.WriteStringValue(value);
+    }
+}
+
+/// <summary>Diagnostic IDs for the Copilot SDK.</summary>
+internal static class Diagnostics
+{
+    /// <summary>Indicates an experimental API that may change or be removed.</summary>
+    internal const string Experimental = "GHCP001";
+}
 
 /// <summary>
-/// Represents the connection state of the Copilot client.
+/// Log level for the Copilot runtime. Use the well-known values exposed as
+/// static members (<see cref="None"/>, <see cref="Error"/>, <see cref="Warning"/>,
+/// <see cref="Info"/>, <see cref="Debug"/>, <see cref="All"/>), or construct
+/// your own with <see cref="CopilotLogLevel(string)"/> if the runtime accepts
+/// additional values. The runtime does not necessarily treat the values as a
+/// linear scale, so do not assume <c>&lt;</c>/<c>&gt;</c> comparisons are meaningful.
 /// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter<ConnectionState>))]
-public enum ConnectionState
+[DebuggerDisplay("{Value,nq}")]
+public readonly struct CopilotLogLevel : IEquatable<CopilotLogLevel>
 {
-    /// <summary>The client is not connected to the server.</summary>
-    [JsonStringEnumMemberName("disconnected")]
-    Disconnected,
-    /// <summary>The client is establishing a connection to the server.</summary>
-    [JsonStringEnumMemberName("connecting")]
-    Connecting,
-    /// <summary>The client is connected and ready to communicate.</summary>
-    [JsonStringEnumMemberName("connected")]
-    Connected,
-    /// <summary>The connection is in an error state.</summary>
-    [JsonStringEnumMemberName("error")]
-    Error
+    /// <summary>Disable logging entirely.</summary>
+    public static CopilotLogLevel None { get; } = new("none");
+
+    /// <summary>Log only errors.</summary>
+    public static CopilotLogLevel Error { get; } = new("error");
+
+    /// <summary>Log warnings and errors.</summary>
+    public static CopilotLogLevel Warning { get; } = new("warning");
+
+    /// <summary>Log informational messages, warnings, and errors.</summary>
+    public static CopilotLogLevel Info { get; } = new("info");
+
+    /// <summary>Log debug-level diagnostics in addition to the above.</summary>
+    public static CopilotLogLevel Debug { get; } = new("debug");
+
+    /// <summary>Log every diagnostic the runtime emits.</summary>
+    public static CopilotLogLevel All { get; } = new("all");
+
+    /// <summary>Gets the underlying string value of this <see cref="CopilotLogLevel"/>.</summary>
+    public string Value => _value ?? string.Empty;
+
+    private readonly string? _value;
+
+    /// <summary>Initializes a new instance of the <see cref="CopilotLogLevel"/> struct.</summary>
+    /// <param name="value">The wire string value for this log level.</param>
+    public CopilotLogLevel(string value) => _value = value;
+
+    /// <inheritdoc/>
+    public static bool operator ==(CopilotLogLevel left, CopilotLogLevel right) => left.Equals(right);
+
+    /// <inheritdoc/>
+    public static bool operator !=(CopilotLogLevel left, CopilotLogLevel right) => !left.Equals(right);
+
+    /// <inheritdoc/>
+    public override bool Equals([NotNullWhen(true)] object? obj) => obj is CopilotLogLevel other && Equals(other);
+
+    /// <inheritdoc/>
+    public bool Equals(CopilotLogLevel other) => string.Equals(Value, other.Value, StringComparison.OrdinalIgnoreCase);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => StringComparer.OrdinalIgnoreCase.GetHashCode(Value);
+
+    /// <inheritdoc/>
+    public override string ToString() => Value;
+}
+
+/// <summary>
+/// Configures how a <see cref="CopilotClient"/> connects to the Copilot runtime.
+/// Use the factory methods on this class to construct an instance.
+/// </summary>
+public abstract class RuntimeConnection
+{
+    internal RuntimeConnection() { }
+
+    /// <summary>
+    /// Spawn a runtime child process and communicate over its stdin/stdout.
+    /// This is the default if no <see cref="CopilotClientOptions.Connection"/> is set.
+    /// </summary>
+    /// <param name="path">Path to the runtime executable. When <c>null</c>, the bundled runtime is used.</param>
+    /// <param name="args">Extra command-line arguments to pass to the runtime process.</param>
+    public static StdioRuntimeConnection ForStdio(string? path = null, IList<string>? args = null)
+        => new() { Path = path, Args = args };
+
+    /// <summary>
+    /// Spawn a runtime child process that listens on a TCP socket and connect to it.
+    /// </summary>
+    /// <param name="port">TCP port to listen on. <c>0</c> (the default) auto-allocates a free port.
+    /// If the chosen port is already in use, startup fails.</param>
+    /// <param name="connectionToken">Optional shared secret the SDK sends to the spawned runtime to authenticate the TCP connection.
+    /// When <c>null</c>, a GUID is generated automatically.</param>
+    /// <param name="path">Path to the runtime executable. When <c>null</c>, the bundled runtime is used.</param>
+    /// <param name="args">Extra command-line arguments to pass to the runtime process.</param>
+    public static TcpRuntimeConnection ForTcp(int port = 0, string? connectionToken = null, string? path = null, IList<string>? args = null)
+        => new() { Port = port, ConnectionToken = connectionToken, Path = path, Args = args };
+
+    /// <summary>
+    /// Connect to an already-running runtime at a given URI.
+    /// </summary>
+    /// <param name="url">URL of the runtime to connect to. Accepts <c>"port"</c>, <c>"host:port"</c>, or a full URL.</param>
+    /// <param name="connectionToken">Optional shared secret to authenticate the connection.</param>
+    public static UriRuntimeConnection ForUri(string url, string? connectionToken = null)
+        => new() { Url = url, ConnectionToken = connectionToken };
+}
+
+/// <summary>
+/// Base for <see cref="RuntimeConnection"/> kinds that spawn a runtime child process.
+/// </summary>
+public abstract class ChildProcessRuntimeConnection : RuntimeConnection
+{
+    internal ChildProcessRuntimeConnection() { }
+
+    /// <summary>Path to the runtime executable. When <c>null</c>, the bundled runtime is used.</summary>
+    public string? Path { get; set; }
+
+    /// <summary>Extra command-line arguments to pass to the runtime process.</summary>
+    public IList<string>? Args { get; set; }
+}
+
+/// <summary>
+/// Spawns a runtime child process and communicates over stdin/stdout. Construct via
+/// <see cref="RuntimeConnection.ForStdio(string?, IList{string}?)"/>.
+/// </summary>
+public sealed class StdioRuntimeConnection : ChildProcessRuntimeConnection
+{
+    internal StdioRuntimeConnection() { }
+}
+
+/// <summary>
+/// Spawns a runtime child process listening on a TCP socket. Construct via
+/// <see cref="RuntimeConnection.ForTcp(int, string?, string?, IList{string}?)"/>.
+/// </summary>
+public sealed class TcpRuntimeConnection : ChildProcessRuntimeConnection
+{
+    internal TcpRuntimeConnection() { }
+
+    /// <summary>
+    /// TCP port to listen on. <c>0</c> (the default) auto-allocates a free port.
+    /// If the chosen port is already in use, startup fails.
+    /// </summary>
+    public int Port { get; set; }
+
+    /// <summary>
+    /// Optional shared secret the SDK sends to the spawned runtime to authenticate
+    /// the TCP connection. When <c>null</c>, a GUID is generated automatically.
+    /// </summary>
+    public string? ConnectionToken { get; set; }
+}
+
+/// <summary>
+/// Connects to an already-running runtime at the specified URL. Construct via
+/// <see cref="RuntimeConnection.ForUri(string, string?)"/>.
+/// </summary>
+public sealed class UriRuntimeConnection : RuntimeConnection
+{
+    internal UriRuntimeConnection() { }
+
+    /// <summary>
+    /// URL of the runtime to connect to. Accepts <c>"port"</c>, <c>"host:port"</c>,
+    /// or a full URL.
+    /// </summary>
+    public required string Url { get; set; }
+
+    /// <summary>Optional shared secret to authenticate the connection.</summary>
+    public string? ConnectionToken { get; set; }
 }
 
 /// <summary>
 /// Configuration options for creating a <see cref="CopilotClient"/> instance.
 /// </summary>
-public class CopilotClientOptions
+public sealed class CopilotClientOptions
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="CopilotClientOptions"/> class.
@@ -46,92 +220,71 @@ public class CopilotClientOptions
     /// Initializes a new instance of the <see cref="CopilotClientOptions"/> class
     /// by copying the properties of the specified instance.
     /// </summary>
-    protected CopilotClientOptions(CopilotClientOptions? other)
+    private CopilotClientOptions(CopilotClientOptions? other)
     {
         if (other is null) return;
 
-        AutoRestart = other.AutoRestart;
-        AutoStart = other.AutoStart;
-        CliArgs = (string[]?)other.CliArgs?.Clone();
-        CliPath = other.CliPath;
-        CliUrl = other.CliUrl;
-        Cwd = other.Cwd;
+        Connection = other.Connection;
+        WorkingDirectory = other.WorkingDirectory;
+        BaseDirectory = other.BaseDirectory;
         Environment = other.Environment;
         GitHubToken = other.GitHubToken;
         Logger = other.Logger;
         LogLevel = other.LogLevel;
-        Port = other.Port;
+        Telemetry = other.Telemetry;
         UseLoggedInUser = other.UseLoggedInUser;
-        UseStdio = other.UseStdio;
         OnListModels = other.OnListModels;
+        SessionFs = other.SessionFs;
+        SessionIdleTimeoutSeconds = other.SessionIdleTimeoutSeconds;
+        EnableRemoteSessions = other.EnableRemoteSessions;
     }
 
     /// <summary>
-    /// Path to the Copilot CLI executable. If not specified, uses the bundled CLI from the SDK.
+    /// How to connect to the runtime. When <c>null</c>, the default is
+    /// <see cref="RuntimeConnection.ForStdio(string?, IList{string}?)"/> with the bundled runtime.
     /// </summary>
-    public string? CliPath { get; set; }
+    public RuntimeConnection? Connection { get; set; }
+
     /// <summary>
-    /// Additional command-line arguments to pass to the CLI process.
+    /// Working directory for the runtime process.
     /// </summary>
-    public string[]? CliArgs { get; set; }
+    public string? WorkingDirectory { get; set; }
+
     /// <summary>
-    /// Working directory for the CLI process.
+    /// Base directory for Copilot data (session state, config, etc.).
+    /// Sets the <c>COPILOT_HOME</c> environment variable on the spawned runtime.
+    /// When <see langword="null"/>, the runtime defaults to <c>~/.copilot</c>.
+    /// Ignored when connecting to an existing runtime via
+    /// <see cref="RuntimeConnection.ForUri(string, string?)"/>.
     /// </summary>
-    public string? Cwd { get; set; }
+    public string? BaseDirectory { get; set; }
+
     /// <summary>
-    /// Port number for the CLI server when not using stdio transport.
+    /// Log level for the Copilot runtime. Use the well-known values on
+    /// <see cref="CopilotLogLevel"/> (<see cref="CopilotLogLevel.None"/>,
+    /// <see cref="CopilotLogLevel.Error"/>, <see cref="CopilotLogLevel.Warning"/>,
+    /// <see cref="CopilotLogLevel.Info"/>, <see cref="CopilotLogLevel.Debug"/>,
+    /// <see cref="CopilotLogLevel.All"/>). When <c>null</c>, the runtime's default
+    /// log level is used.
     /// </summary>
-    public int Port { get; set; }
-    /// <summary>
-    /// Whether to use stdio transport for communication with the CLI server.
-    /// </summary>
-    public bool UseStdio { get; set; } = true;
-    /// <summary>
-    /// URL of an existing CLI server to connect to instead of starting a new one.
-    /// </summary>
-    public string? CliUrl { get; set; }
-    /// <summary>
-    /// Log level for the CLI server (e.g., "info", "debug", "warn", "error").
-    /// </summary>
-    public string LogLevel { get; set; } = "info";
-    /// <summary>
-    /// Whether to automatically start the CLI server if it is not already running.
-    /// </summary>
-    public bool AutoStart { get; set; } = true;
-    /// <summary>
-    /// Whether to automatically restart the CLI server if it exits unexpectedly.
-    /// </summary>
-    public bool AutoRestart { get; set; } = true;
-    /// <summary>
-    /// Environment variables to pass to the CLI process.
-    /// </summary>
+    public CopilotLogLevel? LogLevel { get; set; }
+
+    /// <summary>Environment variables to pass to the runtime process.</summary>
     public IReadOnlyDictionary<string, string>? Environment { get; set; }
-    /// <summary>
-    /// Logger instance for SDK diagnostic output.
-    /// </summary>
+
+    /// <summary>Logger instance for SDK diagnostic output.</summary>
     public ILogger? Logger { get; set; }
 
     /// <summary>
     /// GitHub token to use for authentication.
-    /// When provided, the token is passed to the CLI server via environment variable.
+    /// When provided, the token is passed to the runtime via environment variable.
     /// This takes priority over other authentication methods.
     /// </summary>
     public string? GitHubToken { get; set; }
 
     /// <summary>
-    /// Obsolete. Use <see cref="GitHubToken"/> instead.
-    /// </summary>
-    [EditorBrowsable(EditorBrowsableState.Never)]
-    [Obsolete("Use GitHubToken instead.", error: false)]
-    public string? GithubToken
-    {
-        get => GitHubToken;
-        set => GitHubToken = value;
-    }
-
-    /// <summary>
     /// Whether to use the logged-in user for authentication.
-    /// When true, the CLI server will attempt to use stored OAuth tokens or gh CLI auth.
+    /// When true, the runtime will attempt to use stored OAuth tokens or gh CLI auth.
     /// When false, only explicit tokens (GitHubToken or environment variables) are used.
     /// Default: true (but defaults to false when GitHubToken is provided).
     /// </summary>
@@ -140,10 +293,42 @@ public class CopilotClientOptions
     /// <summary>
     /// Custom handler for listing available models.
     /// When provided, <c>ListModelsAsync()</c> calls this handler instead of
-    /// querying the CLI server. Useful in BYOK mode to return models
+    /// querying the runtime. Useful in BYOK mode to return models
     /// available from your custom provider.
     /// </summary>
-    public Func<CancellationToken, Task<List<ModelInfo>>>? OnListModels { get; set; }
+    public Func<CancellationToken, Task<IList<ModelInfo>>>? OnListModels { get; set; }
+
+    /// <summary>
+    /// Custom session filesystem provider configuration.
+    /// When set, the client registers as the session filesystem provider on connect,
+    /// routing session-scoped file I/O through per-session handlers created via
+    /// <see cref="SessionConfigBase.CreateSessionFsProvider"/>.
+    /// </summary>
+    public SessionFsConfig? SessionFs { get; set; }
+
+    /// <summary>
+    /// OpenTelemetry configuration for the runtime.
+    /// When set to a non-<see langword="null"/> instance, the runtime is started with OpenTelemetry instrumentation enabled.
+    /// </summary>
+    public TelemetryConfig? Telemetry { get; set; }
+
+    /// <summary>
+    /// Server-wide idle timeout for sessions in seconds.
+    /// Sessions without activity for this duration are automatically cleaned up.
+    /// Set to <c>0</c> or leave as <see langword="null"/> to disable (sessions live indefinitely).
+    /// This option is only used when the SDK spawns the runtime; it is ignored
+    /// when connecting to an external runtime via <see cref="RuntimeConnection.ForUri(string, string?)"/>.
+    /// </summary>
+    public int? SessionIdleTimeoutSeconds { get; set; }
+
+    /// <summary>
+    /// Enable remote session support (Mission Control integration).
+    /// When true, sessions in a GitHub repository working directory are
+    /// accessible from GitHub web and mobile.
+    /// This option is only used when the SDK spawns the runtime; it is ignored
+    /// when connecting to an external runtime via <see cref="RuntimeConnection.ForUri(string, string?)"/>.
+    /// </summary>
+    public bool EnableRemoteSessions { get; set; }
 
     /// <summary>
     /// Creates a shallow clone of this <see cref="CopilotClientOptions"/> instance.
@@ -154,16 +339,88 @@ public class CopilotClientOptions
     /// Other reference-type properties (for example delegates and the logger) are not
     /// deep-cloned; the original and the clone will share those objects.
     /// </remarks>
-    public virtual CopilotClientOptions Clone()
-    {
-        return new(this);
-    }
+    public CopilotClientOptions Clone() => new(this);
+}
+
+/// <summary>
+/// OpenTelemetry configuration for the Copilot CLI server.
+/// </summary>
+public sealed class TelemetryConfig
+{
+    /// <summary>
+    /// OTLP exporter endpoint URL.
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> environment variable.
+    /// </remarks>
+    public string? OtlpEndpoint { get; set; }
+
+    /// <summary>
+    /// File path for the file exporter.
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>COPILOT_OTEL_FILE_EXPORTER_PATH</c> environment variable.
+    /// </remarks>
+    public string? FilePath { get; set; }
+
+    /// <summary>
+    /// Exporter type (<c>"otlp-http"</c> or <c>"file"</c>).
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>COPILOT_OTEL_EXPORTER_TYPE</c> environment variable.
+    /// </remarks>
+    public string? ExporterType { get; set; }
+
+    /// <summary>
+    /// Source name for telemetry spans.
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>COPILOT_OTEL_SOURCE_NAME</c> environment variable.
+    /// </remarks>
+    public string? SourceName { get; set; }
+
+    /// <summary>
+    /// Whether to capture message content as part of telemetry.
+    /// </summary>
+    /// <remarks>
+    /// Maps to the <c>OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT</c> environment variable.
+    /// </remarks>
+    public bool? CaptureContent { get; set; }
+}
+
+/// <summary>
+/// Configuration for a custom session filesystem provider.
+/// </summary>
+public sealed class SessionFsConfig
+{
+    /// <summary>
+    /// Initial working directory for sessions (user's project directory).
+    /// </summary>
+    public required string InitialCwd { get; init; }
+
+    /// <summary>
+    /// Path within each session's SessionFs where the runtime stores
+    /// session-scoped files (events, workspace, checkpoints, and temp files).
+    /// </summary>
+    public required string SessionStatePath { get; init; }
+
+    /// <summary>
+    /// Path conventions used by this filesystem provider.
+    /// </summary>
+    public required SessionFsSetProviderConventions Conventions { get; init; }
+
+    /// <summary>
+    /// Optional capabilities that this filesystem provider supports.
+    /// When <see cref="SessionFsSetProviderCapabilities.Sqlite"/> is <c>true</c>,
+    /// the runtime routes SQLite queries through the provider instead of using a local database file.
+    /// </summary>
+    public SessionFsSetProviderCapabilities? Capabilities { get; init; }
 }
 
 /// <summary>
 /// Represents a binary result returned by a tool invocation.
 /// </summary>
-public class ToolBinaryResult
+public sealed class ToolBinaryResult
 {
     /// <summary>
     /// Base64-encoded binary data.
@@ -178,10 +435,11 @@ public class ToolBinaryResult
     public string MimeType { get; set; } = string.Empty;
 
     /// <summary>
-    /// Type identifier for the binary result.
+    /// Type identifier for the binary result. Use the well-known values on
+    /// <see cref="ToolBinaryResultType"/> (<c>"image"</c>, <c>"resource"</c>).
     /// </summary>
     [JsonPropertyName("type")]
-    public string Type { get; set; } = string.Empty;
+    public ToolBinaryResultType Type { get; set; }
 
     /// <summary>
     /// Optional human-readable description of the binary result.
@@ -190,10 +448,76 @@ public class ToolBinaryResult
     public string? Description { get; set; }
 }
 
+/// <summary>Describes the kind of a <see cref="ToolBinaryResult"/>.</summary>
+[JsonConverter(typeof(ToolBinaryResultType.Converter))]
+[DebuggerDisplay("{Value,nq}")]
+public readonly struct ToolBinaryResultType : IEquatable<ToolBinaryResultType>
+{
+    /// <summary>Gets the kind indicating an inline image result.</summary>
+    public static ToolBinaryResultType Image { get; } = new("image");
+
+    /// <summary>Gets the kind indicating an MCP resource result.</summary>
+    public static ToolBinaryResultType Resource { get; } = new("resource");
+
+    /// <summary>Gets the underlying string value of this <see cref="ToolBinaryResultType"/>.</summary>
+    public string Value => _value ?? string.Empty;
+
+    private readonly string? _value;
+
+    /// <summary>Initializes a new instance of the <see cref="ToolBinaryResultType"/> struct.</summary>
+    /// <param name="value">The string value for this type.</param>
+    [JsonConstructor]
+    public ToolBinaryResultType(string value) => _value = value;
+
+    /// <inheritdoc/>
+    public static bool operator ==(ToolBinaryResultType left, ToolBinaryResultType right) => left.Equals(right);
+
+    /// <inheritdoc/>
+    public static bool operator !=(ToolBinaryResultType left, ToolBinaryResultType right) => !left.Equals(right);
+
+    /// <inheritdoc/>
+    public override bool Equals([NotNullWhen(true)] object? obj) => obj is ToolBinaryResultType other && Equals(other);
+
+    /// <inheritdoc/>
+    public bool Equals(ToolBinaryResultType other) => string.Equals(Value, other.Value, StringComparison.OrdinalIgnoreCase);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => StringComparer.OrdinalIgnoreCase.GetHashCode(Value);
+
+    /// <inheritdoc/>
+    public override string ToString() => Value;
+
+    /// <summary>Provides a <see cref="JsonConverter{ToolBinaryResultType}"/> for serializing <see cref="ToolBinaryResultType"/> instances.</summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public sealed class Converter : JsonConverter<ToolBinaryResultType>
+    {
+        /// <inheritdoc/>
+        public override ToolBinaryResultType Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                throw new JsonException("Expected string for ToolBinaryResultType.");
+            }
+
+            var value = reader.GetString();
+            if (value is null)
+            {
+                throw new JsonException("ToolBinaryResultType value cannot be null.");
+            }
+
+            return new ToolBinaryResultType(value);
+        }
+
+        /// <inheritdoc/>
+        public override void Write(Utf8JsonWriter writer, ToolBinaryResultType value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(value.Value);
+    }
+}
+
 /// <summary>
 /// Represents the structured result of a tool execution.
 /// </summary>
-public class ToolResultObject
+public sealed class ToolResultObject
 {
     /// <summary>
     /// Text result to be consumed by the language model.
@@ -205,7 +529,7 @@ public class ToolResultObject
     /// Binary results (e.g., images) to be consumed by the language model.
     /// </summary>
     [JsonPropertyName("binaryResultsForLlm")]
-    public List<ToolBinaryResult>? BinaryResultsForLlm { get; set; }
+    public IList<ToolBinaryResult>? BinaryResultsForLlm { get; set; }
 
     /// <summary>
     /// Result type indicator.
@@ -235,13 +559,102 @@ public class ToolResultObject
     /// Custom telemetry data associated with the tool execution.
     /// </summary>
     [JsonPropertyName("toolTelemetry")]
-    public Dictionary<string, object>? ToolTelemetry { get; set; }
+    public IDictionary<string, object>? ToolTelemetry { get; set; }
+
+    /// <summary>
+    /// Converts the result of an <see cref="AIFunction"/> invocation into a
+    /// <see cref="ToolResultObject"/>. Handles <see cref="ToolResultAIContent"/>,
+    /// <see cref="AIContent"/>, and falls back to JSON serialization.
+    /// </summary>
+    internal static ToolResultObject ConvertFromInvocationResult(object? result, JsonSerializerOptions jsonOptions)
+    {
+        if (result is ToolResultAIContent trac)
+        {
+            return trac.Result;
+        }
+
+        if (TryConvertFromAIContent(result) is { } aiConverted)
+        {
+            return aiConverted;
+        }
+
+        return new ToolResultObject
+        {
+            ResultType = "success",
+            TextResultForLlm = result is JsonElement { ValueKind: JsonValueKind.String } je
+                ? je.GetString()!
+                : JsonSerializer.Serialize(result, jsonOptions.GetTypeInfo(typeof(object))),
+        };
+    }
+
+    /// <summary>
+    /// Attempts to convert a result from an <see cref="AIFunction"/> invocation into a
+    /// <see cref="ToolResultObject"/>. Handles <see cref="TextContent"/>,
+    /// <see cref="DataContent"/>, and collections of <see cref="AIContent"/>.
+    /// Returns <see langword="null"/> if the value is not a recognized <see cref="AIContent"/> type.
+    /// </summary>
+    internal static ToolResultObject? TryConvertFromAIContent(object? result)
+    {
+        if (result is AIContent singleContent)
+        {
+            return ConvertAIContents([singleContent]);
+        }
+
+        if (result is IEnumerable<AIContent> contentList)
+        {
+            return ConvertAIContents(contentList);
+        }
+
+        return null;
+    }
+
+    private static ToolResultObject ConvertAIContents(IEnumerable<AIContent> contents)
+    {
+        List<string>? textParts = null;
+        List<ToolBinaryResult>? binaryResults = null;
+
+        foreach (var content in contents)
+        {
+            switch (content)
+            {
+                case TextContent textContent:
+                    if (textContent.Text is { } text)
+                    {
+                        (textParts ??= []).Add(text);
+                    }
+                    break;
+
+                case DataContent dataContent:
+                    (binaryResults ??= []).Add(new ToolBinaryResult
+                    {
+                        Data = dataContent.Base64Data.ToString(),
+                        MimeType = dataContent.MediaType ?? "application/octet-stream",
+                        Type = dataContent.HasTopLevelMediaType("image") ? ToolBinaryResultType.Image : ToolBinaryResultType.Resource,
+                    });
+                    break;
+
+                default:
+                    (textParts ??= []).Add(SerializeAIContent(content));
+                    break;
+            }
+        }
+
+        return new ToolResultObject
+        {
+            TextResultForLlm = textParts is not null ? string.Join("\n", textParts) : "",
+            ResultType = "success",
+            BinaryResultsForLlm = binaryResults,
+        };
+    }
+
+    private static string SerializeAIContent(AIContent content) =>
+        JsonSerializer.Serialize(content, AIJsonUtilities.DefaultOptions.GetTypeInfo(typeof(AIContent)));
 }
 
 /// <summary>
 /// Contains context for a tool invocation callback.
 /// </summary>
-public class ToolInvocation
+public sealed class ToolInvocation
 {
     /// <summary>
     /// Identifier of the session that triggered the tool call.
@@ -261,59 +674,22 @@ public class ToolInvocation
     public object? Arguments { get; set; }
 }
 
-/// <summary>
-/// Delegate for handling tool invocations and returning a result.
-/// </summary>
-public delegate Task<object?> ToolHandler(ToolInvocation invocation);
-
-/// <summary>
-/// Represents a permission request from the server for a tool operation.
-/// </summary>
-public class PermissionRequest
-{
-    /// <summary>
-    /// Kind of permission being requested.
-    /// <list type="bullet">
-    /// <item><description><c>"shell"</c> — execute a shell command.</description></item>
-    /// <item><description><c>"write"</c> — write to a file.</description></item>
-    /// <item><description><c>"read"</c> — read a file.</description></item>
-    /// <item><description><c>"mcp"</c> — invoke an MCP server tool.</description></item>
-    /// <item><description><c>"url"</c> — access a URL.</description></item>
-    /// <item><description><c>"custom-tool"</c> — invoke a custom tool.</description></item>
-    /// </list>
-    /// </summary>
-    [JsonPropertyName("kind")]
-    public string Kind { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Identifier of the tool call that triggered the permission request.
-    /// </summary>
-    [JsonPropertyName("toolCallId")]
-    public string? ToolCallId { get; set; }
-
-    /// <summary>
-    /// Additional properties not explicitly modeled.
-    /// </summary>
-    [JsonExtensionData]
-    public Dictionary<string, object>? ExtensionData { get; set; }
-}
-
 /// <summary>Describes the kind of a permission request result.</summary>
 [JsonConverter(typeof(PermissionRequestResultKind.Converter))]
 [DebuggerDisplay("{Value,nq}")]
 public readonly struct PermissionRequestResultKind : IEquatable<PermissionRequestResultKind>
 {
-    /// <summary>Gets the kind indicating the permission was approved.</summary>
-    public static PermissionRequestResultKind Approved { get; } = new("approved");
-
-    /// <summary>Gets the kind indicating the permission was denied by rules.</summary>
-    public static PermissionRequestResultKind DeniedByRules { get; } = new("denied-by-rules");
-
-    /// <summary>Gets the kind indicating the permission was denied because no approval rule was found and the user could not be prompted.</summary>
-    public static PermissionRequestResultKind DeniedCouldNotRequestFromUser { get; } = new("denied-no-approval-rule-and-could-not-request-from-user");
+    /// <summary>Gets the kind indicating the permission was approved for this one instance.</summary>
+    public static PermissionRequestResultKind Approved { get; } = new("approve-once");
 
     /// <summary>Gets the kind indicating the permission was denied interactively by the user.</summary>
-    public static PermissionRequestResultKind DeniedInteractivelyByUser { get; } = new("denied-interactively-by-user");
+    public static PermissionRequestResultKind Rejected { get; } = new("reject");
+
+    /// <summary>Gets the kind indicating the permission was denied because user confirmation was unavailable.</summary>
+    public static PermissionRequestResultKind UserNotAvailable { get; } = new("user-not-available");
+
+    /// <summary>Gets the kind indicating no permission decision was made.</summary>
+    public static PermissionRequestResultKind NoResult { get; } = new("no-result");
 
     /// <summary>Gets the underlying string value of this <see cref="PermissionRequestResultKind"/>.</summary>
     public string Value => _value ?? string.Empty;
@@ -373,15 +749,16 @@ public readonly struct PermissionRequestResultKind : IEquatable<PermissionReques
 /// <summary>
 /// Result of a permission request evaluation.
 /// </summary>
-public class PermissionRequestResult
+public sealed class PermissionRequestResult
 {
     /// <summary>
-    /// Permission decision kind.
+    /// Permission decision kind. Construct values with the static members on
+    /// <see cref="PermissionRequestResultKind"/>:
     /// <list type="bullet">
-    /// <item><description><c>"approved"</c> — the operation is allowed.</description></item>
-    /// <item><description><c>"denied-by-rules"</c> — denied by configured permission rules.</description></item>
-    /// <item><description><c>"denied-interactively-by-user"</c> — the user explicitly denied the request.</description></item>
-    /// <item><description><c>"denied-no-approval-rule-and-could-not-request-from-user"</c> — no rule matched and user approval was unavailable.</description></item>
+    /// <item><description><see cref="PermissionRequestResultKind.Approved"/> — allow this single request.</description></item>
+    /// <item><description><see cref="PermissionRequestResultKind.Rejected"/> — deny the request.</description></item>
+    /// <item><description><see cref="PermissionRequestResultKind.UserNotAvailable"/> — deny because no user is available to confirm.</description></item>
+    /// <item><description><see cref="PermissionRequestResultKind.NoResult"/> — leave the pending request unanswered (protocol v1 only; rejected by protocol v2 servers).</description></item>
     /// </list>
     /// </summary>
     [JsonPropertyName("kind")]
@@ -391,24 +768,27 @@ public class PermissionRequestResult
     /// Permission rules to apply for the decision.
     /// </summary>
     [JsonPropertyName("rules")]
-    public List<object>? Rules { get; set; }
+    public IList<object>? Rules { get; set; }
+
+    /// <summary>
+    /// Optional human-readable feedback to forward to the LLM along with the
+    /// decision. Mirrors the <c>feedback</c> field on the RPC-level
+    /// <see cref="Rpc.PermissionDecision"/> type.
+    /// </summary>
+    [JsonPropertyName("feedback")]
+    public string? Feedback { get; set; }
 }
 
 /// <summary>
 /// Contains context for a permission request callback.
 /// </summary>
-public class PermissionInvocation
+public sealed class PermissionInvocation
 {
     /// <summary>
     /// Identifier of the session that triggered the permission request.
     /// </summary>
     public string SessionId { get; set; } = string.Empty;
 }
-
-/// <summary>
-/// Delegate for handling permission requests and returning a decision.
-/// </summary>
-public delegate Task<PermissionRequestResult> PermissionRequestHandler(PermissionRequest request, PermissionInvocation invocation);
 
 // ============================================================================
 // User Input Handler Types
@@ -417,7 +797,7 @@ public delegate Task<PermissionRequestResult> PermissionRequestHandler(Permissio
 /// <summary>
 /// Request for user input from the agent.
 /// </summary>
-public class UserInputRequest
+public sealed class UserInputRequest
 {
     /// <summary>
     /// The question to ask the user.
@@ -429,7 +809,7 @@ public class UserInputRequest
     /// Optional choices for multiple choice questions.
     /// </summary>
     [JsonPropertyName("choices")]
-    public List<string>? Choices { get; set; }
+    public IList<string>? Choices { get; set; }
 
     /// <summary>
     /// Whether freeform text input is allowed.
@@ -441,7 +821,7 @@ public class UserInputRequest
 /// <summary>
 /// Response to a user input request.
 /// </summary>
-public class UserInputResponse
+public sealed class UserInputResponse
 {
     /// <summary>
     /// The user's answer.
@@ -459,7 +839,7 @@ public class UserInputResponse
 /// <summary>
 /// Context for a user input request invocation.
 /// </summary>
-public class UserInputInvocation
+public sealed class UserInputInvocation
 {
     /// <summary>
     /// Identifier of the session that triggered the user input request.
@@ -468,9 +848,335 @@ public class UserInputInvocation
 }
 
 /// <summary>
-/// Handler for user input requests from the agent.
+/// Request to exit plan mode and continue with a selected action.
 /// </summary>
-public delegate Task<UserInputResponse> UserInputHandler(UserInputRequest request, UserInputInvocation invocation);
+public sealed class ExitPlanModeRequest
+{
+    /// <summary>
+    /// Summary of the plan or proposed next step.
+    /// </summary>
+    [JsonPropertyName("summary")]
+    public string Summary { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Full plan content, when available.
+    /// </summary>
+    [JsonPropertyName("planContent")]
+    public string? PlanContent { get; set; }
+
+    /// <summary>
+    /// Available actions the user can select.
+    /// </summary>
+    [JsonPropertyName("actions")]
+    public IList<string> Actions { get => field ??= []; set; }
+
+    /// <summary>
+    /// The action recommended by the runtime.
+    /// </summary>
+    [JsonPropertyName("recommendedAction")]
+    public string RecommendedAction { get; set; } = "autopilot";
+}
+
+/// <summary>
+/// Response to an exit-plan-mode request.
+/// </summary>
+public sealed class ExitPlanModeResult
+{
+    /// <summary>
+    /// Whether the user approved exiting plan mode.
+    /// </summary>
+    [JsonPropertyName("approved")]
+    public bool Approved { get; set; } = true;
+
+    /// <summary>
+    /// Selected action, if the user chose one.
+    /// </summary>
+    [JsonPropertyName("selectedAction")]
+    public string? SelectedAction { get; set; }
+
+    /// <summary>
+    /// Optional feedback provided by the user.
+    /// </summary>
+    [JsonPropertyName("feedback")]
+    public string? Feedback { get; set; }
+}
+
+/// <summary>
+/// Context for an exit-plan-mode request invocation.
+/// </summary>
+public sealed class ExitPlanModeInvocation
+{
+    /// <summary>
+    /// Identifier of the session that triggered the request.
+    /// </summary>
+    public string SessionId { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Request to switch to auto mode after an eligible rate limit.
+/// </summary>
+public sealed class AutoModeSwitchRequest
+{
+    /// <summary>
+    /// The rate-limit error code that triggered the request.
+    /// </summary>
+    [JsonPropertyName("errorCode")]
+    public string? ErrorCode { get; set; }
+
+    /// <summary>
+    /// Seconds until the rate limit resets, when known.
+    /// </summary>
+    [JsonPropertyName("retryAfterSeconds")]
+    public double? RetryAfterSeconds { get; set; }
+}
+
+/// <summary>
+/// Context for an auto-mode-switch request invocation.
+/// </summary>
+public sealed class AutoModeSwitchInvocation
+{
+    /// <summary>
+    /// Identifier of the session that triggered the request.
+    /// </summary>
+    public string SessionId { get; set; } = string.Empty;
+}
+
+// ============================================================================
+// Command Handler Types
+// ============================================================================
+
+/// <summary>
+/// Defines a slash-command that users can invoke from the CLI TUI.
+/// </summary>
+public sealed class CommandDefinition
+{
+    /// <summary>
+    /// Command name (without leading <c>/</c>). For example, <c>"deploy"</c>.
+    /// </summary>
+    public required string Name { get; set; }
+
+    /// <summary>
+    /// Human-readable description shown in the command completion UI.
+    /// </summary>
+    public string? Description { get; set; }
+
+    /// <summary>
+    /// Handler invoked when the command is executed.
+    /// </summary>
+    public required Func<CommandContext, Task> Handler { get; set; }
+}
+
+/// <summary>
+/// Context passed to a command handler when a command is executed.
+/// </summary>
+public sealed class CommandContext
+{
+    /// <summary>
+    /// Session ID where the command was invoked.
+    /// </summary>
+    public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The full command text (e.g., <c>/deploy production</c>).
+    /// </summary>
+    public string Command { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Command name without leading <c>/</c>.
+    /// </summary>
+    public string CommandName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Raw argument string after the command name.
+    /// </summary>
+    public string Args { get; set; } = string.Empty;
+}
+
+// ============================================================================
+// Elicitation Types (UI — client → server)
+// ============================================================================
+
+/// <summary>
+/// JSON Schema describing the form fields to present for an elicitation dialog.
+/// </summary>
+public sealed class ElicitationSchema
+{
+    /// <summary>
+    /// Schema type indicator (always <c>"object"</c>).
+    /// </summary>
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "object";
+
+    /// <summary>
+    /// Form field definitions, keyed by field name.
+    /// </summary>
+    [JsonPropertyName("properties")]
+    public IDictionary<string, object> Properties { get => field ??= new Dictionary<string, object>(); set; }
+
+    /// <summary>
+    /// List of required field names.
+    /// </summary>
+    [JsonPropertyName("required")]
+    public IList<string>? Required { get; set; }
+}
+
+/// <summary>
+/// Parameters for an elicitation request sent from the SDK to the server.
+/// </summary>
+public sealed class ElicitationParams
+{
+    /// <summary>
+    /// Message describing what information is needed from the user.
+    /// </summary>
+    public required string Message { get; set; }
+
+    /// <summary>
+    /// JSON Schema describing the form fields to present.
+    /// </summary>
+    public required ElicitationSchema RequestedSchema { get; set; }
+}
+
+/// <summary>
+/// Result returned from an elicitation dialog.
+/// </summary>
+public sealed class ElicitationResult
+{
+    /// <summary>
+    /// User action: <c>"accept"</c> (submitted), <c>"decline"</c> (rejected), or <c>"cancel"</c> (dismissed).
+    /// </summary>
+    public UIElicitationResponseAction Action { get; set; }
+
+    /// <summary>
+    /// Form values submitted by the user (present when <see cref="Action"/> is <c>Accept</c>).
+    /// </summary>
+    public IDictionary<string, object>? Content { get; set; }
+}
+
+/// <summary>
+/// Options for the <see cref="ISessionUiApi.InputAsync"/> convenience method.
+/// </summary>
+public sealed class UiInputOptions
+{
+    /// <summary>Title label for the input field.</summary>
+    public string? Title { get; set; }
+
+    /// <summary>Descriptive text shown below the field.</summary>
+    public string? Description { get; set; }
+
+    /// <summary>Minimum character length.</summary>
+    public int? MinLength { get; set; }
+
+    /// <summary>Maximum character length.</summary>
+    public int? MaxLength { get; set; }
+
+    /// <summary>Semantic format hint (e.g., <c>"email"</c>, <c>"uri"</c>, <c>"date"</c>, <c>"date-time"</c>).</summary>
+    public string? Format { get; set; }
+
+    /// <summary>Default value pre-populated in the field.</summary>
+    public string? Default { get; set; }
+}
+
+/// <summary>
+/// Provides UI methods for eliciting information from the user during a session.
+/// </summary>
+public interface ISessionUiApi
+{
+    /// <summary>
+    /// Shows a generic elicitation dialog with a custom schema.
+    /// </summary>
+    /// <param name="elicitationParams">The elicitation parameters including message and schema.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <returns>The <see cref="ElicitationResult"/> with the user's response.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if the host does not support elicitation.</exception>
+    Task<ElicitationResult> ElicitAsync(ElicitationParams elicitationParams, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Shows a confirmation dialog and returns the user's boolean answer.
+    /// Returns <c>false</c> if the user declines or cancels.
+    /// </summary>
+    /// <param name="message">The message to display.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <returns><c>true</c> if the user confirmed; otherwise <c>false</c>.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if the host does not support elicitation.</exception>
+    Task<bool> ConfirmAsync(string message, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Shows a selection dialog with the given options.
+    /// Returns the selected value, or <c>null</c> if the user declines/cancels.
+    /// </summary>
+    /// <param name="message">The message to display.</param>
+    /// <param name="options">The options to present.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <returns>The selected string, or <c>null</c> if the user declined/cancelled.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if the host does not support elicitation.</exception>
+    Task<string?> SelectAsync(string message, string[] options, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Shows a text input dialog.
+    /// Returns the entered text, or <c>null</c> if the user declines/cancels.
+    /// </summary>
+    /// <param name="message">The message to display.</param>
+    /// <param name="options">Optional input field options.</param>
+    /// <param name="cancellationToken">Optional cancellation token.</param>
+    /// <returns>The entered string, or <c>null</c> if the user declined/cancelled.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if the host does not support elicitation.</exception>
+    Task<string?> InputAsync(string message, UiInputOptions? options = null, CancellationToken cancellationToken = default);
+}
+
+// ============================================================================
+// Elicitation Types (server → client callback)
+// ============================================================================
+
+/// <summary>
+/// Context for an elicitation handler invocation, combining the request data
+/// with session context. Mirrors the single-argument pattern of <see cref="CommandContext"/>.
+/// </summary>
+public sealed class ElicitationContext
+{
+    /// <summary>Identifier of the session that triggered the elicitation request.</summary>
+    public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>Message describing what information is needed from the user.</summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>JSON Schema describing the form fields to present.</summary>
+    public ElicitationSchema? RequestedSchema { get; set; }
+
+    /// <summary>Elicitation mode: <c>"form"</c> for structured input, <c>"url"</c> for browser redirect.</summary>
+    public ElicitationRequestedMode? Mode { get; set; }
+
+    /// <summary>The source that initiated the request (e.g., MCP server name).</summary>
+    public string? ElicitationSource { get; set; }
+
+    /// <summary>URL to open in the user's browser (url mode only).</summary>
+    public string? Url { get; set; }
+}
+
+// ============================================================================
+// Session Capabilities
+// ============================================================================
+
+/// <summary>
+/// Represents the capabilities reported by the host for a session.
+/// </summary>
+public sealed class SessionCapabilities
+{
+    /// <summary>
+    /// UI-related capabilities.
+    /// </summary>
+    public SessionUiCapabilities? Ui { get; set; }
+}
+
+/// <summary>
+/// UI-specific capability flags for a session.
+/// </summary>
+public sealed class SessionUiCapabilities
+{
+    /// <summary>
+    /// Whether the host supports interactive elicitation dialogs.
+    /// </summary>
+    public bool? Elicitation { get; set; }
+}
 
 // ============================================================================
 // Hook Handler Types
@@ -479,7 +1185,7 @@ public delegate Task<UserInputResponse> UserInputHandler(UserInputRequest reques
 /// <summary>
 /// Context for a hook invocation.
 /// </summary>
-public class HookInvocation
+public sealed class HookInvocation
 {
     /// <summary>
     /// Identifier of the session that triggered the hook.
@@ -490,13 +1196,20 @@ public class HookInvocation
 /// <summary>
 /// Input for a pre-tool-use hook.
 /// </summary>
-public class PreToolUseHookInput
+public sealed class PreToolUseHookInput
 {
+    /// <summary>
+    /// The runtime session ID of the session that triggered the hook.
+    /// </summary>
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
     /// <summary>
     /// Unix timestamp in milliseconds when the tool use was initiated.
     /// </summary>
     [JsonPropertyName("timestamp")]
-    public long Timestamp { get; set; }
+    [JsonConverter(typeof(UnixMillisecondsDateTimeOffsetConverter))]
+    public DateTimeOffset Timestamp { get; set; }
 
     /// <summary>
     /// Current working directory of the session.
@@ -520,7 +1233,7 @@ public class PreToolUseHookInput
 /// <summary>
 /// Output for a pre-tool-use hook.
 /// </summary>
-public class PreToolUseHookOutput
+public sealed class PreToolUseHookOutput
 {
     /// <summary>
     /// Permission decision for the pending tool call.
@@ -559,20 +1272,22 @@ public class PreToolUseHookOutput
 }
 
 /// <summary>
-/// Delegate invoked before a tool is executed, allowing modification or denial of the call.
-/// </summary>
-public delegate Task<PreToolUseHookOutput?> PreToolUseHandler(PreToolUseHookInput input, HookInvocation invocation);
-
-/// <summary>
 /// Input for a post-tool-use hook.
 /// </summary>
-public class PostToolUseHookInput
+public sealed class PostToolUseHookInput
 {
+    /// <summary>
+    /// The runtime session ID of the session that triggered the hook.
+    /// </summary>
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
     /// <summary>
     /// Unix timestamp in milliseconds when the tool execution completed.
     /// </summary>
     [JsonPropertyName("timestamp")]
-    public long Timestamp { get; set; }
+    [JsonConverter(typeof(UnixMillisecondsDateTimeOffsetConverter))]
+    public DateTimeOffset Timestamp { get; set; }
 
     /// <summary>
     /// Current working directory of the session.
@@ -602,7 +1317,7 @@ public class PostToolUseHookInput
 /// <summary>
 /// Output for a post-tool-use hook.
 /// </summary>
-public class PostToolUseHookOutput
+public sealed class PostToolUseHookOutput
 {
     /// <summary>
     /// Modified result to replace the original tool result.
@@ -624,20 +1339,22 @@ public class PostToolUseHookOutput
 }
 
 /// <summary>
-/// Delegate invoked after a tool has been executed, allowing modification of the result.
-/// </summary>
-public delegate Task<PostToolUseHookOutput?> PostToolUseHandler(PostToolUseHookInput input, HookInvocation invocation);
-
-/// <summary>
 /// Input for a user-prompt-submitted hook.
 /// </summary>
-public class UserPromptSubmittedHookInput
+public sealed class UserPromptSubmittedHookInput
 {
+    /// <summary>
+    /// The runtime session ID of the session that triggered the hook.
+    /// </summary>
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
     /// <summary>
     /// Unix timestamp in milliseconds when the prompt was submitted.
     /// </summary>
     [JsonPropertyName("timestamp")]
-    public long Timestamp { get; set; }
+    [JsonConverter(typeof(UnixMillisecondsDateTimeOffsetConverter))]
+    public DateTimeOffset Timestamp { get; set; }
 
     /// <summary>
     /// Current working directory of the session.
@@ -655,7 +1372,7 @@ public class UserPromptSubmittedHookInput
 /// <summary>
 /// Output for a user-prompt-submitted hook.
 /// </summary>
-public class UserPromptSubmittedHookOutput
+public sealed class UserPromptSubmittedHookOutput
 {
     /// <summary>
     /// Modified prompt to use instead of the original user prompt.
@@ -677,20 +1394,22 @@ public class UserPromptSubmittedHookOutput
 }
 
 /// <summary>
-/// Delegate invoked when the user submits a prompt, allowing modification of the prompt.
-/// </summary>
-public delegate Task<UserPromptSubmittedHookOutput?> UserPromptSubmittedHandler(UserPromptSubmittedHookInput input, HookInvocation invocation);
-
-/// <summary>
 /// Input for a session-start hook.
 /// </summary>
-public class SessionStartHookInput
+public sealed class SessionStartHookInput
 {
+    /// <summary>
+    /// The runtime session ID of the session that triggered the hook.
+    /// </summary>
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
     /// <summary>
     /// Unix timestamp in milliseconds when the session started.
     /// </summary>
     [JsonPropertyName("timestamp")]
-    public long Timestamp { get; set; }
+    [JsonConverter(typeof(UnixMillisecondsDateTimeOffsetConverter))]
+    public DateTimeOffset Timestamp { get; set; }
 
     /// <summary>
     /// Current working directory of the session.
@@ -719,7 +1438,7 @@ public class SessionStartHookInput
 /// <summary>
 /// Output for a session-start hook.
 /// </summary>
-public class SessionStartHookOutput
+public sealed class SessionStartHookOutput
 {
     /// <summary>
     /// Additional context to inject into the session for the language model.
@@ -731,24 +1450,26 @@ public class SessionStartHookOutput
     /// Modified session configuration to apply at startup.
     /// </summary>
     [JsonPropertyName("modifiedConfig")]
-    public Dictionary<string, object>? ModifiedConfig { get; set; }
+    public IDictionary<string, object>? ModifiedConfig { get; set; }
 }
-
-/// <summary>
-/// Delegate invoked when a session starts, allowing injection of context or config changes.
-/// </summary>
-public delegate Task<SessionStartHookOutput?> SessionStartHandler(SessionStartHookInput input, HookInvocation invocation);
 
 /// <summary>
 /// Input for a session-end hook.
 /// </summary>
-public class SessionEndHookInput
+public sealed class SessionEndHookInput
 {
+    /// <summary>
+    /// The runtime session ID of the session that triggered the hook.
+    /// </summary>
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
     /// <summary>
     /// Unix timestamp in milliseconds when the session ended.
     /// </summary>
     [JsonPropertyName("timestamp")]
-    public long Timestamp { get; set; }
+    [JsonConverter(typeof(UnixMillisecondsDateTimeOffsetConverter))]
+    public DateTimeOffset Timestamp { get; set; }
 
     /// <summary>
     /// Current working directory of the session.
@@ -785,7 +1506,7 @@ public class SessionEndHookInput
 /// <summary>
 /// Output for a session-end hook.
 /// </summary>
-public class SessionEndHookOutput
+public sealed class SessionEndHookOutput
 {
     /// <summary>
     /// Whether to suppress the session end output from the conversation.
@@ -797,7 +1518,7 @@ public class SessionEndHookOutput
     /// List of cleanup action identifiers to execute after the session ends.
     /// </summary>
     [JsonPropertyName("cleanupActions")]
-    public List<string>? CleanupActions { get; set; }
+    public IList<string>? CleanupActions { get; set; }
 
     /// <summary>
     /// Summary of the session to persist for future reference.
@@ -807,20 +1528,22 @@ public class SessionEndHookOutput
 }
 
 /// <summary>
-/// Delegate invoked when a session ends, allowing cleanup actions or summary generation.
-/// </summary>
-public delegate Task<SessionEndHookOutput?> SessionEndHandler(SessionEndHookInput input, HookInvocation invocation);
-
-/// <summary>
 /// Input for an error-occurred hook.
 /// </summary>
-public class ErrorOccurredHookInput
+public sealed class ErrorOccurredHookInput
 {
+    /// <summary>
+    /// The runtime session ID of the session that triggered the hook.
+    /// </summary>
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
     /// <summary>
     /// Unix timestamp in milliseconds when the error occurred.
     /// </summary>
     [JsonPropertyName("timestamp")]
-    public long Timestamp { get; set; }
+    [JsonConverter(typeof(UnixMillisecondsDateTimeOffsetConverter))]
+    public DateTimeOffset Timestamp { get; set; }
 
     /// <summary>
     /// Current working directory of the session.
@@ -856,7 +1579,7 @@ public class ErrorOccurredHookInput
 /// <summary>
 /// Output for an error-occurred hook.
 /// </summary>
-public class ErrorOccurredHookOutput
+public sealed class ErrorOccurredHookOutput
 {
     /// <summary>
     /// Whether to suppress the error output from the conversation.
@@ -889,44 +1612,39 @@ public class ErrorOccurredHookOutput
 }
 
 /// <summary>
-/// Delegate invoked when an error occurs, allowing custom error handling strategies.
-/// </summary>
-public delegate Task<ErrorOccurredHookOutput?> ErrorOccurredHandler(ErrorOccurredHookInput input, HookInvocation invocation);
-
-/// <summary>
 /// Hook handlers configuration for a session.
 /// </summary>
-public class SessionHooks
+public sealed class SessionHooks
 {
     /// <summary>
     /// Handler called before a tool is executed.
     /// </summary>
-    public PreToolUseHandler? OnPreToolUse { get; set; }
+    public Func<PreToolUseHookInput, HookInvocation, Task<PreToolUseHookOutput?>>? OnPreToolUse { get; set; }
 
     /// <summary>
     /// Handler called after a tool has been executed.
     /// </summary>
-    public PostToolUseHandler? OnPostToolUse { get; set; }
+    public Func<PostToolUseHookInput, HookInvocation, Task<PostToolUseHookOutput?>>? OnPostToolUse { get; set; }
 
     /// <summary>
     /// Handler called when the user submits a prompt.
     /// </summary>
-    public UserPromptSubmittedHandler? OnUserPromptSubmitted { get; set; }
+    public Func<UserPromptSubmittedHookInput, HookInvocation, Task<UserPromptSubmittedHookOutput?>>? OnUserPromptSubmitted { get; set; }
 
     /// <summary>
     /// Handler called when a session starts.
     /// </summary>
-    public SessionStartHandler? OnSessionStart { get; set; }
+    public Func<SessionStartHookInput, HookInvocation, Task<SessionStartHookOutput?>>? OnSessionStart { get; set; }
 
     /// <summary>
     /// Handler called when a session ends.
     /// </summary>
-    public SessionEndHandler? OnSessionEnd { get; set; }
+    public Func<SessionEndHookInput, HookInvocation, Task<SessionEndHookOutput?>>? OnSessionEnd { get; set; }
 
     /// <summary>
     /// Handler called when an error occurs.
     /// </summary>
-    public ErrorOccurredHandler? OnErrorOccurred { get; set; }
+    public Func<ErrorOccurredHookInput, HookInvocation, Task<ErrorOccurredHookOutput?>>? OnErrorOccurred { get; set; }
 }
 
 /// <summary>
@@ -940,28 +1658,115 @@ public enum SystemMessageMode
     Append,
     /// <summary>Replace the default system message entirely.</summary>
     [JsonStringEnumMemberName("replace")]
-    Replace
+    Replace,
+    /// <summary>Override individual sections of the system prompt.</summary>
+    [JsonStringEnumMemberName("customize")]
+    Customize
+}
+
+/// <summary>
+/// Specifies the operation to perform on a system prompt section.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<SectionOverrideAction>))]
+public enum SectionOverrideAction
+{
+    /// <summary>Replace the section content entirely.</summary>
+    [JsonStringEnumMemberName("replace")]
+    Replace,
+    /// <summary>Remove the section from the prompt.</summary>
+    [JsonStringEnumMemberName("remove")]
+    Remove,
+    /// <summary>Append content after the existing section.</summary>
+    [JsonStringEnumMemberName("append")]
+    Append,
+    /// <summary>Prepend content before the existing section.</summary>
+    [JsonStringEnumMemberName("prepend")]
+    Prepend,
+    /// <summary>Transform the section content via a callback.</summary>
+    [JsonStringEnumMemberName("transform")]
+    Transform
+}
+
+/// <summary>
+/// Override operation for a single system prompt section.
+/// </summary>
+public sealed class SectionOverride
+{
+    /// <summary>
+    /// The operation to perform on this section. Ignored when Transform is set.
+    /// </summary>
+    [JsonPropertyName("action")]
+    public SectionOverrideAction? Action { get; set; }
+
+    /// <summary>
+    /// Content for the override. Optional for all actions. Ignored for remove.
+    /// </summary>
+    [JsonPropertyName("content")]
+    public string? Content { get; set; }
+
+    /// <summary>
+    /// Transform callback. When set, takes precedence over Action.
+    /// Receives current section content, returns transformed content.
+    /// Not serialized — the SDK handles this locally.
+    /// </summary>
+    [JsonIgnore]
+    public Func<string, Task<string>>? Transform { get; set; }
+}
+
+/// <summary>
+/// Known system prompt section identifiers for the "customize" mode.
+/// </summary>
+public static class SystemPromptSections
+{
+    /// <summary>Agent identity preamble and mode statement.</summary>
+    public const string Identity = "identity";
+    /// <summary>Response style, conciseness rules, output formatting preferences.</summary>
+    public const string Tone = "tone";
+    /// <summary>Tool usage patterns, parallel calling, batching guidelines.</summary>
+    public const string ToolEfficiency = "tool_efficiency";
+    /// <summary>CWD, OS, git root, directory listing, available tools.</summary>
+    public const string EnvironmentContext = "environment_context";
+    /// <summary>Coding rules, linting/testing, ecosystem tools, style.</summary>
+    public const string CodeChangeRules = "code_change_rules";
+    /// <summary>Tips, behavioral best practices, behavioral guidelines.</summary>
+    public const string Guidelines = "guidelines";
+    /// <summary>Environment limitations, prohibited actions, security policies.</summary>
+    public const string Safety = "safety";
+    /// <summary>Per-tool usage instructions.</summary>
+    public const string ToolInstructions = "tool_instructions";
+    /// <summary>Repository and organization custom instructions.</summary>
+    public const string CustomInstructions = "custom_instructions";
+    /// <summary>End-of-prompt instructions: parallel tool calling, persistence, task completion.</summary>
+    public const string LastInstructions = "last_instructions";
 }
 
 /// <summary>
 /// Configuration for the system message used in a session.
 /// </summary>
-public class SystemMessageConfig
+public sealed class SystemMessageConfig
 {
     /// <summary>
-    /// How the system message is applied (append or replace).
+    /// How the system message is applied (append, replace, or customize).
     /// </summary>
     public SystemMessageMode? Mode { get; set; }
+
     /// <summary>
-    /// Content of the system message.
+    /// Content of the system message. Used by append and replace modes.
+    /// In customize mode, additional content appended after all sections.
     /// </summary>
     public string? Content { get; set; }
+
+    /// <summary>
+    /// Section-level overrides for customize mode.
+    /// Keys are section identifiers (see <see cref="SystemPromptSections"/>).
+    /// </summary>
+    public IDictionary<string, SectionOverride>? Sections { get; set; }
 }
 
 /// <summary>
 /// Configuration for a custom model provider.
 /// </summary>
-public class ProviderConfig
+public sealed class ProviderConfig
 {
     /// <summary>
     /// Provider type identifier (e.g., "openai", "azure").
@@ -1000,12 +1805,52 @@ public class ProviderConfig
     /// </summary>
     [JsonPropertyName("azure")]
     public AzureOptions? Azure { get; set; }
+
+    /// <summary>
+    /// Custom HTTP headers to include in outbound provider requests.
+    /// </summary>
+    [JsonPropertyName("headers")]
+    public IDictionary<string, string>? Headers { get; set; }
+
+    /// <summary>
+    /// Well-known model name used by the runtime to look up agent configuration
+    /// (tools, prompts, reasoning behavior) and default token limits. Also used
+    /// as the wire model when <see cref="WireModel"/> is not set.
+    /// Falls back to <see cref="SessionConfigBase.Model"/>.
+    /// </summary>
+    [JsonPropertyName("modelId")]
+    public string? ModelId { get; set; }
+
+    /// <summary>
+    /// Model name sent to the provider API for inference. Use this when the
+    /// provider's model name (e.g. an Azure deployment name or a custom
+    /// fine-tune name) differs from <see cref="ModelId"/>.
+    /// Falls back to <see cref="ModelId"/>, then <see cref="SessionConfigBase.Model"/>.
+    /// </summary>
+    [JsonPropertyName("wireModel")]
+    public string? WireModel { get; set; }
+
+    /// <summary>
+    /// Overrides the resolved model's default max prompt tokens. The runtime
+    /// triggers conversation compaction before sending a request when the
+    /// prompt (system message, history, tool definitions, user message) would
+    /// exceed this limit.
+    /// </summary>
+    [JsonPropertyName("maxPromptTokens")]
+    public int? MaxPromptTokens { get; set; }
+
+    /// <summary>
+    /// Overrides the resolved model's default max output tokens. When hit, the
+    /// model stops generating and returns a truncated response.
+    /// </summary>
+    [JsonPropertyName("maxOutputTokens")]
+    public int? MaxOutputTokens { get; set; }
 }
 
 /// <summary>
 /// Azure OpenAI-specific provider options.
 /// </summary>
-public class AzureOptions
+public sealed class AzureOptions
 {
     /// <summary>
     /// Azure OpenAI API version to use (e.g., "2024-02-01").
@@ -1019,27 +1864,61 @@ public class AzureOptions
 // ============================================================================
 
 /// <summary>
-/// Configuration for a local/stdio MCP server.
+/// OAuth grant type for a remote MCP server.
 /// </summary>
-public class McpLocalServerConfig
+[JsonConverter(typeof(JsonStringEnumConverter<McpHttpServerConfigOauthGrantType>))]
+public enum McpHttpServerConfigOauthGrantType
 {
-    /// <summary>
-    /// List of tools to include from this server. Empty list means none. Use "*" for all.
-    /// </summary>
-    [JsonPropertyName("tools")]
-    public List<string> Tools { get; set; } = [];
+    /// <summary>Use the authorization code OAuth flow.</summary>
+    [JsonStringEnumMemberName("authorization_code")]
+    AuthorizationCode,
+
+    /// <summary>Use the client credentials OAuth flow.</summary>
+    [JsonStringEnumMemberName("client_credentials")]
+    ClientCredentials
+}
+
+/// <summary>
+/// Abstract base class for MCP server configurations.
+/// </summary>
+[JsonPolymorphic(
+    TypeDiscriminatorPropertyName = "type",
+    IgnoreUnrecognizedTypeDiscriminators = true)]
+[JsonDerivedType(typeof(McpStdioServerConfig), "stdio")]
+[JsonDerivedType(typeof(McpHttpServerConfig), "http")]
+public abstract class McpServerConfig
+{
+    private protected McpServerConfig() { }
 
     /// <summary>
-    /// Server type. Defaults to "local".
+    /// List of tools to include from this server. <c>null</c> (the default)
+    /// means include all tools. An empty list means include none.
     /// </summary>
-    [JsonPropertyName("type")]
-    public string? Type { get; set; }
+    [JsonPropertyName("tools")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IList<string>? Tools { get; set; }
+
+    /// <summary>
+    /// The server type discriminator.
+    /// </summary>
+    [JsonIgnore]
+    public virtual string Type => "unknown";
 
     /// <summary>
     /// Optional timeout in milliseconds for tool calls to this server.
     /// </summary>
     [JsonPropertyName("timeout")]
     public int? Timeout { get; set; }
+}
+
+/// <summary>
+/// Configuration for a local/stdio MCP server.
+/// </summary>
+public sealed class McpStdioServerConfig : McpServerConfig
+{
+    /// <inheritdoc />
+    [JsonIgnore]
+    public override string Type => "stdio";
 
     /// <summary>
     /// Command to run the MCP server.
@@ -1051,43 +1930,29 @@ public class McpLocalServerConfig
     /// Arguments to pass to the command.
     /// </summary>
     [JsonPropertyName("args")]
-    public List<string> Args { get; set; } = [];
+    public IList<string>? Args { get; set; }
 
     /// <summary>
     /// Environment variables to pass to the server.
     /// </summary>
     [JsonPropertyName("env")]
-    public Dictionary<string, string>? Env { get; set; }
+    public IDictionary<string, string>? Env { get; set; }
 
     /// <summary>
     /// Working directory for the server process.
     /// </summary>
     [JsonPropertyName("cwd")]
-    public string? Cwd { get; set; }
+    public string? WorkingDirectory { get; set; }
 }
 
 /// <summary>
 /// Configuration for a remote MCP server (HTTP or SSE).
 /// </summary>
-public class McpRemoteServerConfig
+public sealed class McpHttpServerConfig : McpServerConfig
 {
-    /// <summary>
-    /// List of tools to include from this server. Empty list means none. Use "*" for all.
-    /// </summary>
-    [JsonPropertyName("tools")]
-    public List<string> Tools { get; set; } = [];
-
-    /// <summary>
-    /// Server type. Must be "http" or "sse".
-    /// </summary>
-    [JsonPropertyName("type")]
-    public string Type { get; set; } = "http";
-
-    /// <summary>
-    /// Optional timeout in milliseconds for tool calls to this server.
-    /// </summary>
-    [JsonPropertyName("timeout")]
-    public int? Timeout { get; set; }
+    /// <inheritdoc />
+    [JsonIgnore]
+    public override string Type => "http";
 
     /// <summary>
     /// URL of the remote server.
@@ -1099,7 +1964,25 @@ public class McpRemoteServerConfig
     /// Optional HTTP headers to include in requests.
     /// </summary>
     [JsonPropertyName("headers")]
-    public Dictionary<string, string>? Headers { get; set; }
+    public IDictionary<string, string>? Headers { get; set; }
+
+    /// <summary>
+    /// Optional OAuth client ID for the remote server.
+    /// </summary>
+    [JsonPropertyName("oauthClientId")]
+    public string? OauthClientId { get; set; }
+
+    /// <summary>
+    /// Whether this is a public OAuth client.
+    /// </summary>
+    [JsonPropertyName("oauthPublicClient")]
+    public bool? OauthPublicClient { get; set; }
+
+    /// <summary>
+    /// Optional OAuth grant type for the remote server.
+    /// </summary>
+    [JsonPropertyName("oauthGrantType")]
+    public McpHttpServerConfigOauthGrantType? OauthGrantType { get; set; }
 }
 
 // ============================================================================
@@ -1109,7 +1992,7 @@ public class McpRemoteServerConfig
 /// <summary>
 /// Configuration for a custom agent.
 /// </summary>
-public class CustomAgentConfig
+public sealed class CustomAgentConfig
 {
     /// <summary>
     /// Unique name of the custom agent.
@@ -1133,7 +2016,7 @@ public class CustomAgentConfig
     /// List of tool names the agent can use. Null for all tools.
     /// </summary>
     [JsonPropertyName("tools")]
-    public List<string>? Tools { get; set; }
+    public IList<string>? Tools { get; set; }
 
     /// <summary>
     /// The prompt content for the agent.
@@ -1145,13 +2028,46 @@ public class CustomAgentConfig
     /// MCP servers specific to this agent.
     /// </summary>
     [JsonPropertyName("mcpServers")]
-    public Dictionary<string, object>? McpServers { get; set; }
+    public IDictionary<string, McpServerConfig>? McpServers { get; set; }
 
     /// <summary>
     /// Whether the agent should be available for model inference.
     /// </summary>
     [JsonPropertyName("infer")]
     public bool? Infer { get; set; }
+
+    /// <summary>
+    /// List of skill names to preload into this agent's context.
+    /// When set, the full content of each listed skill is eagerly injected into
+    /// the agent's context at startup. Skills are resolved by name from the
+    /// session's configured skill directories (<see cref="SessionConfigBase.SkillDirectories"/>).
+    /// When omitted, no skills are injected (opt-in model).
+    /// </summary>
+    [JsonPropertyName("skills")]
+    public IList<string>? Skills { get; set; }
+
+    /// <summary>
+    /// Model identifier for this agent (e.g. "claude-haiku-4.5").
+    /// When set, the runtime will attempt to use this model for the agent,
+    /// falling back to the parent session model if unavailable.
+    /// </summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; set; }
+}
+
+/// <summary>
+/// Configuration for the default agent (the built-in agent that handles turns when no custom agent is selected).
+/// Use <see cref="ExcludedTools"/> to hide specific tools from the default agent
+/// while keeping them available to custom sub-agents.
+/// </summary>
+public sealed class DefaultAgentConfig
+{
+    /// <summary>
+    /// List of tool names to exclude from the default agent.
+    /// These tools remain available to custom sub-agents that reference them
+    /// in their <see cref="CustomAgentConfig.Tools"/> list.
+    /// </summary>
+    public IList<string>? ExcludedTools { get; set; }
 }
 
 /// <summary>
@@ -1159,7 +2075,7 @@ public class CustomAgentConfig
 /// When enabled, sessions automatically manage context window limits through background compaction
 /// and persist state to a workspace directory.
 /// </summary>
-public class InfiniteSessionConfig
+public sealed class InfiniteSessionConfig
 {
     /// <summary>
     /// Whether infinite sessions are enabled. Default: true
@@ -1185,62 +2101,93 @@ public class InfiniteSessionConfig
 }
 
 /// <summary>
-/// Configuration options for creating a new Copilot session.
+/// GitHub repository metadata to associate with a cloud session.
 /// </summary>
-public class SessionConfig
+public sealed class CloudSessionRepository
+{
+    /// <summary>Repository owner.</summary>
+    public required string Owner { get; set; }
+
+    /// <summary>Repository name.</summary>
+    public required string Name { get; set; }
+
+    /// <summary>Optional branch name.</summary>
+    public string? Branch { get; set; }
+}
+
+/// <summary>
+/// Options for creating a remote session in the cloud.
+/// </summary>
+public sealed class CloudSessionOptions
 {
     /// <summary>
-    /// Initializes a new instance of the <see cref="SessionConfig"/> class.
+    /// Optional GitHub repository metadata to associate with the cloud session.
     /// </summary>
-    public SessionConfig() { }
+    public CloudSessionRepository? Repository { get; set; }
+}
+
+/// <summary>
+/// Shared configuration properties for creating or resuming a Copilot session.
+/// Use <see cref="SessionConfig"/> when creating a new session, or
+/// <see cref="ResumeSessionConfig"/> when resuming an existing one.
+/// </summary>
+public abstract class SessionConfigBase
+{
+    /// <summary>Initializes a new instance of the <see cref="SessionConfigBase"/> class.</summary>
+    protected SessionConfigBase() { }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="SessionConfig"/> class
-    /// by copying the properties of the specified instance.
+    /// Initializes a new instance of <see cref="SessionConfigBase"/> by copying the
+    /// properties of the specified instance.
     /// </summary>
-    protected SessionConfig(SessionConfig? other)
+    protected SessionConfigBase(SessionConfigBase? other)
     {
         if (other is null) return;
 
         AvailableTools = other.AvailableTools is not null ? [.. other.AvailableTools] : null;
         ClientName = other.ClientName;
+        Commands = other.Commands is not null ? [.. other.Commands] : null;
         ConfigDir = other.ConfigDir;
         CustomAgents = other.CustomAgents is not null ? [.. other.CustomAgents] : null;
+        DefaultAgent = other.DefaultAgent;
         Agent = other.Agent;
         DisabledSkills = other.DisabledSkills is not null ? [.. other.DisabledSkills] : null;
+        EnableConfigDiscovery = other.EnableConfigDiscovery;
         ExcludedTools = other.ExcludedTools is not null ? [.. other.ExcludedTools] : null;
         Hooks = other.Hooks;
         InfiniteSessions = other.InfiniteSessions;
         McpServers = other.McpServers is not null
-            ? new Dictionary<string, object>(other.McpServers, other.McpServers.Comparer)
+            ? (other.McpServers is Dictionary<string, McpServerConfig> dict
+                ? new Dictionary<string, McpServerConfig>(dict, dict.Comparer)
+                : new Dictionary<string, McpServerConfig>(other.McpServers))
             : null;
         Model = other.Model;
+        ModelCapabilities = other.ModelCapabilities;
+        OnAutoModeSwitchRequest = other.OnAutoModeSwitchRequest;
+        OnElicitationRequest = other.OnElicitationRequest;
+        OnEvent = other.OnEvent;
+        OnExitPlanModeRequest = other.OnExitPlanModeRequest;
         OnPermissionRequest = other.OnPermissionRequest;
         OnUserInputRequest = other.OnUserInputRequest;
         Provider = other.Provider;
+        EnableSessionTelemetry = other.EnableSessionTelemetry;
         ReasoningEffort = other.ReasoningEffort;
-        SessionId = other.SessionId;
+        CreateSessionFsProvider = other.CreateSessionFsProvider;
+        GitHubToken = other.GitHubToken;
+        RemoteSession = other.RemoteSession;
         SkillDirectories = other.SkillDirectories is not null ? [.. other.SkillDirectories] : null;
+        InstructionDirectories = other.InstructionDirectories is not null ? [.. other.InstructionDirectories] : null;
         Streaming = other.Streaming;
+        IncludeSubAgentStreamingEvents = other.IncludeSubAgentStreamingEvents;
         SystemMessage = other.SystemMessage;
         Tools = other.Tools is not null ? [.. other.Tools] : null;
         WorkingDirectory = other.WorkingDirectory;
     }
 
-    /// <summary>
-    /// Optional session identifier; a new ID is generated if not provided.
-    /// </summary>
-    public string? SessionId { get; set; }
-
-    /// <summary>
-    /// Client name to identify the application using the SDK.
-    /// Included in the User-Agent header for API requests.
-    /// </summary>
+    /// <summary>Client name to identify the application using the SDK.</summary>
     public string? ClientName { get; set; }
 
-    /// <summary>
-    /// Model identifier to use for this session (e.g., "gpt-4o").
-    /// </summary>
+    /// <summary>Model identifier to use for this session (e.g., "gpt-4o").</summary>
     public string? Model { get; set; }
 
     /// <summary>
@@ -1250,6 +2197,9 @@ public class SessionConfig
     /// </summary>
     public string? ReasoningEffort { get; set; }
 
+    /// <summary>Per-property overrides for model capabilities, deep-merged over runtime defaults.</summary>
+    public ModelCapabilitiesOverride? ModelCapabilities { get; set; }
+
     /// <summary>
     /// Override the default configuration directory location.
     /// When specified, the session will use this directory for storing config and state.
@@ -1257,46 +2207,70 @@ public class SessionConfig
     public string? ConfigDir { get; set; }
 
     /// <summary>
-    /// Custom tool functions available to the language model during the session.
+    /// When <see langword="true"/>, automatically discovers MCP server configurations
+    /// (e.g. <c>.mcp.json</c>, <c>.vscode/mcp.json</c>) and skill directories from
+    /// the working directory and merges them with any explicitly provided
+    /// <see cref="McpServers"/> and <see cref="SkillDirectories"/>, with explicit
+    /// values taking precedence on name collision.
+    /// <para>
+    /// Custom instruction files (<c>.github/copilot-instructions.md</c>, <c>AGENTS.md</c>, etc.)
+    /// are always loaded from the working directory regardless of this setting.
+    /// </para>
     /// </summary>
-    public ICollection<AIFunction>? Tools { get; set; }
+    public bool? EnableConfigDiscovery { get; set; }
+
     /// <summary>
-    /// System message configuration for the session.
+    /// Custom tool declarations available to the language model during the session.
+    /// Declarations backed by an <see cref="AIFunction"/> are invoked automatically; declarations without one
+    /// are left for the client to handle via external tool request events.
     /// </summary>
+    public ICollection<AIFunctionDeclaration>? Tools { get; set; }
+
+    /// <summary>System message configuration for the session.</summary>
     public SystemMessageConfig? SystemMessage { get; set; }
-    /// <summary>
-    /// List of tool names to allow; only these tools will be available when specified.
-    /// </summary>
-    public List<string>? AvailableTools { get; set; }
-    /// <summary>
-    /// List of tool names to exclude from the session.
-    /// </summary>
-    public List<string>? ExcludedTools { get; set; }
-    /// <summary>
-    /// Custom model provider configuration for the session.
-    /// </summary>
+
+    /// <summary>List of tool names to allow; only these tools will be available when specified.</summary>
+    public IList<string>? AvailableTools { get; set; }
+
+    /// <summary>List of tool names to exclude from the session.</summary>
+    public IList<string>? ExcludedTools { get; set; }
+
+    /// <summary>Custom model provider configuration for the session.</summary>
     public ProviderConfig? Provider { get; set; }
 
     /// <summary>
-    /// Handler for permission requests from the server.
-    /// When provided, the server will call this handler to request permission for operations.
+    /// Enables or disables internal session telemetry for this session.
+    /// When <c>false</c>, disables session telemetry. When <c>null</c> (the default) or <c>true</c>,
+    /// telemetry is enabled for GitHub-authenticated sessions.
+    /// When a custom <see cref="Provider"/> (BYOK) is configured, session telemetry is
+    /// always disabled regardless of this setting.
+    /// This is independent of <see cref="CopilotClientOptions.Telemetry"/>, which configures
+    /// OpenTelemetry export for observability.
     /// </summary>
-    public PermissionRequestHandler? OnPermissionRequest { get; set; }
+    public bool? EnableSessionTelemetry { get; set; }
 
-    /// <summary>
-    /// Handler for user input requests from the agent.
-    /// When provided, enables the ask_user tool for the agent to request user input.
-    /// </summary>
-    public UserInputHandler? OnUserInputRequest { get; set; }
+    /// <summary>Handler for permission requests from the server.</summary>
+    public Func<PermissionRequest, PermissionInvocation, Task<PermissionRequestResult>>? OnPermissionRequest { get; set; }
 
-    /// <summary>
-    /// Hook handlers for session lifecycle events.
-    /// </summary>
+    /// <summary>Handler for user input requests from the agent.</summary>
+    public Func<UserInputRequest, UserInputInvocation, Task<UserInputResponse>>? OnUserInputRequest { get; set; }
+
+    /// <summary>Slash commands registered for this session.</summary>
+    public IList<CommandDefinition>? Commands { get; set; }
+
+    /// <summary>Handler for elicitation requests from the server or MCP tools.</summary>
+    public Func<ElicitationContext, Task<ElicitationResult>>? OnElicitationRequest { get; set; }
+
+    /// <summary>Handler for exit-plan-mode requests from the server.</summary>
+    public Func<ExitPlanModeRequest, ExitPlanModeInvocation, Task<ExitPlanModeResult>>? OnExitPlanModeRequest { get; set; }
+
+    /// <summary>Handler for auto-mode-switch requests from the server.</summary>
+    public Func<AutoModeSwitchRequest, AutoModeSwitchInvocation, Task<AutoModeSwitchResponse>>? OnAutoModeSwitchRequest { get; set; }
+
+    /// <summary>Hook handlers for session lifecycle events.</summary>
     public SessionHooks? Hooks { get; set; }
 
-    /// <summary>
-    /// Working directory for the session.
-    /// </summary>
+    /// <summary>Working directory for the session.</summary>
     public string? WorkingDirectory { get; set; }
 
     /// <summary>
@@ -1304,18 +2278,35 @@ public class SessionConfig
     /// When true, assistant.message_delta and assistant.reasoning_delta events
     /// with deltaContent are sent as the response is generated.
     /// </summary>
-    public bool Streaming { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Streaming { get; set; }
+
+    /// <summary>
+    /// Include sub-agent streaming events in the event stream. When true, streaming
+    /// delta events from sub-agents (e.g., <c>assistant.message_delta</c>,
+    /// <c>assistant.reasoning_delta</c>, <c>assistant.streaming_delta</c> with
+    /// <c>agentId</c> set) are forwarded to this connection. When false, only
+    /// non-streaming sub-agent events and <c>subagent.*</c> lifecycle events are
+    /// forwarded; streaming deltas from sub-agents are suppressed.
+    /// Default: true.
+    /// </summary>
+    public bool IncludeSubAgentStreamingEvents { get; set; } = true;
 
     /// <summary>
     /// MCP server configurations for the session.
-    /// Keys are server names, values are server configurations (McpLocalServerConfig or McpRemoteServerConfig).
+    /// Keys are server names, values are server configurations (<see cref="McpStdioServerConfig"/> or <see cref="McpHttpServerConfig"/>).
     /// </summary>
-    public Dictionary<string, object>? McpServers { get; set; }
+    public IDictionary<string, McpServerConfig>? McpServers { get; set; }
+
+    /// <summary>Custom agent configurations for the session.</summary>
+    public IList<CustomAgentConfig>? CustomAgents { get; set; }
 
     /// <summary>
-    /// Custom agent configurations for the session.
+    /// Configuration for the default agent (the built-in agent that handles turns when no custom agent is selected).
+    /// Use <see cref="DefaultAgentConfig.ExcludedTools"/> to hide specific tools from the default agent
+    /// while keeping them available to custom sub-agents.
     /// </summary>
-    public List<CustomAgentConfig>? CustomAgents { get; set; }
+    public DefaultAgentConfig? DefaultAgent { get; set; }
 
     /// <summary>
     /// Name of the custom agent to activate when the session starts.
@@ -1323,21 +2314,79 @@ public class SessionConfig
     /// </summary>
     public string? Agent { get; set; }
 
-    /// <summary>
-    /// Directories to load skills from.
-    /// </summary>
-    public List<string>? SkillDirectories { get; set; }
+    /// <summary>Directories to load skills from.</summary>
+    public IList<string>? SkillDirectories { get; set; }
 
-    /// <summary>
-    /// List of skill names to disable.
-    /// </summary>
-    public List<string>? DisabledSkills { get; set; }
+    /// <summary>Additional directories to search for custom instruction files.</summary>
+    public IList<string>? InstructionDirectories { get; set; }
+
+    /// <summary>List of skill names to disable.</summary>
+    public IList<string>? DisabledSkills { get; set; }
 
     /// <summary>
     /// Infinite session configuration for persistent workspaces and automatic compaction.
     /// When enabled (default), sessions automatically manage context limits and persist state.
     /// </summary>
     public InfiniteSessionConfig? InfiniteSessions { get; set; }
+
+    /// <summary>
+    /// Optional event handler registered on the session before the session.create / session.resume
+    /// RPC is issued, ensuring early events are delivered.
+    /// </summary>
+    public Action<SessionEvent>? OnEvent { get; set; }
+
+    /// <summary>
+    /// Supplies a handler for session filesystem operations.
+    /// This is used only when <see cref="CopilotClientOptions.SessionFs"/> is configured.
+    /// </summary>
+    public Func<CopilotSession, SessionFsProvider>? CreateSessionFsProvider { get; set; }
+
+    /// <summary>
+    /// GitHub token for per-session authentication.
+    /// When provided, the runtime resolves this token into a full GitHub identity
+    /// and stores it on the session for content exclusion, model routing, and quota checks.
+    /// </summary>
+    public string? GitHubToken { get; set; }
+
+    /// <summary>
+    /// Per-session remote behavior control:
+    /// <list type="bullet">
+    /// <item><description><c>"off"</c> — local only, no remote export (default)</description></item>
+    /// <item><description><c>"export"</c> — export session events to GitHub without enabling remote steering</description></item>
+    /// <item><description><c>"on"</c> — export to GitHub AND enable remote steering</description></item>
+    /// </list>
+    /// </summary>
+    public RemoteSessionMode? RemoteSession { get; set; }
+}
+
+/// <summary>
+/// Configuration options for creating a new Copilot session.
+/// </summary>
+public sealed class SessionConfig : SessionConfigBase
+{
+    /// <summary>Initializes a new instance of the <see cref="SessionConfig"/> class.</summary>
+    public SessionConfig() { }
+
+    /// <summary>
+    /// Initializes a new instance of <see cref="SessionConfig"/> by copying the
+    /// properties of the specified instance.
+    /// </summary>
+    private SessionConfig(SessionConfig? other) : base(other)
+    {
+        if (other is null) return;
+
+        SessionId = other.SessionId;
+        Cloud = other.Cloud;
+    }
+
+    /// <summary>Optional session identifier; a new ID is generated if not provided.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>
+    /// Creates a remote session in the cloud instead of a local session.
+    /// The optional repository is associated with the cloud session.
+    /// </summary>
+    public CloudSessionOptions? Cloud { get; set; }
 
     /// <summary>
     /// Creates a shallow clone of this <see cref="SessionConfig"/> instance.
@@ -1349,170 +2398,48 @@ public class SessionConfig
     /// hooks, infinite session configuration, and delegates) are not deep-cloned; the original
     /// and the clone will share those nested objects, and changes to them may affect both.
     /// </remarks>
-    public virtual SessionConfig Clone()
-    {
-        return new(this);
-    }
+    public SessionConfig Clone() => new(this);
 }
 
 /// <summary>
 /// Configuration options for resuming an existing Copilot session.
 /// </summary>
-public class ResumeSessionConfig
+public sealed class ResumeSessionConfig : SessionConfigBase
 {
-    /// <summary>
-    /// Initializes a new instance of the <see cref="ResumeSessionConfig"/> class.
-    /// </summary>
+    /// <summary>Initializes a new instance of the <see cref="ResumeSessionConfig"/> class.</summary>
     public ResumeSessionConfig() { }
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="ResumeSessionConfig"/> class
-    /// by copying the properties of the specified instance.
+    /// Initializes a new instance of <see cref="ResumeSessionConfig"/> by copying the
+    /// properties of the specified instance.
     /// </summary>
-    protected ResumeSessionConfig(ResumeSessionConfig? other)
+    private ResumeSessionConfig(ResumeSessionConfig? other) : base(other)
     {
         if (other is null) return;
 
-        AvailableTools = other.AvailableTools is not null ? [.. other.AvailableTools] : null;
-        ClientName = other.ClientName;
-        ConfigDir = other.ConfigDir;
-        CustomAgents = other.CustomAgents is not null ? [.. other.CustomAgents] : null;
-        Agent = other.Agent;
-        DisabledSkills = other.DisabledSkills is not null ? [.. other.DisabledSkills] : null;
-        DisableResume = other.DisableResume;
-        ExcludedTools = other.ExcludedTools is not null ? [.. other.ExcludedTools] : null;
-        Hooks = other.Hooks;
-        InfiniteSessions = other.InfiniteSessions;
-        McpServers = other.McpServers is not null
-            ? new Dictionary<string, object>(other.McpServers, other.McpServers.Comparer)
-            : null;
-        Model = other.Model;
-        OnPermissionRequest = other.OnPermissionRequest;
-        OnUserInputRequest = other.OnUserInputRequest;
-        Provider = other.Provider;
-        ReasoningEffort = other.ReasoningEffort;
-        SkillDirectories = other.SkillDirectories is not null ? [.. other.SkillDirectories] : null;
-        Streaming = other.Streaming;
-        SystemMessage = other.SystemMessage;
-        Tools = other.Tools is not null ? [.. other.Tools] : null;
-        WorkingDirectory = other.WorkingDirectory;
+        SuppressResumeEvent = other.SuppressResumeEvent;
+        ContinuePendingWork = other.ContinuePendingWork;
     }
-
-    /// <summary>
-    /// Client name to identify the application using the SDK.
-    /// Included in the User-Agent header for API requests.
-    /// </summary>
-    public string? ClientName { get; set; }
-
-    /// <summary>
-    /// Model to use for this session. Can change the model when resuming.
-    /// </summary>
-    public string? Model { get; set; }
-
-    /// <summary>
-    /// Custom tool functions available to the language model during the resumed session.
-    /// </summary>
-    public ICollection<AIFunction>? Tools { get; set; }
-
-    /// <summary>
-    /// System message configuration.
-    /// </summary>
-    public SystemMessageConfig? SystemMessage { get; set; }
-
-    /// <summary>
-    /// List of tool names to allow. When specified, only these tools will be available.
-    /// Takes precedence over ExcludedTools.
-    /// </summary>
-    public List<string>? AvailableTools { get; set; }
-
-    /// <summary>
-    /// List of tool names to disable. All other tools remain available.
-    /// Ignored if AvailableTools is specified.
-    /// </summary>
-    public List<string>? ExcludedTools { get; set; }
-
-    /// <summary>
-    /// Custom model provider configuration for the resumed session.
-    /// </summary>
-    public ProviderConfig? Provider { get; set; }
-
-    /// <summary>
-    /// Reasoning effort level for models that support it.
-    /// Valid values: "low", "medium", "high", "xhigh".
-    /// </summary>
-    public string? ReasoningEffort { get; set; }
-
-    /// <summary>
-    /// Handler for permission requests from the server.
-    /// When provided, the server will call this handler to request permission for operations.
-    /// </summary>
-    public PermissionRequestHandler? OnPermissionRequest { get; set; }
-
-    /// <summary>
-    /// Handler for user input requests from the agent.
-    /// When provided, enables the ask_user tool for the agent to request user input.
-    /// </summary>
-    public UserInputHandler? OnUserInputRequest { get; set; }
-
-    /// <summary>
-    /// Hook handlers for session lifecycle events.
-    /// </summary>
-    public SessionHooks? Hooks { get; set; }
-
-    /// <summary>
-    /// Working directory for the session.
-    /// </summary>
-    public string? WorkingDirectory { get; set; }
-
-    /// <summary>
-    /// Override the default configuration directory location.
-    /// </summary>
-    public string? ConfigDir { get; set; }
 
     /// <summary>
     /// When true, the session.resume event is not emitted.
     /// Default: false (resume event is emitted).
     /// </summary>
-    public bool DisableResume { get; set; }
+    public bool SuppressResumeEvent { get; set; }
 
     /// <summary>
-    /// Enable streaming of assistant message and reasoning chunks.
-    /// When true, assistant.message_delta and assistant.reasoning_delta events
-    /// with deltaContent are sent as the response is generated.
+    /// When <see langword="true"/>, instructs the runtime to continue any tool calls
+    /// or permission prompts that were still pending when the session was last suspended.
+    /// When <see langword="false"/> (the default), the runtime treats pending work as
+    /// interrupted on resume.
+    /// <para>
+    /// For permission requests, the runtime re-emits <c>permission.requested</c> so the
+    /// registered <see cref="SessionConfigBase.OnPermissionRequest"/> handler can re-prompt;
+    /// for external tool calls, the consumer is expected to supply the result via the
+    /// corresponding low-level RPC method.
+    /// </para>
     /// </summary>
-    public bool Streaming { get; set; }
-
-    /// <summary>
-    /// MCP server configurations for the session.
-    /// Keys are server names, values are server configurations (McpLocalServerConfig or McpRemoteServerConfig).
-    /// </summary>
-    public Dictionary<string, object>? McpServers { get; set; }
-
-    /// <summary>
-    /// Custom agent configurations for the session.
-    /// </summary>
-    public List<CustomAgentConfig>? CustomAgents { get; set; }
-
-    /// <summary>
-    /// Name of the custom agent to activate when the session starts.
-    /// Must match the <see cref="CustomAgentConfig.Name"/> of one of the agents in <see cref="CustomAgents"/>.
-    /// </summary>
-    public string? Agent { get; set; }
-
-    /// <summary>
-    /// Directories to load skills from.
-    /// </summary>
-    public List<string>? SkillDirectories { get; set; }
-
-    /// <summary>
-    /// List of skill names to disable.
-    /// </summary>
-    public List<string>? DisabledSkills { get; set; }
-
-    /// <summary>
-    /// Infinite session configuration for persistent workspaces and automatic compaction.
-    /// </summary>
-    public InfiniteSessionConfig? InfiniteSessions { get; set; }
+    public bool? ContinuePendingWork { get; set; }
 
     /// <summary>
     /// Creates a shallow clone of this <see cref="ResumeSessionConfig"/> instance.
@@ -1524,16 +2451,13 @@ public class ResumeSessionConfig
     /// hooks, infinite session configuration, and delegates) are not deep-cloned; the original
     /// and the clone will share those nested objects, and changes to them may affect both.
     /// </remarks>
-    public virtual ResumeSessionConfig Clone()
-    {
-        return new(this);
-    }
+    public ResumeSessionConfig Clone() => new(this);
 }
 
 /// <summary>
 /// Options for sending a message in a Copilot session.
 /// </summary>
-public class MessageOptions
+public sealed class MessageOptions
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="MessageOptions"/> class.
@@ -1544,13 +2468,16 @@ public class MessageOptions
     /// Initializes a new instance of the <see cref="MessageOptions"/> class
     /// by copying the properties of the specified instance.
     /// </summary>
-    protected MessageOptions(MessageOptions? other)
+    private MessageOptions(MessageOptions? other)
     {
         if (other is null) return;
 
         Attachments = other.Attachments is not null ? [.. other.Attachments] : null;
         Mode = other.Mode;
         Prompt = other.Prompt;
+        RequestHeaders = other.RequestHeaders is not null
+            ? new Dictionary<string, string>(other.RequestHeaders)
+            : null;
     }
 
     /// <summary>
@@ -1560,11 +2487,15 @@ public class MessageOptions
     /// <summary>
     /// File or data attachments to include with the message.
     /// </summary>
-    public List<UserMessageDataAttachmentsItem>? Attachments { get; set; }
+    public IList<UserMessageAttachment>? Attachments { get; set; }
     /// <summary>
     /// Interaction mode for the message (e.g., "plan", "edit").
     /// </summary>
     public string? Mode { get; set; }
+    /// <summary>
+    /// Custom per-turn HTTP headers for outbound model requests.
+    /// </summary>
+    public IDictionary<string, string>? RequestHeaders { get; set; }
 
     /// <summary>
     /// Creates a shallow clone of this <see cref="MessageOptions"/> instance.
@@ -1575,21 +2506,16 @@ public class MessageOptions
     /// Other reference-type properties (for example attachment items) are not deep-cloned;
     /// the original and the clone will share those nested objects.
     /// </remarks>
-    public virtual MessageOptions Clone()
+    public MessageOptions Clone()
     {
         return new(this);
     }
 }
 
 /// <summary>
-/// Delegate for handling session events emitted during a Copilot session.
-/// </summary>
-public delegate void SessionEventHandler(SessionEvent sessionEvent);
-
-/// <summary>
 /// Working directory context for a session.
 /// </summary>
-public class SessionContext
+public sealed class SessionContext
 {
     /// <summary>Working directory where the session was created.</summary>
     public string Cwd { get; set; } = string.Empty;
@@ -1604,10 +2530,10 @@ public class SessionContext
 /// <summary>
 /// Filter options for listing sessions.
 /// </summary>
-public class SessionListFilter
+public sealed class SessionListFilter
 {
-    /// <summary>Filter by exact cwd match.</summary>
-    public string? Cwd { get; set; }
+    /// <summary>Filter by exact working directory match.</summary>
+    public string? WorkingDirectory { get; set; }
     /// <summary>Filter by git root.</summary>
     public string? GitRoot { get; set; }
     /// <summary>Filter by repository (owner/repo format).</summary>
@@ -1619,7 +2545,7 @@ public class SessionListFilter
 /// <summary>
 /// Metadata describing a Copilot session.
 /// </summary>
-public class SessionMetadata
+public sealed class SessionMetadata
 {
     /// <summary>
     /// Unique identifier of the session.
@@ -1628,11 +2554,11 @@ public class SessionMetadata
     /// <summary>
     /// Time when the session was created.
     /// </summary>
-    public DateTime StartTime { get; set; }
+    public DateTimeOffset StartTime { get; set; }
     /// <summary>
     /// Time when the session was last modified.
     /// </summary>
-    public DateTime ModifiedTime { get; set; }
+    public DateTimeOffset ModifiedTime { get; set; }
     /// <summary>
     /// Human-readable summary of the session.
     /// </summary>
@@ -1653,16 +2579,16 @@ internal class PingRequest
 /// <summary>
 /// Response from a server ping request.
 /// </summary>
-public class PingResponse
+public sealed class PingResponse
 {
     /// <summary>
     /// Echo of the ping message.
     /// </summary>
     public string Message { get; set; } = string.Empty;
     /// <summary>
-    /// Server timestamp when the ping was processed.
+    /// ISO 8601 timestamp when the ping was processed.
     /// </summary>
-    public long Timestamp { get; set; }
+    public DateTimeOffset Timestamp { get; set; }
     /// <summary>
     /// Protocol version supported by the server.
     /// </summary>
@@ -1672,7 +2598,7 @@ public class PingResponse
 /// <summary>
 /// Response from status.get
 /// </summary>
-public class GetStatusResponse
+public sealed class GetStatusResponse
 {
     /// <summary>Package version (e.g., "1.0.0")</summary>
     [JsonPropertyName("version")]
@@ -1686,7 +2612,7 @@ public class GetStatusResponse
 /// <summary>
 /// Response from auth.getStatus
 /// </summary>
-public class GetAuthStatusResponse
+public sealed class GetAuthStatusResponse
 {
     /// <summary>Whether the user is authenticated</summary>
     [JsonPropertyName("isAuthenticated")]
@@ -1722,13 +2648,13 @@ public class GetAuthStatusResponse
 /// <summary>
 /// Model vision-specific limits
 /// </summary>
-public class ModelVisionLimits
+public sealed class ModelVisionLimits
 {
     /// <summary>
     /// List of supported image MIME types (e.g., "image/png", "image/jpeg").
     /// </summary>
     [JsonPropertyName("supported_media_types")]
-    public List<string> SupportedMediaTypes { get; set; } = [];
+    public IList<string> SupportedMediaTypes { get => field ??= []; set; }
 
     /// <summary>
     /// Maximum number of images allowed in a single prompt.
@@ -1746,7 +2672,7 @@ public class ModelVisionLimits
 /// <summary>
 /// Model limits
 /// </summary>
-public class ModelLimits
+public sealed class ModelLimits
 {
     /// <summary>
     /// Maximum number of tokens allowed in the prompt.
@@ -1770,7 +2696,7 @@ public class ModelLimits
 /// <summary>
 /// Model support flags
 /// </summary>
-public class ModelSupports
+public sealed class ModelSupports
 {
     /// <summary>
     /// Whether this model supports image/vision inputs.
@@ -1788,7 +2714,7 @@ public class ModelSupports
 /// <summary>
 /// Model capabilities and limits
 /// </summary>
-public class ModelCapabilities
+public sealed class ModelCapabilities
 {
     /// <summary>
     /// Feature support flags for the model.
@@ -1806,7 +2732,7 @@ public class ModelCapabilities
 /// <summary>
 /// Model policy state
 /// </summary>
-public class ModelPolicy
+public sealed class ModelPolicy
 {
     /// <summary>
     /// Policy state of the model (e.g., "enabled", "disabled").
@@ -1824,19 +2750,19 @@ public class ModelPolicy
 /// <summary>
 /// Model billing information
 /// </summary>
-public class ModelBilling
+public sealed class ModelBilling
 {
     /// <summary>
     /// Billing cost multiplier relative to the base model rate.
     /// </summary>
     [JsonPropertyName("multiplier")]
-    public double Multiplier { get; set; }
+    public double? Multiplier { get; set; }
 }
 
 /// <summary>
 /// Information about an available model
 /// </summary>
-public class ModelInfo
+public sealed class ModelInfo
 {
     /// <summary>Model identifier (e.g., "claude-sonnet-4.5")</summary>
     [JsonPropertyName("id")]
@@ -1860,7 +2786,7 @@ public class ModelInfo
 
     /// <summary>Supported reasoning effort levels (only present if model supports reasoning effort)</summary>
     [JsonPropertyName("supportedReasoningEfforts")]
-    public List<string>? SupportedReasoningEfforts { get; set; }
+    public IList<string>? SupportedReasoningEfforts { get; set; }
 
     /// <summary>Default reasoning effort level (only present if model supports reasoning effort)</summary>
     [JsonPropertyName("defaultReasoningEffort")]
@@ -1870,13 +2796,13 @@ public class ModelInfo
 /// <summary>
 /// Response from models.list
 /// </summary>
-public class GetModelsResponse
+public sealed class GetModelsResponse
 {
     /// <summary>
     /// List of available models.
     /// </summary>
     [JsonPropertyName("models")]
-    public List<ModelInfo> Models { get; set; } = [];
+    public IList<ModelInfo> Models { get => field ??= []; set; }
 }
 
 // ============================================================================
@@ -1884,38 +2810,21 @@ public class GetModelsResponse
 // ============================================================================
 
 /// <summary>
-/// Types of session lifecycle events
+/// Metadata for session lifecycle events.
 /// </summary>
-public static class SessionLifecycleEventTypes
-{
-    /// <summary>A new session was created.</summary>
-    public const string Created = "session.created";
-    /// <summary>A session was deleted.</summary>
-    public const string Deleted = "session.deleted";
-    /// <summary>A session was updated.</summary>
-    public const string Updated = "session.updated";
-    /// <summary>A session was brought to the foreground.</summary>
-    public const string Foreground = "session.foreground";
-    /// <summary>A session was moved to the background.</summary>
-    public const string Background = "session.background";
-}
-
-/// <summary>
-/// Metadata for session lifecycle events
-/// </summary>
-public class SessionLifecycleEventMetadata
+public sealed class SessionLifecycleEventMetadata
 {
     /// <summary>
-    /// ISO 8601 timestamp when the session was created.
+    /// Timestamp when the session was created.
     /// </summary>
     [JsonPropertyName("startTime")]
-    public string StartTime { get; set; } = string.Empty;
+    public DateTimeOffset StartTime { get; set; }
 
     /// <summary>
-    /// ISO 8601 timestamp when the session was last modified.
+    /// Timestamp when the session was last modified.
     /// </summary>
     [JsonPropertyName("modifiedTime")]
-    public string ModifiedTime { get; set; } = string.Empty;
+    public DateTimeOffset ModifiedTime { get; set; }
 
     /// <summary>
     /// Human-readable summary of the session.
@@ -1925,12 +2834,20 @@ public class SessionLifecycleEventMetadata
 }
 
 /// <summary>
-/// Session lifecycle event notification
+/// Session lifecycle event notification. Use derived types
+/// (<see cref="SessionCreatedEvent"/>, <see cref="SessionDeletedEvent"/>,
+/// <see cref="SessionUpdatedEvent"/>, <see cref="SessionForegroundEvent"/>,
+/// <see cref="SessionBackgroundEvent"/>) for known kinds. The base type is
+/// instantiated when the runtime emits an event kind not known to this SDK
+/// version, so consumers can still inspect <see cref="Type"/> for forward
+/// compatibility.
 /// </summary>
 public class SessionLifecycleEvent
 {
     /// <summary>
-    /// Type of lifecycle event (see <see cref="SessionLifecycleEventTypes"/>).
+    /// Wire-format type discriminator (e.g., <c>"session.created"</c>). Useful
+    /// when the runtime emits an event kind not yet known to this SDK; for
+    /// known kinds, prefer pattern-matching on the derived type instead.
     /// </summary>
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
@@ -1948,10 +2865,25 @@ public class SessionLifecycleEvent
     public SessionLifecycleEventMetadata? Metadata { get; set; }
 }
 
+/// <summary>Raised when a new session is created.</summary>
+public sealed class SessionCreatedEvent : SessionLifecycleEvent { }
+
+/// <summary>Raised when a session is deleted.</summary>
+public sealed class SessionDeletedEvent : SessionLifecycleEvent { }
+
+/// <summary>Raised when a session's metadata is updated.</summary>
+public sealed class SessionUpdatedEvent : SessionLifecycleEvent { }
+
+/// <summary>Raised when a session is brought to the foreground (TUI+server mode).</summary>
+public sealed class SessionForegroundEvent : SessionLifecycleEvent { }
+
+/// <summary>Raised when a session moves to the background (TUI+server mode).</summary>
+public sealed class SessionBackgroundEvent : SessionLifecycleEvent { }
+
 /// <summary>
 /// Response from session.getForeground
 /// </summary>
-public class GetForegroundSessionResponse
+public sealed class GetForegroundSessionResponse
 {
     /// <summary>
     /// Identifier of the current foreground session, or null if none.
@@ -1969,7 +2901,7 @@ public class GetForegroundSessionResponse
 /// <summary>
 /// Response from session.setForeground
 /// </summary>
-public class SetForegroundSessionResponse
+public sealed class SetForegroundSessionResponse
 {
     /// <summary>
     /// Whether the foreground session was set successfully.
@@ -1984,29 +2916,57 @@ public class SetForegroundSessionResponse
     public string? Error { get; set; }
 }
 
+/// <summary>
+/// Content data for a single system prompt section in a transform RPC call.
+/// </summary>
+public sealed class SystemMessageTransformSection
+{
+    /// <summary>
+    /// The content of the section.
+    /// </summary>
+    [JsonPropertyName("content")]
+    public string? Content { get; set; }
+}
+
+/// <summary>
+/// Response to a systemMessage.transform RPC call.
+/// </summary>
+public sealed class SystemMessageTransformRpcResponse
+{
+    /// <summary>
+    /// The transformed sections keyed by section identifier.
+    /// </summary>
+    [JsonPropertyName("sections")]
+    public IDictionary<string, SystemMessageTransformSection>? Sections { get; set; }
+}
+
 [JsonSourceGenerationOptions(
     JsonSerializerDefaults.Web,
     AllowOutOfOrderMetadataProperties = true,
     NumberHandling = JsonNumberHandling.AllowReadingFromString,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(AzureOptions))]
+[JsonSerializable(typeof(AutoModeSwitchRequest))]
+[JsonSerializable(typeof(AutoModeSwitchResponse))]
 [JsonSerializable(typeof(CustomAgentConfig))]
+[JsonSerializable(typeof(ExitPlanModeRequest))]
+[JsonSerializable(typeof(ExitPlanModeResult))]
 [JsonSerializable(typeof(GetAuthStatusResponse))]
 [JsonSerializable(typeof(GetForegroundSessionResponse))]
 [JsonSerializable(typeof(GetModelsResponse))]
 [JsonSerializable(typeof(GetStatusResponse))]
-[JsonSerializable(typeof(McpLocalServerConfig))]
-[JsonSerializable(typeof(McpRemoteServerConfig))]
+[JsonSerializable(typeof(McpServerConfig))]
 [JsonSerializable(typeof(MessageOptions))]
 [JsonSerializable(typeof(ModelBilling))]
 [JsonSerializable(typeof(ModelCapabilities))]
+[JsonSerializable(typeof(ModelCapabilitiesOverride))]
 [JsonSerializable(typeof(ModelInfo))]
 [JsonSerializable(typeof(ModelLimits))]
 [JsonSerializable(typeof(ModelPolicy))]
 [JsonSerializable(typeof(ModelSupports))]
 [JsonSerializable(typeof(ModelVisionLimits))]
-[JsonSerializable(typeof(PermissionRequest))]
 [JsonSerializable(typeof(PermissionRequestResult))]
+[JsonSerializable(typeof(PermissionRequestResultKind))]
 [JsonSerializable(typeof(PingRequest))]
 [JsonSerializable(typeof(PingResponse))]
 [JsonSerializable(typeof(ProviderConfig))]
@@ -2014,12 +2974,17 @@ public class SetForegroundSessionResponse
 [JsonSerializable(typeof(SessionLifecycleEvent))]
 [JsonSerializable(typeof(SessionLifecycleEventMetadata))]
 [JsonSerializable(typeof(SessionListFilter))]
+[JsonSerializable(typeof(SectionOverride))]
 [JsonSerializable(typeof(SessionMetadata))]
 [JsonSerializable(typeof(SetForegroundSessionResponse))]
 [JsonSerializable(typeof(SystemMessageConfig))]
 [JsonSerializable(typeof(ToolBinaryResult))]
+[JsonSerializable(typeof(ToolBinaryResultType))]
 [JsonSerializable(typeof(ToolInvocation))]
 [JsonSerializable(typeof(ToolResultObject))]
 [JsonSerializable(typeof(JsonElement))]
 [JsonSerializable(typeof(JsonElement?))]
+[JsonSerializable(typeof(object))]
+[JsonSerializable(typeof(Dictionary<string, object>))]
+[JsonSerializable(typeof(string[]))]
 internal partial class TypesJsonContext : JsonSerializerContext;

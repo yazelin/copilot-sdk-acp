@@ -1,13 +1,13 @@
-# Pre-Tool Use Hook
+# Pre-tool use hook
 
 The `onPreToolUse` hook is called **before** a tool executes. Use it to:
 
-- Approve or deny tool execution
-- Modify tool arguments
-- Add context for the tool
-- Suppress tool output from the conversation
+* Approve or deny tool execution
+* Modify tool arguments
+* Add context for the tool
+* Suppress tool output from the conversation
 
-## Hook Signature
+## Hook signature
 
 <details open>
 <summary><strong>Node.js / TypeScript</strong></summary>
@@ -35,18 +35,18 @@ type PreToolUseHandler = (
 
 <!-- docs-validate: hidden -->
 ```python
-from copilot.types import PreToolUseHookInput, HookInvocation, PreToolUseHookOutput
+from copilot.session import PreToolUseHookInput, PreToolUseHookOutput
 from typing import Callable, Awaitable
 
 PreToolUseHandler = Callable[
-    [PreToolUseHookInput, HookInvocation],
+    [PreToolUseHookInput, dict[str, str]],
     Awaitable[PreToolUseHookOutput | None]
 ]
 ```
 <!-- /docs-validate: hidden -->
 ```python
 PreToolUseHandler = Callable[
-    [PreToolUseHookInput, HookInvocation],
+    [PreToolUseHookInput, dict[str, str]],
     Awaitable[PreToolUseHookOutput | None]
 ]
 ```
@@ -84,7 +84,7 @@ type PreToolUseHandler func(
 
 <!-- docs-validate: hidden -->
 ```csharp
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 public delegate Task<PreToolUseHookOutput?> PreToolUseHandler(
     PreToolUseHookInput input,
@@ -95,6 +95,17 @@ public delegate Task<PreToolUseHookOutput?> PreToolUseHandler(
 public delegate Task<PreToolUseHookOutput?> PreToolUseHandler(
     PreToolUseHookInput input,
     HookInvocation invocation);
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.json.*;
+
+PreToolUseHandler preToolUseHandler;
 ```
 
 </details>
@@ -120,7 +131,7 @@ Return `null` or `undefined` to allow the tool to execute with no changes. Other
 | `additionalContext` | string | Extra context injected into the conversation |
 | `suppressOutput` | boolean | If true, tool output won't appear in conversation |
 
-### Permission Decisions
+### Permission decisions
 
 | Decision | Behavior |
 |----------|----------|
@@ -130,7 +141,7 @@ Return `null` or `undefined` to allow the tool to execute with no changes. Other
 
 ## Examples
 
-### Allow All Tools (Logging Only)
+### Allow all tools (logging only)
 
 <details open>
 <summary><strong>Node.js / TypeScript</strong></summary>
@@ -153,14 +164,14 @@ const session = await client.createSession({
 <summary><strong>Python</strong></summary>
 
 ```python
+from copilot.session import PermissionHandler
+
 async def on_pre_tool_use(input_data, invocation):
     print(f"[{invocation['session_id']}] Calling {input_data['toolName']}")
     print(f"  Args: {input_data['toolArgs']}")
     return {"permissionDecision": "allow"}
 
-session = await client.create_session({
-    "hooks": {"on_pre_tool_use": on_pre_tool_use}
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, hooks={"on_pre_tool_use": on_pre_tool_use})
 ```
 
 </details>
@@ -217,7 +228,7 @@ session, _ := client.CreateSession(context.Background(), &copilot.SessionConfig{
 
 <!-- docs-validate: hidden -->
 ```csharp
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 public static class PreToolUseExample
 {
@@ -261,7 +272,31 @@ var session = await client.CreateSessionAsync(new SessionConfig
 
 </details>
 
-### Block Specific Tools
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.*;
+import com.github.copilot.sdk.json.*;
+import java.util.concurrent.CompletableFuture;
+
+var hooks = new SessionHooks()
+    .setOnPreToolUse((input, invocation) -> {
+        System.out.println("[" + invocation.getSessionId() + "] Calling " + input.getToolName());
+        System.out.println("  Args: " + input.getToolArgs());
+        return CompletableFuture.completedFuture(PreToolUseHookOutput.allow());
+    });
+
+var session = client.createSession(
+    new SessionConfig()
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+        .setHooks(hooks)
+).get();
+```
+
+</details>
+
+### Block specific tools
 
 ```typescript
 const BLOCKED_TOOLS = ["shell", "bash", "write_file", "delete_file"];
@@ -281,7 +316,7 @@ const session = await client.createSession({
 });
 ```
 
-### Modify Tool Arguments
+### Modify tool arguments
 
 ```typescript
 const session = await client.createSession({
@@ -304,7 +339,7 @@ const session = await client.createSession({
 });
 ```
 
-### Restrict File Access to Specific Directories
+### Restrict file access to specific directories
 
 ```typescript
 const ALLOWED_DIRECTORIES = ["/home/user/projects", "/tmp"];
@@ -331,7 +366,7 @@ const session = await client.createSession({
 });
 ```
 
-### Suppress Verbose Tool Output
+### Suppress verbose tool output
 
 ```typescript
 const VERBOSE_TOOLS = ["list_directory", "search_files"];
@@ -348,7 +383,7 @@ const session = await client.createSession({
 });
 ```
 
-### Add Context Based on Tool
+### Add context based on tool
 
 ```typescript
 const session = await client.createSession({
@@ -366,11 +401,11 @@ const session = await client.createSession({
 });
 ```
 
-## Best Practices
+## Best practices
 
 1. **Always return a decision** - Returning `null` allows the tool, but being explicit with `{ permissionDecision: "allow" }` is clearer.
 
-2. **Provide helpful denial reasons** - When denying, explain why so users understand:
+1. **Provide helpful denial reasons** - When denying, explain why so users understand:
    ```typescript
    return {
      permissionDecision: "deny",
@@ -378,14 +413,14 @@ const session = await client.createSession({
    };
    ```
 
-3. **Be careful with argument modification** - Ensure modified args maintain the expected schema for the tool.
+1. **Be careful with argument modification** - Ensure modified args maintain the expected schema for the tool.
 
-4. **Consider performance** - Pre-tool hooks run synchronously before each tool call. Keep them fast.
+1. **Consider performance** - Pre-tool hooks run synchronously before each tool call. Keep them fast.
 
-5. **Use `suppressOutput` judiciously** - Suppressing output means the model won't see the result, which may affect conversation quality.
+1. **Use `suppressOutput` judiciously** - Suppressing output means the model won't see the result, which may affect conversation quality.
 
-## See Also
+## See also
 
-- [Hooks Overview](./index.md)
-- [Post-Tool Use Hook](./post-tool-use.md)
-- [Debugging Guide](../troubleshooting/debugging.md)
+* [Hooks Overview](./index.md)
+* [Post-Tool Use Hook](./post-tool-use.md)
+* [Debugging Guide](../troubleshooting/debugging.md)

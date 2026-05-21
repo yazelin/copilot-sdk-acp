@@ -1,13 +1,15 @@
 import asyncio
 import os
 from copilot import CopilotClient
+from copilot.client import SubprocessConfig
+from copilot.session import PermissionRequestResult
 
 
 input_log: list[str] = []
 
 
 async def auto_approve_permission(request, invocation):
-    return {"kind": "approved"}
+    return PermissionRequestResult(kind="approve-once")
 
 
 async def auto_approve_tool(input_data, invocation):
@@ -20,10 +22,10 @@ async def handle_user_input(request, invocation):
 
 
 async def main():
-    opts = {"github_token": os.environ.get("GITHUB_TOKEN")}
-    if os.environ.get("COPILOT_CLI_PATH"):
-        opts["cli_path"] = os.environ["COPILOT_CLI_PATH"]
-    client = CopilotClient(opts)
+    client = CopilotClient(SubprocessConfig(
+        github_token=os.environ.get("GITHUB_TOKEN"),
+        cli_path=os.environ.get("COPILOT_CLI_PATH"),
+    ))
 
     try:
         session = await client.create_session(
@@ -36,12 +38,8 @@ async def main():
         )
 
         response = await session.send_and_wait(
-            {
-                "prompt": (
-                    "I want to learn about a city. Use the ask_user tool to ask me "
-                    "which city I'm interested in. Then tell me about that city."
-                )
-            }
+            "I want to learn about a city. Use the ask_user tool to ask me "
+            "which city I'm interested in. Then tell me about that city."
         )
 
         if response:

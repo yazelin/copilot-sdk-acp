@@ -1,13 +1,13 @@
-# Post-Tool Use Hook
+# Post-tool use hook
 
 The `onPostToolUse` hook is called **after** a tool executes. Use it to:
 
-- Transform or filter tool results
-- Log tool execution for auditing
-- Add context based on results
-- Suppress results from the conversation
+* Transform or filter tool results
+* Log tool execution for auditing
+* Add context based on results
+* Suppress results from the conversation
 
-## Hook Signature
+## Hook signature
 
 <details open>
 <summary><strong>Node.js / TypeScript</strong></summary>
@@ -35,18 +35,18 @@ type PostToolUseHandler = (
 
 <!-- docs-validate: hidden -->
 ```python
-from copilot.types import PostToolUseHookInput, HookInvocation, PostToolUseHookOutput
+from copilot.session import PostToolUseHookInput, PostToolUseHookOutput
 from typing import Callable, Awaitable
 
 PostToolUseHandler = Callable[
-    [PostToolUseHookInput, HookInvocation],
+    [PostToolUseHookInput, dict[str, str]],
     Awaitable[PostToolUseHookOutput | None]
 ]
 ```
 <!-- /docs-validate: hidden -->
 ```python
 PostToolUseHandler = Callable[
-    [PostToolUseHookInput, HookInvocation],
+    [PostToolUseHookInput, dict[str, str]],
     Awaitable[PostToolUseHookOutput | None]
 ]
 ```
@@ -84,7 +84,7 @@ type PostToolUseHandler func(
 
 <!-- docs-validate: hidden -->
 ```csharp
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 public delegate Task<PostToolUseHookOutput?> PostToolUseHandler(
     PostToolUseHookInput input,
@@ -95,6 +95,17 @@ public delegate Task<PostToolUseHookOutput?> PostToolUseHandler(
 public delegate Task<PostToolUseHookOutput?> PostToolUseHandler(
     PostToolUseHookInput input,
     HookInvocation invocation);
+```
+
+</details>
+
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.json.*;
+
+PostToolUseHandler postToolUseHandler;
 ```
 
 </details>
@@ -121,7 +132,7 @@ Return `null` or `undefined` to pass through the result unchanged. Otherwise, re
 
 ## Examples
 
-### Log All Tool Results
+### Log all tool results
 
 <details open>
 <summary><strong>Node.js / TypeScript</strong></summary>
@@ -145,15 +156,15 @@ const session = await client.createSession({
 <summary><strong>Python</strong></summary>
 
 ```python
+from copilot.session import PermissionHandler
+
 async def on_post_tool_use(input_data, invocation):
     print(f"[{invocation['session_id']}] Tool: {input_data['toolName']}")
     print(f"  Args: {input_data['toolArgs']}")
     print(f"  Result: {input_data['toolResult']}")
     return None  # Pass through unchanged
 
-session = await client.create_session({
-    "hooks": {"on_post_tool_use": on_post_tool_use}
-})
+session = await client.create_session(on_permission_request=PermissionHandler.approve_all, hooks={"on_post_tool_use": on_post_tool_use})
 ```
 
 </details>
@@ -208,7 +219,7 @@ session, _ := client.CreateSession(context.Background(), &copilot.SessionConfig{
 
 <!-- docs-validate: hidden -->
 ```csharp
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 
 public static class PostToolUseExample
 {
@@ -250,7 +261,32 @@ var session = await client.CreateSessionAsync(new SessionConfig
 
 </details>
 
-### Redact Sensitive Data
+<details>
+<summary><strong>Java</strong></summary>
+
+```java
+import com.github.copilot.sdk.*;
+import com.github.copilot.sdk.json.*;
+import java.util.concurrent.CompletableFuture;
+
+var hooks = new SessionHooks()
+    .setOnPostToolUse((input, invocation) -> {
+        System.out.println("[" + invocation.getSessionId() + "] Tool: " + input.getToolName());
+        System.out.println("  Args: " + input.getToolArgs());
+        System.out.println("  Result: " + input.getToolResult());
+        return CompletableFuture.completedFuture(null);
+    });
+
+var session = client.createSession(
+    new SessionConfig()
+        .setOnPermissionRequest(PermissionHandler.APPROVE_ALL)
+        .setHooks(hooks)
+).get();
+```
+
+</details>
+
+### Redact sensitive data
 
 ```typescript
 const SENSITIVE_PATTERNS = [
@@ -278,7 +314,7 @@ const session = await client.createSession({
 });
 ```
 
-### Truncate Large Results
+### Truncate large results
 
 ```typescript
 const MAX_RESULT_LENGTH = 10000;
@@ -304,7 +340,7 @@ const session = await client.createSession({
 });
 ```
 
-### Add Context Based on Results
+### Add context based on results
 
 ```typescript
 const session = await client.createSession({
@@ -330,7 +366,7 @@ const session = await client.createSession({
 });
 ```
 
-### Filter Error Stack Traces
+### Filter error stack traces
 
 ```typescript
 const session = await client.createSession({
@@ -352,7 +388,7 @@ const session = await client.createSession({
 });
 ```
 
-### Audit Trail for Compliance
+### Audit trail for compliance
 
 ```typescript
 interface AuditEntry {
@@ -387,7 +423,7 @@ const session = await client.createSession({
 });
 ```
 
-### Suppress Noisy Results
+### Suppress noisy results
 
 ```typescript
 const NOISY_TOOLS = ["list_directory", "search_codebase"];
@@ -414,20 +450,20 @@ const session = await client.createSession({
 });
 ```
 
-## Best Practices
+## Best practices
 
 1. **Return `null` when no changes needed** - This is more efficient than returning an empty object or the same result.
 
-2. **Be careful with result modification** - Changing results can affect how the model interprets tool output. Only modify when necessary.
+1. **Be careful with result modification** - Changing results can affect how the model interprets tool output. Only modify when necessary.
 
-3. **Use `additionalContext` for hints** - Instead of modifying results, add context to help the model interpret them.
+1. **Use `additionalContext` for hints** - Instead of modifying results, add context to help the model interpret them.
 
-4. **Consider privacy when logging** - Tool results may contain sensitive data. Apply redaction before logging.
+1. **Consider privacy when logging** - Tool results may contain sensitive data. Apply redaction before logging.
 
-5. **Keep hooks fast** - Post-tool hooks run synchronously. Heavy processing should be done asynchronously or batched.
+1. **Keep hooks fast** - Post-tool hooks run synchronously. Heavy processing should be done asynchronously or batched.
 
-## See Also
+## See also
 
-- [Hooks Overview](./index.md)
-- [Pre-Tool Use Hook](./pre-tool-use.md)
-- [Error Handling Hook](./error-handling.md)
+* [Hooks Overview](./index.md)
+* [Pre-Tool Use Hook](./pre-tool-use.md)
+* [Error Handling Hook](./error-handling.md)
