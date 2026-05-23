@@ -24,6 +24,8 @@ pub mod rpc_methods {
     pub const TOOLS_LIST: &str = "tools.list";
     /// `account.getQuota`
     pub const ACCOUNT_GETQUOTA: &str = "account.getQuota";
+    /// `secrets.addFilterValues`
+    pub const SECRETS_ADDFILTERVALUES: &str = "secrets.addFilterValues";
     /// `mcp.config.list`
     pub const MCP_CONFIG_LIST: &str = "mcp.config.list";
     /// `mcp.config.add`
@@ -429,9 +431,9 @@ pub struct AccountQuotaSnapshot {
     pub entitlement_requests: i64,
     /// Whether the user has an unlimited usage entitlement
     pub is_unlimited_entitlement: bool,
-    /// Number of overage requests made this period
+    /// Number of additional usage requests made this period
     pub overage: f64,
-    /// Whether overage is allowed when quota is exhausted
+    /// Whether additional usage is allowed when quota is exhausted
     pub overage_allowed_with_exhausted_quota: bool,
     /// Percentage of entitlement remaining
     pub remaining_percentage: f64,
@@ -470,6 +472,13 @@ pub struct AgentInfo {
     /// Stable identifier for selection. For most agents this is the same as `name`; for plugin/builtin agents it may differ. Always populated; defaults to `name` when no distinct id was assigned.
     pub id: String,
     /// MCP server configurations attached to this agent, keyed by server name. Server config shape mirrors the MCP `mcpServers` schema.
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(default)]
     pub mcp_servers: HashMap<String, serde_json::Value>,
     /// Preferred model id for this agent. When omitted, inherits the outer agent's model.
@@ -1100,7 +1109,7 @@ pub struct ConnectRemoteSessionParams {
 /// Optional connection token presented by the SDK client during the handshake.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectRequest {
+pub(crate) struct ConnectRequest {
     /// Connection token; required when the server was started with COPILOT_CONNECTION_TOKEN
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -1109,7 +1118,7 @@ pub struct ConnectRequest {
 /// Handshake result reporting the server's protocol version and package version on success.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectResult {
+pub(crate) struct ConnectResult {
     /// Always true on success
     pub ok: bool,
     /// Server protocol version number
@@ -1810,6 +1819,22 @@ pub struct HistoryCompactContextWindow {
     /// Token count from tool definitions
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_definitions_tokens: Option<i64>,
+}
+
+/// Optional compaction parameters.
+///
+/// <div class="warning">
+///
+/// **Experimental.** This type is part of an experimental wire-protocol surface
+/// and may change or be removed in future SDK or CLI releases.
+///
+/// </div>
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryCompactRequest {
+    /// Optional user-provided instructions to focus the compaction summary
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_instructions: Option<String>,
 }
 
 /// Compaction outcome with the number of tokens and messages removed, summary text, and the resulting context window breakdown.
@@ -4909,6 +4934,22 @@ pub struct ScheduleStopResult {
     pub entry: Option<ScheduleEntry>,
 }
 
+/// Secret values to add to the redaction filter.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretsAddFilterValuesRequest {
+    /// Raw secret values to register for redaction
+    pub values: Vec<String>,
+}
+
+/// Confirmation that the secret values were registered.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretsAddFilterValuesResult {
+    /// Whether the values were successfully registered
+    pub ok: bool,
+}
+
 /// Blob attachment with inline base64-encoded data
 ///
 /// <div class="warning">
@@ -5126,8 +5167,9 @@ pub struct SendRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_tool: Option<String>,
     /// Optional provenance tag copied to the resulting user.message event. Supported values are `system`, `command-*`, and `schedule-*`.
+    #[doc(hidden)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<serde_json::Value>,
+    pub(crate) source: Option<serde_json::Value>,
     /// W3C Trace Context traceparent header for distributed tracing of this agent turn
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traceparent: Option<String>,
@@ -6363,6 +6405,13 @@ pub struct SessionsSetAdditionalPluginsResult {}
 #[serde(rename_all = "camelCase")]
 pub struct SessionUpdateOptionsParams {
     /// Additional content-exclusion policies to merge into the session's policy set. Opaque shape; see `ContentExclusionApiResponse` in the runtime.
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(default)]
     pub additional_content_exclusion_policies: Vec<serde_json::Value>,
     /// Runtime context discriminator (e.g., `cli`, `actions`).
@@ -6441,6 +6490,13 @@ pub struct SessionUpdateOptionsParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Custom model-provider configuration (BYOK). Opaque shape; see `ProviderConfig` in the runtime.
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<serde_json::Value>,
     /// Reasoning effort for the selected model (model-defined enum).
@@ -6450,6 +6506,13 @@ pub struct SessionUpdateOptionsParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub running_in_interactive_mode: Option<bool>,
     /// Sandbox configuration shape; opaque to SDK consumers. See `SandboxConfig` in the runtime.
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_config: Option<serde_json::Value>,
     /// Shell init profile (`None` or `NonInteractive`).
@@ -10515,21 +10578,6 @@ pub struct SessionShellExecResult {
 pub struct SessionShellKillResult {
     /// Whether the signal was sent successfully
     pub killed: bool,
-}
-
-/// Identifies the target session.
-///
-/// <div class="warning">
-///
-/// **Experimental.** This type is part of an experimental wire-protocol surface
-/// and may change or be removed in future SDK or CLI releases.
-///
-/// </div>
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionHistoryCompactParams {
-    /// Target session identifier
-    pub session_id: SessionId,
 }
 
 /// Compaction outcome with the number of tokens and messages removed, summary text, and the resulting context window breakdown.

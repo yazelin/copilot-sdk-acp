@@ -46,9 +46,9 @@ type AccountQuotaSnapshot struct {
 	EntitlementRequests int64 `json:"entitlementRequests"`
 	// Whether the user has an unlimited usage entitlement
 	IsUnlimitedEntitlement bool `json:"isUnlimitedEntitlement"`
-	// Number of overage requests made this period
+	// Number of additional usage requests made this period
 	Overage float64 `json:"overage"`
-	// Whether overage is allowed when quota is exhausted
+	// Whether additional usage is allowed when quota is exhausted
 	OverageAllowedWithExhaustedQuota bool `json:"overageAllowedWithExhaustedQuota"`
 	// Percentage of entitlement remaining
 	RemainingPercentage float64 `json:"remainingPercentage"`
@@ -81,6 +81,7 @@ type AgentInfo struct {
 	ID string `json:"id"`
 	// MCP server configurations attached to this agent, keyed by server name. Server config
 	// shape mirrors the MCP `mcpServers` schema.
+	// Experimental: McpServers is part of an experimental API and may change or be removed.
 	McpServers map[string]any `json:"mcpServers,omitempty"`
 	// Preferred model id for this agent. When omitted, inherits the outer agent's model.
 	Model *string `json:"model,omitempty"`
@@ -1033,6 +1034,14 @@ type HistoryCompactContextWindow struct {
 	TokenLimit int64 `json:"tokenLimit"`
 	// Token count from tool definitions
 	ToolDefinitionsTokens *int64 `json:"toolDefinitionsTokens,omitempty"`
+}
+
+// Optional compaction parameters.
+// Experimental: HistoryCompactRequest is part of an experimental API and may change or be
+// removed.
+type HistoryCompactRequest struct {
+	// Optional user-provided instructions to focus the compaction summary
+	CustomInstructions *string `json:"customInstructions,omitempty"`
 }
 
 // Compaction outcome with the number of tokens and messages removed, summary text, and the
@@ -3207,6 +3216,18 @@ type ScheduleStopResult struct {
 	Entry *ScheduleEntry `json:"entry,omitempty"`
 }
 
+// Secret values to add to the redaction filter.
+type SecretsAddFilterValuesRequest struct {
+	// Raw secret values to register for redaction
+	Values []string `json:"values"`
+}
+
+// Confirmation that the secret values were registered.
+type SecretsAddFilterValuesResult struct {
+	// Whether the values were successfully registered
+	Ok bool `json:"ok"`
+}
+
 // A user message attachment — a file, directory, code selection, blob, or GitHub reference
 // Experimental: SendAttachment is part of an experimental API and may change or be removed.
 type SendAttachment interface {
@@ -3383,6 +3404,8 @@ type SendRequest struct {
 	RequiredTool *string `json:"requiredTool,omitempty"`
 	// Optional provenance tag copied to the resulting user.message event. Supported values are
 	// `system`, `command-*`, and `schedule-*`.
+	// Internal: Source is part of the SDK's internal API surface and is not intended for
+	// external use.
 	Source any `json:"source,omitempty"`
 	// W3C Trace Context traceparent header for distributed tracing of this agent turn
 	Traceparent *string `json:"traceparent,omitempty"`
@@ -4302,6 +4325,8 @@ type SessionTelemetrySetFeatureOverridesResult struct {
 type SessionUpdateOptionsParams struct {
 	// Additional content-exclusion policies to merge into the session's policy set. Opaque
 	// shape; see `ContentExclusionApiResponse` in the runtime.
+	// Experimental: AdditionalContentExclusionPolicies is part of an experimental API and may
+	// change or be removed.
 	AdditionalContentExclusionPolicies []any `json:"additionalContentExclusionPolicies,omitempty"`
 	// Runtime context discriminator (e.g., `cli`, `actions`).
 	AgentContext *string `json:"agentContext,omitempty"`
@@ -4362,12 +4387,14 @@ type SessionUpdateOptionsParams struct {
 	Model *string `json:"model,omitempty"`
 	// Custom model-provider configuration (BYOK). Opaque shape; see `ProviderConfig` in the
 	// runtime.
+	// Experimental: Provider is part of an experimental API and may change or be removed.
 	Provider any `json:"provider,omitempty"`
 	// Reasoning effort for the selected model (model-defined enum).
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 	// Whether the session is running in an interactive UI.
 	RunningInInteractiveMode *bool `json:"runningInInteractiveMode,omitempty"`
 	// Sandbox configuration shape; opaque to SDK consumers. See `SandboxConfig` in the runtime.
+	// Experimental: SandboxConfig is part of an experimental API and may change or be removed.
 	SandboxConfig any `json:"sandboxConfig,omitempty"`
 	// Shell init profile (`None` or `NonInteractive`).
 	ShellInitProfile *string `json:"shellInitProfile,omitempty"`
@@ -7036,6 +7063,28 @@ func (a *ServerModelsApi) List(ctx context.Context, params *ModelsListRequest) (
 	return &result, nil
 }
 
+type ServerSecretsApi serverApi
+
+// AddFilterValues registers secret values for redaction in session logs and exports. The
+// SDK calls this to inject dynamically generated secret values (e.g., OIDC tokens).
+//
+// RPC method: secrets.addFilterValues.
+//
+// Parameters: Secret values to add to the redaction filter.
+//
+// Returns: Confirmation that the secret values were registered.
+func (a *ServerSecretsApi) AddFilterValues(ctx context.Context, params *SecretsAddFilterValuesRequest) (*SecretsAddFilterValuesResult, error) {
+	raw, err := a.client.Request("secrets.addFilterValues", params)
+	if err != nil {
+		return nil, err
+	}
+	var result SecretsAddFilterValuesResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 type ServerSessionFsApi serverApi
 
 // SetProvider registers an SDK client as the session filesystem provider.
@@ -7525,6 +7574,7 @@ type ServerRpc struct {
 	Account   *ServerAccountApi
 	Mcp       *ServerMcpApi
 	Models    *ServerModelsApi
+	Secrets   *ServerSecretsApi
 	SessionFs *ServerSessionFsApi
 	Sessions  *ServerSessionsApi
 	Skills    *ServerSkillsApi
@@ -7557,6 +7607,7 @@ func NewServerRpc(client *jsonrpc2.Client) *ServerRpc {
 	r.Account = (*ServerAccountApi)(&r.common)
 	r.Mcp = (*ServerMcpApi)(&r.common)
 	r.Models = (*ServerModelsApi)(&r.common)
+	r.Secrets = (*ServerSecretsApi)(&r.common)
 	r.SessionFs = (*ServerSessionFsApi)(&r.common)
 	r.Sessions = (*ServerSessionsApi)(&r.common)
 	r.Skills = (*ServerSkillsApi)(&r.common)
@@ -8178,10 +8229,21 @@ func (a *HistoryApi) CancelBackgroundCompaction(ctx context.Context) (*HistoryCa
 //
 // RPC method: session.history.compact.
 //
+// Parameters: Optional compaction parameters.
+//
 // Returns: Compaction outcome with the number of tokens and messages removed, summary text,
 // and the resulting context window breakdown.
-func (a *HistoryApi) Compact(ctx context.Context) (*HistoryCompactResult, error) {
+func (a *HistoryApi) Compact(ctx context.Context, params ...*HistoryCompactRequest) (*HistoryCompactResult, error) {
+	var requestParams *HistoryCompactRequest
+	if len(params) > 0 {
+		requestParams = params[0]
+	}
 	req := map[string]any{"sessionId": a.sessionID}
+	if requestParams != nil {
+		if requestParams.CustomInstructions != nil {
+			req["customInstructions"] = *requestParams.CustomInstructions
+		}
+	}
 	raw, err := a.client.Request("session.history.compact", req)
 	if err != nil {
 		return nil, err

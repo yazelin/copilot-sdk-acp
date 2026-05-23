@@ -723,9 +723,25 @@ pub struct ShutdownCodeChanges {
 #[serde(rename_all = "camelCase")]
 pub struct ShutdownModelMetricRequests {
     /// Cumulative cost multiplier for requests to this model
-    pub cost: f64,
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
     /// Total number of API requests made to this model
-    pub count: i64,
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<i64>,
 }
 
 /// Schema for the `ShutdownModelMetricTokenDetail` type.
@@ -763,6 +779,13 @@ pub struct ShutdownModelMetric {
     #[serde(default)]
     pub token_details: HashMap<String, ShutdownModelMetricTokenDetail>,
     /// Accumulated nano-AI units cost for this model
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_nano_aiu: Option<f64>,
     /// Token usage breakdown
@@ -813,10 +836,19 @@ pub struct SessionShutdownData {
     /// Cumulative time spent in API calls during the session, in milliseconds
     pub total_api_duration_ms: i64,
     /// Session-wide accumulated nano-AI units cost
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_nano_aiu: Option<f64>,
     /// Total number of premium API requests used during the session
-    pub total_premium_requests: f64,
+    #[doc(hidden)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) total_premium_requests: Option<f64>,
 }
 
 /// Session event "session.context_changed". Updated working directory and git context after the change
@@ -904,7 +936,7 @@ pub struct CompactionCompleteCompactionTokensUsedCopilotUsageTokenDetail {
 /// Per-request cost and usage data from the CAPI copilot_usage response field
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CompactionCompleteCompactionTokensUsedCopilotUsage {
+pub(crate) struct CompactionCompleteCompactionTokensUsedCopilotUsage {
     /// Itemized token usage breakdown
     pub token_details: Vec<CompactionCompleteCompactionTokensUsedCopilotUsageTokenDetail>,
     /// Total cost in nano-AI units for this request
@@ -922,8 +954,9 @@ pub struct CompactionCompleteCompactionTokensUsed {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<i64>,
     /// Per-request cost and usage data from the CAPI copilot_usage response field
+    #[doc(hidden)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub copilot_usage: Option<CompactionCompleteCompactionTokensUsedCopilotUsage>,
+    pub(crate) copilot_usage: Option<CompactionCompleteCompactionTokensUsedCopilotUsage>,
     /// Duration of the compaction LLM call in milliseconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<i64>,
@@ -954,6 +987,9 @@ pub struct SessionCompactionCompleteData {
     /// Token count from non-system messages (user, assistant, tool) after compaction
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_tokens: Option<i64>,
+    /// User-supplied focus instructions provided to a manual `/compact` invocation. Omitted for automatic compaction and for manual compaction with no focus text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_instructions: Option<String>,
     /// Error message if compaction failed
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -1120,9 +1156,23 @@ pub struct AssistantMessageToolRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AssistantMessageData {
     /// Raw Anthropic content array with advisor blocks (server_tool_use, advisor_tool_result) for verbatim round-tripping
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(default)]
     pub anthropic_advisor_blocks: Vec<serde_json::Value>,
     /// Anthropic advisor model ID used for this response, for timeline display on replay
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anthropic_advisor_model: Option<String>,
     /// The assistant's text response content
@@ -1217,7 +1267,7 @@ pub struct AssistantUsageCopilotUsageTokenDetail {
 /// Per-request cost and usage data from the CAPI copilot_usage response field
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AssistantUsageCopilotUsage {
+pub(crate) struct AssistantUsageCopilotUsage {
     /// Itemized token usage breakdown
     pub token_details: Vec<AssistantUsageCopilotUsageTokenDetail>,
     /// Total cost in nano-AI units for this request
@@ -1227,24 +1277,32 @@ pub struct AssistantUsageCopilotUsage {
 /// Schema for the `AssistantUsageQuotaSnapshot` type.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AssistantUsageQuotaSnapshot {
+pub(crate) struct AssistantUsageQuotaSnapshot {
     /// Total requests allowed by the entitlement
-    pub entitlement_requests: i64,
+    #[doc(hidden)]
+    pub(crate) entitlement_requests: i64,
     /// Whether the user has an unlimited usage entitlement
-    pub is_unlimited_entitlement: bool,
-    /// Number of requests over the entitlement limit
-    pub overage: f64,
-    /// Whether overage is allowed when quota is exhausted
-    pub overage_allowed_with_exhausted_quota: bool,
+    #[doc(hidden)]
+    pub(crate) is_unlimited_entitlement: bool,
+    /// Number of additional usage requests made this period
+    #[doc(hidden)]
+    pub(crate) overage: f64,
+    /// Whether additional usage is allowed when quota is exhausted
+    #[doc(hidden)]
+    pub(crate) overage_allowed_with_exhausted_quota: bool,
     /// Percentage of quota remaining (0 to 100)
-    pub remaining_percentage: f64,
+    #[doc(hidden)]
+    pub(crate) remaining_percentage: f64,
     /// Date when the quota resets
+    #[doc(hidden)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reset_date: Option<String>,
+    pub(crate) reset_date: Option<String>,
     /// Whether usage is still permitted after quota exhaustion
-    pub usage_allowed_with_exhausted_quota: bool,
+    #[doc(hidden)]
+    pub(crate) usage_allowed_with_exhausted_quota: bool,
     /// Number of requests already consumed
-    pub used_requests: i64,
+    #[doc(hidden)]
+    pub(crate) used_requests: i64,
 }
 
 /// Session event "assistant.usage". LLM API call usage metrics including tokens, costs, quotas, and billing information
@@ -1264,9 +1322,17 @@ pub struct AssistantUsageData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<i64>,
     /// Per-request cost and usage data from the CAPI copilot_usage response field
+    #[doc(hidden)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub copilot_usage: Option<AssistantUsageCopilotUsage>,
+    pub(crate) copilot_usage: Option<AssistantUsageCopilotUsage>,
     /// Model multiplier cost for billing purposes
+    ///
+    /// <div class="warning">
+    ///
+    /// **Experimental.** This type is part of an experimental wire-protocol surface
+    /// and may change or be removed in future SDK or CLI releases.
+    ///
+    /// </div>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<f64>,
     /// Duration of the API call in milliseconds
@@ -1295,8 +1361,9 @@ pub struct AssistantUsageData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_call_id: Option<String>,
     /// Per-quota resource usage snapshots, keyed by quota identifier
+    #[doc(hidden)]
     #[serde(default)]
-    pub quota_snapshots: HashMap<String, AssistantUsageQuotaSnapshot>,
+    pub(crate) quota_snapshots: HashMap<String, AssistantUsageQuotaSnapshot>,
     /// Reasoning effort level used for model calls, if applicable (e.g. "none", "low", "medium", "high", "xhigh", "max")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -1584,6 +1651,9 @@ pub struct ToolExecutionCompleteData {
     /// Tool execution result on success
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<ToolExecutionCompleteResult>,
+    /// Whether this tool execution ran inside a sandbox container
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandboxed: Option<bool>,
     /// Whether the tool execution completed successfully
     pub success: bool,
     /// Unique identifier for the completed tool call

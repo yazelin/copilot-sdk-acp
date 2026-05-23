@@ -1464,12 +1464,16 @@ export interface ShutdownData {
   totalApiDurationMs: number;
   /**
    * Session-wide accumulated nano-AI units cost
+   *
+   * @experimental
    */
   totalNanoAiu?: number;
   /**
    * Total number of premium API requests used during the session
+   *
+   * @internal
    */
-  totalPremiumRequests: number;
+  totalPremiumRequests?: number;
 }
 /**
  * Aggregate code change metrics for the session
@@ -1501,6 +1505,8 @@ export interface ShutdownModelMetric {
   };
   /**
    * Accumulated nano-AI units cost for this model
+   *
+   * @experimental
    */
   totalNanoAiu?: number;
   usage: ShutdownModelMetricUsage;
@@ -1511,12 +1517,16 @@ export interface ShutdownModelMetric {
 export interface ShutdownModelMetricRequests {
   /**
    * Cumulative cost multiplier for requests to this model
+   *
+   * @experimental
    */
-  cost: number;
+  cost?: number;
   /**
    * Total number of API requests made to this model
+   *
+   * @experimental
    */
-  count: number;
+  count?: number;
 }
 /**
  * Schema for the `ShutdownModelMetricTokenDetail` type.
@@ -1749,6 +1759,10 @@ export interface CompactionCompleteData {
    */
   conversationTokens?: number;
   /**
+   * User-supplied focus instructions provided to a manual `/compact` invocation. Omitted for automatic compaction and for manual compaction with no focus text.
+   */
+  customInstructions?: string;
+  /**
    * Error message if compaction failed
    */
   error?: string;
@@ -1805,6 +1819,11 @@ export interface CompactionCompleteCompactionTokensUsed {
    * Tokens written to prompt cache in the compaction LLM call
    */
   cacheWriteTokens?: number;
+  /**
+   * Per-request cost and usage data from the CAPI copilot_usage response field
+   *
+   * @internal
+   */
   copilotUsage?: CompactionCompleteCompactionTokensUsedCopilotUsage;
   /**
    * Duration of the compaction LLM call in milliseconds
@@ -1826,6 +1845,7 @@ export interface CompactionCompleteCompactionTokensUsed {
 /**
  * Per-request cost and usage data from the CAPI copilot_usage response field
  */
+/** @internal */
 export interface CompactionCompleteCompactionTokensUsedCopilotUsage {
   /**
    * Itemized token usage breakdown
@@ -2399,10 +2419,14 @@ export interface AssistantMessageEvent {
 export interface AssistantMessageData {
   /**
    * Raw Anthropic content array with advisor blocks (server_tool_use, advisor_tool_result) for verbatim round-tripping
+   *
+   * @experimental
    */
   anthropicAdvisorBlocks?: unknown[];
   /**
    * Anthropic advisor model ID used for this response, for timeline display on replay
+   *
+   * @experimental
    */
   anthropicAdvisorModel?: string;
   /**
@@ -2672,9 +2696,16 @@ export interface AssistantUsageData {
    * Number of tokens written to prompt cache
    */
   cacheWriteTokens?: number;
+  /**
+   * Per-request cost and usage data from the CAPI copilot_usage response field
+   *
+   * @internal
+   */
   copilotUsage?: AssistantUsageCopilotUsage;
   /**
    * Model multiplier cost for billing purposes
+   *
+   * @experimental
    */
   cost?: number;
   /**
@@ -2712,6 +2743,8 @@ export interface AssistantUsageData {
   providerCallId?: string;
   /**
    * Per-quota resource usage snapshots, keyed by quota identifier
+   *
+   * @internal
    */
   quotaSnapshots?: {
     [k: string]: AssistantUsageQuotaSnapshot | undefined;
@@ -2732,6 +2765,7 @@ export interface AssistantUsageData {
 /**
  * Per-request cost and usage data from the CAPI copilot_usage response field
  */
+/** @internal */
 export interface AssistantUsageCopilotUsage {
   /**
    * Itemized token usage breakdown
@@ -2766,37 +2800,54 @@ export interface AssistantUsageCopilotUsageTokenDetail {
 /**
  * Schema for the `AssistantUsageQuotaSnapshot` type.
  */
+/** @internal */
 export interface AssistantUsageQuotaSnapshot {
   /**
    * Total requests allowed by the entitlement
+   *
+   * @internal
    */
   entitlementRequests: number;
   /**
    * Whether the user has an unlimited usage entitlement
+   *
+   * @internal
    */
   isUnlimitedEntitlement: boolean;
   /**
-   * Number of requests over the entitlement limit
+   * Number of additional usage requests made this period
+   *
+   * @internal
    */
   overage: number;
   /**
-   * Whether overage is allowed when quota is exhausted
+   * Whether additional usage is allowed when quota is exhausted
+   *
+   * @internal
    */
   overageAllowedWithExhaustedQuota: boolean;
   /**
    * Percentage of quota remaining (0 to 100)
+   *
+   * @internal
    */
   remainingPercentage: number;
   /**
    * Date when the quota resets
+   *
+   * @internal
    */
   resetDate?: string;
   /**
    * Whether usage is still permitted after quota exhaustion
+   *
+   * @internal
    */
   usageAllowedWithExhaustedQuota: boolean;
   /**
    * Number of requests already consumed
+   *
+   * @internal
    */
   usedRequests: number;
 }
@@ -3154,6 +3205,10 @@ export interface ToolExecutionCompleteData {
    */
   parentToolCallId?: string;
   result?: ToolExecutionCompleteResult;
+  /**
+   * Whether this tool execution ran inside a sandbox container
+   */
+  sandboxed?: boolean;
   /**
    * Whether the tool execution completed successfully
    */
