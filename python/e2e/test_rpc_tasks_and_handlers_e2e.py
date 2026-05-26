@@ -12,14 +12,15 @@ import asyncio
 import pytest
 
 from copilot.generated.rpc import (
-    ApprovalKind,
     CommandsHandlePendingCommandRequest,
     HandlePendingToolCallRequest,
-    PermissionDecision,
-    PermissionDecisionApproveForIonApproval,
-    PermissionDecisionKind,
+    PermissionDecisionApproveForLocation,
+    PermissionDecisionApproveForLocationApprovalCustomTool,
+    PermissionDecisionApproveForSession,
+    PermissionDecisionApproveForSessionApprovalCustomTool,
+    PermissionDecisionApprovePermanently,
+    PermissionDecisionReject,
     PermissionDecisionRequest,
-    TaskInfoType,
     TasksCancelRequest,
     TasksPromoteToBackgroundRequest,
     TasksRemoveRequest,
@@ -28,6 +29,7 @@ from copilot.generated.rpc import (
     UIElicitationResponseAction,
     UIHandlePendingElicitationRequest,
 )
+from copilot.generated.session_events import AssistantMessageData, SessionErrorData
 from copilot.session import PermissionHandler
 
 from .testharness import E2ETestContext
@@ -137,10 +139,7 @@ class TestRpcTasksAndHandlers:
             permission = await session.rpc.permissions.handle_pending_permission_request(
                 PermissionDecisionRequest(
                     request_id="missing-permission-request",
-                    result=PermissionDecision(
-                        kind=PermissionDecisionKind.REJECT,
-                        feedback="not approved",
-                    ),
+                    result=PermissionDecisionReject(feedback="not approved"),
                 )
             )
             assert permission.success is False
@@ -148,10 +147,7 @@ class TestRpcTasksAndHandlers:
             permanent = await session.rpc.permissions.handle_pending_permission_request(
                 PermissionDecisionRequest(
                     request_id="missing-permanent-permission-request",
-                    result=PermissionDecision(
-                        kind=PermissionDecisionKind.APPROVE_PERMANENTLY,
-                        domain="example.com",
-                    ),
+                    result=PermissionDecisionApprovePermanently(domain="example.com"),
                 )
             )
             assert permanent.success is False
@@ -159,10 +155,8 @@ class TestRpcTasksAndHandlers:
             session_approval = await session.rpc.permissions.handle_pending_permission_request(
                 PermissionDecisionRequest(
                     request_id="missing-session-approval-request",
-                    result=PermissionDecision(
-                        kind=PermissionDecisionKind.APPROVE_FOR_SESSION,
-                        approval=PermissionDecisionApproveForIonApproval(
-                            kind=ApprovalKind.CUSTOM_TOOL,
+                    result=PermissionDecisionApproveForSession(
+                        approval=PermissionDecisionApproveForSessionApprovalCustomTool(
                             tool_name="missing-tool",
                         ),
                     ),
@@ -173,11 +167,9 @@ class TestRpcTasksAndHandlers:
             location_approval = await session.rpc.permissions.handle_pending_permission_request(
                 PermissionDecisionRequest(
                     request_id="missing-location-approval-request",
-                    result=PermissionDecision(
-                        kind=PermissionDecisionKind.APPROVE_FOR_LOCATION,
+                    result=PermissionDecisionApproveForLocation(
                         location_key="missing-location",
-                        approval=PermissionDecisionApproveForIonApproval(
-                            kind=ApprovalKind.CUSTOM_TOOL,
+                        approval=PermissionDecisionApproveForLocationApprovalCustomTool(
                             tool_name="missing-tool",
                         ),
                     ),
@@ -215,11 +207,26 @@ class TestRpcTasksAndHandlers:
 
     async def test_should_start_background_agent_and_report_task_details(self, ctx: E2ETestContext):
         """Start a background agent task and verify task details then remove it."""
-        from copilot.generated.rpc import TaskInfoExecutionMode, TaskInfoStatus
+        from copilot.generated.rpc import TaskAgentInfo, TaskInfoExecutionMode, TaskInfoStatus
 
         session = await ctx.client.create_session(
             on_permission_request=PermissionHandler.approve_all,
         )
+        task_completion_notification = asyncio.get_running_loop().create_future()
+
+        def on_event(event):
+            if isinstance(event.data, AssistantMessageData) and "TASK_AGENT_DONE" in (
+                event.data.content or ""
+            ):
+                if not task_completion_notification.done():
+                    task_completion_notification.set_result(event)
+            elif isinstance(event.data, SessionErrorData):
+                if not task_completion_notification.done():
+                    task_completion_notification.set_exception(
+                        RuntimeError(event.data.message or "session error")
+                    )
+
+        unsubscribe = session.on(on_event)
         try:
             ready = await session.send_and_wait(
                 "Reply with TASK_AGENT_READY exactly.",
@@ -248,7 +255,7 @@ class TestRpcTasksAndHandlers:
             )
             assert found_task.id == task_id
             assert found_task.description == "SDK background agent coverage"
-            assert found_task.type == TaskInfoType.AGENT
+            assert isinstance(found_task, TaskAgentInfo)
             assert found_task.agent_type == "general-purpose"
             assert found_task.execution_mode == TaskInfoExecutionMode.BACKGROUND
             assert found_task.prompt == "Reply with TASK_AGENT_DONE exactly."
@@ -271,6 +278,7 @@ class TestRpcTasksAndHandlers:
             )
             assert found_task is not None, f"Task {task_id} disappeared before it completed"
             assert "TASK_AGENT_DONE" in (found_task.latest_response or found_task.result or "")
+            await asyncio.wait_for(task_completion_notification, timeout=30.0)
 
             if found_task.status == TaskInfoStatus.IDLE:
                 cancel = await session.rpc.tasks.cancel(TasksCancelRequest(id=task_id))
@@ -283,4 +291,5 @@ class TestRpcTasksAndHandlers:
             after_remove = await session.rpc.tasks.list()
             assert not any(t.id == task_id for t in (after_remove.tasks or []))
         finally:
+            unsubscribe()
             await session.disconnect()
