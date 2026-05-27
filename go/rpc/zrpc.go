@@ -46,9 +46,9 @@ type AccountQuotaSnapshot struct {
 	EntitlementRequests int64 `json:"entitlementRequests"`
 	// Whether the user has an unlimited usage entitlement
 	IsUnlimitedEntitlement bool `json:"isUnlimitedEntitlement"`
-	// Number of overage requests made this period
+	// Number of additional usage requests made this period
 	Overage float64 `json:"overage"`
-	// Whether overage is allowed when quota is exhausted
+	// Whether additional usage is allowed when quota is exhausted
 	OverageAllowedWithExhaustedQuota bool `json:"overageAllowedWithExhaustedQuota"`
 	// Percentage of entitlement remaining
 	RemainingPercentage float64 `json:"remainingPercentage"`
@@ -81,6 +81,7 @@ type AgentInfo struct {
 	ID string `json:"id"`
 	// MCP server configurations attached to this agent, keyed by server name. Server config
 	// shape mirrors the MCP `mcpServers` schema.
+	// Experimental: McpServers is part of an experimental API and may change or be removed.
 	McpServers map[string]any `json:"mcpServers,omitempty"`
 	// Preferred model id for this agent. When omitted, inherits the outer agent's model.
 	Model *string `json:"model,omitempty"`
@@ -282,6 +283,168 @@ type UserAuthInfo struct {
 func (UserAuthInfo) authInfo() {}
 func (UserAuthInfo) Type() AuthInfoType {
 	return AuthInfoTypeUser
+}
+
+// Canvas action that the agent or host can invoke. To discover the input schema for a
+// particular action, call the list_canvas_capabilities tool.
+// Experimental: CanvasAction is part of an experimental API and may change or be removed.
+type CanvasAction struct {
+	// Description of the action
+	Description *string `json:"description,omitempty"`
+	// JSON Schema for the action input
+	InputSchema any `json:"inputSchema,omitempty"`
+	// Action name exposed by the canvas provider
+	Name string `json:"name"`
+}
+
+// Canvas close parameters.
+// Experimental: CanvasCloseRequest is part of an experimental API and may change or be
+// removed.
+type CanvasCloseRequest struct {
+	// Open canvas instance identifier
+	InstanceID string `json:"instanceId"`
+}
+
+// Experimental: CanvasCloseResult is part of an experimental API and may change or be
+// removed.
+type CanvasCloseResult struct {
+}
+
+// Host context supplied by the runtime.
+// Experimental: CanvasHostContext is part of an experimental API and may change or be
+// removed.
+type CanvasHostContext struct {
+	// Host capabilities
+	Capabilities *CanvasHostContextCapabilities `json:"capabilities,omitempty"`
+}
+
+// Host capabilities
+// Experimental: CanvasHostContextCapabilities is part of an experimental API and may change
+// or be removed.
+type CanvasHostContextCapabilities struct {
+	// Whether canvas rendering is supported
+	Canvases *bool `json:"canvases,omitempty"`
+}
+
+// Canvas action invocation parameters.
+// Experimental: CanvasInvokeActionRequest is part of an experimental API and may change or
+// be removed.
+type CanvasInvokeActionRequest struct {
+	// Action name to invoke
+	ActionName string `json:"actionName"`
+	// Action input
+	Input any `json:"input,omitempty"`
+	// Open canvas instance identifier
+	InstanceID string `json:"instanceId"`
+}
+
+// Canvas action invocation result.
+// Experimental: CanvasInvokeActionResult is part of an experimental API and may change or
+// be removed.
+type CanvasInvokeActionResult struct {
+	// Provider-supplied action result
+	Result any `json:"result,omitempty"`
+}
+
+// JSON Schema for canvas open input
+// Experimental: CanvasJSONSchema is part of an experimental API and may change or be
+// removed.
+type CanvasJSONSchema any
+
+// Declared canvases available in this session.
+// Experimental: CanvasList is part of an experimental API and may change or be removed.
+type CanvasList struct {
+	// Declared canvases available in this session
+	Canvases []DiscoveredCanvas `json:"canvases"`
+}
+
+// Live open-canvas snapshot.
+// Experimental: CanvasListOpenResult is part of an experimental API and may change or be
+// removed.
+type CanvasListOpenResult struct {
+	// Currently open canvas instances
+	OpenCanvases []OpenCanvasInstance `json:"openCanvases"`
+}
+
+// Canvas open parameters.
+// Experimental: CanvasOpenRequest is part of an experimental API and may change or be
+// removed.
+type CanvasOpenRequest struct {
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier. Optional when the canvasId is unique across providers;
+	// required to disambiguate when multiple providers register the same canvasId.
+	ExtensionID *string `json:"extensionId,omitempty"`
+	// Canvas open input
+	Input any `json:"input,omitempty"`
+	// Caller-supplied stable instance identifier
+	InstanceID string `json:"instanceId"`
+}
+
+// Canvas close parameters sent to the provider.
+// Experimental: CanvasProviderCloseRequest is part of an experimental API and may change or
+// be removed.
+type CanvasProviderCloseRequest struct {
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Host context supplied by the runtime.
+	Host *CanvasHostContext `json:"host,omitempty"`
+	// Canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+// Canvas action invocation parameters sent to the provider.
+// Experimental: CanvasProviderInvokeActionRequest is part of an experimental API and may
+// change or be removed.
+type CanvasProviderInvokeActionRequest struct {
+	// Action name to invoke
+	ActionName string `json:"actionName"`
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Host context supplied by the runtime.
+	Host *CanvasHostContext `json:"host,omitempty"`
+	// Action input
+	Input any `json:"input,omitempty"`
+	// Canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+// Canvas open parameters sent to the provider.
+// Experimental: CanvasProviderOpenRequest is part of an experimental API and may change or
+// be removed.
+type CanvasProviderOpenRequest struct {
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Host context supplied by the runtime.
+	Host *CanvasHostContext `json:"host,omitempty"`
+	// Canvas open input
+	Input any `json:"input,omitempty"`
+	// Stable caller-supplied canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+// Canvas open result returned by the provider.
+// Experimental: CanvasProviderOpenResult is part of an experimental API and may change or
+// be removed.
+type CanvasProviderOpenResult struct {
+	// Provider-supplied status text
+	Status *string `json:"status,omitempty"`
+	// Provider-supplied title
+	Title *string `json:"title,omitempty"`
+	// URL for web-rendered canvases
+	URL *string `json:"url,omitempty"`
 }
 
 // Slash commands available in the session, after applying any include/exclude filters.
@@ -542,6 +705,26 @@ type CurrentModel struct {
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 }
 
+// Canvas available in the current session.
+// Experimental: DiscoveredCanvas is part of an experimental API and may change or be
+// removed.
+type DiscoveredCanvas struct {
+	// Actions the agent or host may invoke on an open instance
+	Actions []CanvasAction `json:"actions,omitempty"`
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Short, single-sentence description shown to the agent in canvas catalogs.
+	Description string `json:"description"`
+	// Human-readable canvas name
+	DisplayName string `json:"displayName"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Owning extension display name, when available
+	ExtensionName *string `json:"extensionName,omitempty"`
+	// JSON Schema for canvas open input
+	InputSchema any `json:"inputSchema,omitempty"`
+}
+
 // Schema for the `DiscoveredMcpServer` type.
 type DiscoveredMcpServer struct {
 	// Whether the server is enabled (not in the disabled list)
@@ -550,7 +733,7 @@ type DiscoveredMcpServer struct {
 	Name string `json:"name"`
 	// Configuration source: user, workspace, plugin, or builtin
 	Source McpServerSource `json:"source"`
-	// Server transport type: stdio, http, sse, or memory
+	// Server transport type: stdio, http, sse (deprecated), or memory
 	Type *DiscoveredMcpServerType `json:"type,omitempty"`
 }
 
@@ -746,6 +929,8 @@ type ExternalToolTextResultForLlmBinaryResultsForLlm struct {
 	Data string `json:"data"`
 	// Human-readable description of the binary data
 	Description *string `json:"description,omitempty"`
+	// Optional metadata from the producing tool.
+	Metadata map[string]any `json:"metadata,omitempty"`
 	// MIME type of the binary data
 	MIMEType string `json:"mimeType"`
 	// Binary result type discriminator. Use "image" for images and "resource" for other binary
@@ -1035,6 +1220,14 @@ type HistoryCompactContextWindow struct {
 	ToolDefinitionsTokens *int64 `json:"toolDefinitionsTokens,omitempty"`
 }
 
+// Optional compaction parameters.
+// Experimental: HistoryCompactRequest is part of an experimental API and may change or be
+// removed.
+type HistoryCompactRequest struct {
+	// Optional user-provided instructions to focus the compaction summary
+	CustomInstructions *string `json:"customInstructions,omitempty"`
+}
+
 // Compaction outcome with the number of tokens and messages removed, summary text, and the
 // resulting context window breakdown.
 // Experimental: HistoryCompactResult is part of an experimental API and may change or be
@@ -1211,6 +1404,176 @@ type LspInitializeRequest struct {
 	// Working directory used to load project-level LSP configs. Defaults to the session working
 	// directory when omitted.
 	WorkingDirectory *string `json:"workingDirectory,omitempty"`
+}
+
+// MCP server, tool name, and arguments to invoke from an MCP App view.
+// Experimental: McpAppsCallToolRequest is part of an experimental API and may change or be
+// removed.
+type McpAppsCallToolRequest struct {
+	// Tool arguments
+	Arguments map[string]any `json:"arguments,omitempty"`
+	// **Required.** Server whose ui:// view issued the request. Per SEP-1865 ('callable by the
+	// app from this server only'), the call is rejected when this differs from `serverName`,
+	// and rejected outright when missing.
+	OriginServerName string `json:"originServerName"`
+	// MCP server hosting the tool
+	ServerName string `json:"serverName"`
+	// MCP tool name
+	ToolName string `json:"toolName"`
+}
+
+// Capability negotiation snapshot
+// Experimental: McpAppsDiagnoseCapability is part of an experimental API and may change or
+// be removed.
+type McpAppsDiagnoseCapability struct {
+	// Whether the runtime advertises `extensions.io.modelcontextprotocol/ui` to MCP servers
+	Advertised bool `json:"advertised"`
+	// Whether the MCP_APPS feature flag (or COPILOT_MCP_APPS env override) is on
+	FeatureFlagEnabled bool `json:"featureFlagEnabled"`
+	// Whether the session has the `mcp-apps` capability
+	SessionHasMcpApps bool `json:"sessionHasMcpApps"`
+}
+
+// MCP server to diagnose MCP Apps wiring for.
+// Experimental: McpAppsDiagnoseRequest is part of an experimental API and may change or be
+// removed.
+type McpAppsDiagnoseRequest struct {
+	// MCP server to probe
+	ServerName string `json:"serverName"`
+}
+
+// Diagnostic snapshot of MCP Apps wiring for the named server.
+// Experimental: McpAppsDiagnoseResult is part of an experimental API and may change or be
+// removed.
+type McpAppsDiagnoseResult struct {
+	// Capability negotiation snapshot
+	Capability McpAppsDiagnoseCapability `json:"capability"`
+	// What the server returned for this session
+	Server McpAppsDiagnoseServer `json:"server"`
+}
+
+// What the server returned for this session
+// Experimental: McpAppsDiagnoseServer is part of an experimental API and may change or be
+// removed.
+type McpAppsDiagnoseServer struct {
+	// Whether the named server is currently connected
+	Connected bool `json:"connected"`
+	// Up to 5 tool names with `_meta.ui` for quick inspection
+	SampleToolNames []string `json:"sampleToolNames"`
+	// Total tools returned by the server's tools/list
+	ToolCount float64 `json:"toolCount"`
+	// Tools whose `_meta.ui` is populated (resourceUri and/or visibility set)
+	ToolsWithUIMeta float64 `json:"toolsWithUiMeta"`
+}
+
+// Current host context advertised to MCP App guests.
+// Experimental: McpAppsHostContext is part of an experimental API and may change or be
+// removed.
+type McpAppsHostContext struct {
+	// Current host context
+	Context McpAppsHostContextDetails `json:"context"`
+}
+
+// Current host context
+// Experimental: McpAppsHostContextDetails is part of an experimental API and may change or
+// be removed.
+type McpAppsHostContextDetails struct {
+	// Display modes the host supports
+	AvailableDisplayModes []McpAppsHostContextDetailsAvailableDisplayMode `json:"availableDisplayModes,omitempty"`
+	// Current display mode (SEP-1865)
+	DisplayMode *McpAppsHostContextDetailsDisplayMode `json:"displayMode,omitempty"`
+	// BCP-47 locale, e.g. 'en-US'
+	Locale *string `json:"locale,omitempty"`
+	// Platform type for responsive design
+	Platform *McpAppsHostContextDetailsPlatform `json:"platform,omitempty"`
+	// UI theme preference per SEP-1865
+	Theme *McpAppsHostContextDetailsTheme `json:"theme,omitempty"`
+	// IANA timezone, e.g. 'America/New_York'
+	TimeZone *string `json:"timeZone,omitempty"`
+	// Host application identifier
+	UserAgent *string `json:"userAgent,omitempty"`
+}
+
+// MCP server to list app-callable tools for.
+// Experimental: McpAppsListToolsRequest is part of an experimental API and may change or be
+// removed.
+type McpAppsListToolsRequest struct {
+	// **Required.** Server whose ui:// view issued the request. Per SEP-1865 ('callable by the
+	// app from this server only'), the call is rejected when this differs from `serverName`,
+	// and rejected outright when missing.
+	OriginServerName string `json:"originServerName"`
+	// MCP server hosting the app
+	ServerName string `json:"serverName"`
+}
+
+// App-callable tools from the named MCP server.
+// Experimental: McpAppsListToolsResult is part of an experimental API and may change or be
+// removed.
+type McpAppsListToolsResult struct {
+	// App-callable tools from the server
+	Tools []map[string]any `json:"tools"`
+}
+
+// MCP server and resource URI to fetch.
+// Experimental: McpAppsReadResourceRequest is part of an experimental API and may change or
+// be removed.
+type McpAppsReadResourceRequest struct {
+	// Name of the MCP server hosting the resource
+	ServerName string `json:"serverName"`
+	// Resource URI (typically ui://...)
+	URI string `json:"uri"`
+}
+
+// Resource contents returned by the MCP server.
+// Experimental: McpAppsReadResourceResult is part of an experimental API and may change or
+// be removed.
+type McpAppsReadResourceResult struct {
+	// Resource contents returned by the server
+	Contents []McpAppsResourceContent `json:"contents"`
+}
+
+// Schema for the `McpAppsResourceContent` type.
+// Experimental: McpAppsResourceContent is part of an experimental API and may change or be
+// removed.
+type McpAppsResourceContent struct {
+	// Base64-encoded binary content
+	Blob *string `json:"blob,omitempty"`
+	// Resource-level metadata (CSP, permissions, etc.)
+	Meta map[string]any `json:"_meta,omitempty"`
+	// MIME type of the content
+	MIMEType *string `json:"mimeType,omitempty"`
+	// Text content (e.g. HTML)
+	Text *string `json:"text,omitempty"`
+	// The resource URI (typically ui://...)
+	URI string `json:"uri"`
+}
+
+// Host context advertised to MCP App guests
+// Experimental: McpAppsSetHostContextDetails is part of an experimental API and may change
+// or be removed.
+type McpAppsSetHostContextDetails struct {
+	// Display modes the host supports
+	AvailableDisplayModes []McpAppsSetHostContextDetailsAvailableDisplayMode `json:"availableDisplayModes,omitempty"`
+	// Current display mode (SEP-1865)
+	DisplayMode *McpAppsSetHostContextDetailsDisplayMode `json:"displayMode,omitempty"`
+	// BCP-47 locale, e.g. 'en-US'
+	Locale *string `json:"locale,omitempty"`
+	// Platform type for responsive design
+	Platform *McpAppsSetHostContextDetailsPlatform `json:"platform,omitempty"`
+	// UI theme preference per SEP-1865
+	Theme *McpAppsSetHostContextDetailsTheme `json:"theme,omitempty"`
+	// IANA timezone, e.g. 'America/New_York'
+	TimeZone *string `json:"timeZone,omitempty"`
+	// Host application identifier
+	UserAgent *string `json:"userAgent,omitempty"`
+}
+
+// Host context to advertise to MCP App guests.
+// Experimental: McpAppsSetHostContextRequest is part of an experimental API and may change
+// or be removed.
+type McpAppsSetHostContextRequest struct {
+	// Host context advertised to MCP App guests
+	Context McpAppsSetHostContextDetails `json:"context"`
 }
 
 // The requestId previously passed to executeSampling that should be cancelled.
@@ -1459,6 +1822,8 @@ type McpServerConfigHTTP struct {
 	OauthGrantType *McpServerConfigHTTPOauthGrantType `json:"oauthGrantType,omitempty"`
 	// Whether the configured OAuth client is public and does not require a client secret.
 	OauthPublicClient *bool `json:"oauthPublicClient,omitempty"`
+	// OIDC token configuration. When truthy, a token is automatically gathered.
+	Oidc McpServerConfigHTTPOidc `json:"oidc,omitempty"`
 	// Timeout in milliseconds for tool calls to this server.
 	Timeout *int64 `json:"timeout,omitempty"`
 	// Tools to include. Defaults to all tools if not specified.
@@ -1475,6 +1840,8 @@ func (McpServerConfigHTTP) mcpServerConfig() {}
 type McpServerConfigStdio struct {
 	// Command-line arguments passed to the Stdio MCP server process.
 	Args []string `json:"args,omitempty"`
+	// Authentication configuration for this server.
+	Auth McpServerConfigStdioAuth `json:"auth,omitempty"`
 	// Executable command used to start the Stdio MCP server process.
 	Command string `json:"command"`
 	// Working directory for the Stdio MCP server process.
@@ -1487,6 +1854,8 @@ type McpServerConfigStdio struct {
 	// Whether this server is a built-in fallback used when the user has not configured their
 	// own server.
 	IsDefaultServer *bool `json:"isDefaultServer,omitempty"`
+	// OIDC token configuration. When truthy, a token is automatically gathered.
+	Oidc McpServerConfigStdioOidc `json:"oidc,omitempty"`
 	// Timeout in milliseconds for tool calls to this server.
 	Timeout *int64 `json:"timeout,omitempty"`
 	// Tools to include. Defaults to all tools if not specified.
@@ -1500,6 +1869,45 @@ type McpServerConfigHTTPAuth struct {
 	// Fixed port for the OAuth redirect callback server.
 	RedirectPort *int32 `json:"redirectPort,omitempty"`
 }
+
+// OIDC token configuration. When truthy, a token is automatically gathered.
+type McpServerConfigHTTPOidc interface {
+	mcpServerConfigHTTPOidc()
+}
+
+type McpServerConfigHTTPOidcAnyMap map[string]any
+
+func (McpServerConfigHTTPOidcAnyMap) mcpServerConfigHTTPOidc() {}
+
+type McpServerConfigHTTPOidcBoolean bool
+
+func (McpServerConfigHTTPOidcBoolean) mcpServerConfigHTTPOidc() {}
+
+// Authentication configuration for this server.
+type McpServerConfigStdioAuth interface {
+	mcpServerConfigStdioAuth()
+}
+
+type McpServerConfigStdioAuthAnyMap map[string]any
+
+func (McpServerConfigStdioAuthAnyMap) mcpServerConfigStdioAuth() {}
+
+type McpServerConfigStdioAuthBoolean bool
+
+func (McpServerConfigStdioAuthBoolean) mcpServerConfigStdioAuth() {}
+
+// OIDC token configuration. When truthy, a token is automatically gathered.
+type McpServerConfigStdioOidc interface {
+	mcpServerConfigStdioOidc()
+}
+
+type McpServerConfigStdioOidcAnyMap map[string]any
+
+func (McpServerConfigStdioOidcAnyMap) mcpServerConfigStdioOidc() {}
+
+type McpServerConfigStdioOidcBoolean bool
+
+func (McpServerConfigStdioOidcBoolean) mcpServerConfigStdioOidc() {}
 
 // MCP servers configured for the session, with their connection status.
 // Experimental: McpServerList is part of an experimental API and may change or be removed.
@@ -1688,15 +2096,28 @@ type ModelBilling struct {
 type ModelBillingTokenPrices struct {
 	// Number of tokens per standard billing batch
 	BatchSize *int64 `json:"batchSize,omitempty"`
-	// Price per billing batch of cached tokens in nano-AIUs (1 nano-AIU = 0.000000001 AIU, 1
-	// AIU = $0.01 USD)
-	CachePrice *int64 `json:"cachePrice,omitempty"`
-	// Price per billing batch of input tokens in nano-AIUs (1 nano-AIU = 0.000000001 AIU, 1 AIU
-	// = $0.01 USD)
-	InputPrice *int64 `json:"inputPrice,omitempty"`
-	// Price per billing batch of output tokens in nano-AIUs (1 nano-AIU = 0.000000001 AIU, 1
-	// AIU = $0.01 USD)
-	OutputPrice *int64 `json:"outputPrice,omitempty"`
+	// AI Credits cost per billing batch of cached tokens
+	CachePrice *float64 `json:"cachePrice,omitempty"`
+	// Maximum context window tokens for the default tier
+	ContextMax *int64 `json:"contextMax,omitempty"`
+	// AI Credits cost per billing batch of input tokens
+	InputPrice *float64 `json:"inputPrice,omitempty"`
+	// Long context tier pricing (available for models with extended context windows)
+	LongContext *ModelBillingTokenPricesLongContext `json:"longContext,omitempty"`
+	// AI Credits cost per billing batch of output tokens
+	OutputPrice *float64 `json:"outputPrice,omitempty"`
+}
+
+// Long context tier pricing (available for models with extended context windows)
+type ModelBillingTokenPricesLongContext struct {
+	// AI Credits cost per billing batch of cached tokens
+	CachePrice *float64 `json:"cachePrice,omitempty"`
+	// Maximum context window tokens for the long context tier
+	ContextMax *int64 `json:"contextMax,omitempty"`
+	// AI Credits cost per billing batch of input tokens
+	InputPrice *float64 `json:"inputPrice,omitempty"`
+	// AI Credits cost per billing batch of output tokens
+	OutputPrice *float64 `json:"outputPrice,omitempty"`
 }
 
 // Model capabilities and limits
@@ -1883,6 +2304,32 @@ type NameSetAutoResult struct {
 type NameSetRequest struct {
 	// New session name (1–100 characters, trimmed of leading/trailing whitespace)
 	Name string `json:"name"`
+}
+
+// Open canvas instance snapshot.
+// Experimental: OpenCanvasInstance is part of an experimental API and may change or be
+// removed.
+type OpenCanvasInstance struct {
+	// Runtime-controlled routing state for an open canvas instance.
+	Availability CanvasInstanceAvailability `json:"availability"`
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Owning extension display name, when available
+	ExtensionName *string `json:"extensionName,omitempty"`
+	// Input supplied when the instance was opened
+	Input any `json:"input,omitempty"`
+	// Stable caller-supplied canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Whether this snapshot came from an idempotent reopen
+	Reopen bool `json:"reopen"`
+	// Provider-supplied status text
+	Status *string `json:"status,omitempty"`
+	// Rendered title
+	Title *string `json:"title,omitempty"`
+	// URL for web-rendered canvases
+	URL *string `json:"url,omitempty"`
 }
 
 // Schema for the `PendingPermissionRequest` type.
@@ -3207,6 +3654,18 @@ type ScheduleStopResult struct {
 	Entry *ScheduleEntry `json:"entry,omitempty"`
 }
 
+// Secret values to add to the redaction filter.
+type SecretsAddFilterValuesRequest struct {
+	// Raw secret values to register for redaction
+	Values []string `json:"values"`
+}
+
+// Confirmation that the secret values were registered.
+type SecretsAddFilterValuesResult struct {
+	// Whether the values were successfully registered
+	Ok bool `json:"ok"`
+}
+
 // A user message attachment — a file, directory, code selection, blob, or GitHub reference
 // Experimental: SendAttachment is part of an experimental API and may change or be removed.
 type SendAttachment interface {
@@ -3383,6 +3842,8 @@ type SendRequest struct {
 	RequiredTool *string `json:"requiredTool,omitempty"`
 	// Optional provenance tag copied to the resulting user.message event. Supported values are
 	// `system`, `command-*`, and `schedule-*`.
+	// Internal: Source is part of the SDK's internal API surface and is not intended for
+	// external use.
 	Source any `json:"source,omitempty"`
 	// W3C Trace Context traceparent header for distributed tracing of this agent turn
 	Traceparent *string `json:"traceparent,omitempty"`
@@ -3458,6 +3919,11 @@ type SessionBulkDeleteResult struct {
 	FreedBytes map[string]int64 `json:"freedBytes"`
 }
 
+// Experimental: SessionCanvasCloseResult is part of an experimental API and may change or
+// be removed.
+type SessionCanvasCloseResult struct {
+}
+
 // Schema for the `SessionContext` type.
 // Experimental: SessionContext is part of an experimental API and may change or be removed.
 type SessionContext struct {
@@ -3499,11 +3965,13 @@ type SessionContextInfo struct {
 	TotalTokens int64 `json:"totalTokens"`
 }
 
-// The same metadata records, with summary and context fields backfilled where available.
+// The enriched metadata records, with summary and context fields backfilled where
+// available. Sessions confirmed empty and unnamed are omitted.
 // Experimental: SessionEnrichMetadataResult is part of an experimental API and may change
 // or be removed.
 type SessionEnrichMetadataResult struct {
-	// Same records, with summary and context backfilled
+	// Enriched records, with summary and context backfilled. Sessions confirmed empty and
+	// unnamed may be omitted.
 	Sessions []SessionMetadata `json:"sessions"`
 }
 
@@ -3524,6 +3992,8 @@ type SessionExtensionsReloadResult struct {
 
 // File path, content to append, and optional mode for the client-provided session
 // filesystem.
+// Experimental: SessionFsAppendFileRequest is part of an experimental API and may change or
+// be removed.
 type SessionFsAppendFileRequest struct {
 	// Content to append
 	Content string `json:"content"`
@@ -3536,6 +4006,7 @@ type SessionFsAppendFileRequest struct {
 }
 
 // Describes a filesystem error.
+// Experimental: SessionFsError is part of an experimental API and may change or be removed.
 type SessionFsError struct {
 	// Error classification
 	Code SessionFsErrorCode `json:"code"`
@@ -3544,6 +4015,8 @@ type SessionFsError struct {
 }
 
 // Path to test for existence in the client-provided session filesystem.
+// Experimental: SessionFsExistsRequest is part of an experimental API and may change or be
+// removed.
 type SessionFsExistsRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
@@ -3552,6 +4025,8 @@ type SessionFsExistsRequest struct {
 }
 
 // Indicates whether the requested path exists in the client-provided session filesystem.
+// Experimental: SessionFsExistsResult is part of an experimental API and may change or be
+// removed.
 type SessionFsExistsResult struct {
 	// Whether the path exists
 	Exists bool `json:"exists"`
@@ -3559,6 +4034,8 @@ type SessionFsExistsResult struct {
 
 // Directory path to create in the client-provided session filesystem, with options for
 // recursive creation and POSIX mode.
+// Experimental: SessionFsMkdirRequest is part of an experimental API and may change or be
+// removed.
 type SessionFsMkdirRequest struct {
 	// Optional POSIX-style mode for newly created directories
 	Mode *int64 `json:"mode,omitempty"`
@@ -3571,6 +4048,8 @@ type SessionFsMkdirRequest struct {
 }
 
 // Directory path whose entries should be listed from the client-provided session filesystem.
+// Experimental: SessionFsReaddirRequest is part of an experimental API and may change or be
+// removed.
 type SessionFsReaddirRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
@@ -3579,6 +4058,8 @@ type SessionFsReaddirRequest struct {
 }
 
 // Names of entries in the requested directory, or a filesystem error if the read failed.
+// Experimental: SessionFsReaddirResult is part of an experimental API and may change or be
+// removed.
 type SessionFsReaddirResult struct {
 	// Entry names in the directory
 	Entries []string `json:"entries"`
@@ -3587,6 +4068,8 @@ type SessionFsReaddirResult struct {
 }
 
 // Schema for the `SessionFsReaddirWithTypesEntry` type.
+// Experimental: SessionFsReaddirWithTypesEntry is part of an experimental API and may
+// change or be removed.
 type SessionFsReaddirWithTypesEntry struct {
 	// Entry name
 	Name string `json:"name"`
@@ -3596,6 +4079,8 @@ type SessionFsReaddirWithTypesEntry struct {
 
 // Directory path whose entries (with type information) should be listed from the
 // client-provided session filesystem.
+// Experimental: SessionFsReaddirWithTypesRequest is part of an experimental API and may
+// change or be removed.
 type SessionFsReaddirWithTypesRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
@@ -3605,6 +4090,8 @@ type SessionFsReaddirWithTypesRequest struct {
 
 // Entries in the requested directory paired with file/directory type information, or a
 // filesystem error if the read failed.
+// Experimental: SessionFsReaddirWithTypesResult is part of an experimental API and may
+// change or be removed.
 type SessionFsReaddirWithTypesResult struct {
 	// Directory entries with type information
 	Entries []SessionFsReaddirWithTypesEntry `json:"entries"`
@@ -3613,6 +4100,8 @@ type SessionFsReaddirWithTypesResult struct {
 }
 
 // Path of the file to read from the client-provided session filesystem.
+// Experimental: SessionFsReadFileRequest is part of an experimental API and may change or
+// be removed.
 type SessionFsReadFileRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
@@ -3621,6 +4110,8 @@ type SessionFsReadFileRequest struct {
 }
 
 // File content as a UTF-8 string, or a filesystem error if the read failed.
+// Experimental: SessionFsReadFileResult is part of an experimental API and may change or be
+// removed.
 type SessionFsReadFileResult struct {
 	// File content as UTF-8 string
 	Content string `json:"content"`
@@ -3630,6 +4121,8 @@ type SessionFsReadFileResult struct {
 
 // Source and destination paths for renaming or moving an entry in the client-provided
 // session filesystem.
+// Experimental: SessionFsRenameRequest is part of an experimental API and may change or be
+// removed.
 type SessionFsRenameRequest struct {
 	// Destination path using SessionFs conventions
 	Dest string `json:"dest"`
@@ -3641,6 +4134,8 @@ type SessionFsRenameRequest struct {
 
 // Path to remove from the client-provided session filesystem, with options for recursive
 // removal and force.
+// Experimental: SessionFsRmRequest is part of an experimental API and may change or be
+// removed.
 type SessionFsRmRequest struct {
 	// Ignore errors if the path does not exist
 	Force *bool `json:"force,omitempty"`
@@ -3678,12 +4173,16 @@ type SessionFsSetProviderResult struct {
 }
 
 // Identifies the target session.
+// Experimental: SessionFsSqliteExistsRequest is part of an experimental API and may change
+// or be removed.
 type SessionFsSqliteExistsRequest struct {
 	// Target session identifier
 	SessionID string `json:"sessionId"`
 }
 
 // Indicates whether the per-session SQLite database already exists.
+// Experimental: SessionFsSqliteExistsResult is part of an experimental API and may change
+// or be removed.
 type SessionFsSqliteExistsResult struct {
 	// Whether the session database already exists
 	Exists bool `json:"exists"`
@@ -3691,6 +4190,8 @@ type SessionFsSqliteExistsResult struct {
 
 // SQL query, query type, and optional bind parameters for executing a SQLite query against
 // the per-session database.
+// Experimental: SessionFsSqliteQueryRequest is part of an experimental API and may change
+// or be removed.
 type SessionFsSqliteQueryRequest struct {
 	// Optional named bind parameters
 	Params map[string]any `json:"params,omitempty"`
@@ -3705,6 +4206,8 @@ type SessionFsSqliteQueryRequest struct {
 
 // Query results including rows, columns, and rows affected, or a filesystem error if
 // execution failed.
+// Experimental: SessionFsSqliteQueryResult is part of an experimental API and may change or
+// be removed.
 type SessionFsSqliteQueryResult struct {
 	// Column names from the result set
 	Columns []string `json:"columns"`
@@ -3719,6 +4222,8 @@ type SessionFsSqliteQueryResult struct {
 }
 
 // Path whose metadata should be returned from the client-provided session filesystem.
+// Experimental: SessionFsStatRequest is part of an experimental API and may change or be
+// removed.
 type SessionFsStatRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
@@ -3727,6 +4232,8 @@ type SessionFsStatRequest struct {
 }
 
 // Filesystem metadata for the requested path, or a filesystem error if the stat failed.
+// Experimental: SessionFsStatResult is part of an experimental API and may change or be
+// removed.
 type SessionFsStatResult struct {
 	// ISO 8601 timestamp of creation
 	Birthtime time.Time `json:"birthtime"`
@@ -3743,6 +4250,8 @@ type SessionFsStatResult struct {
 }
 
 // File path, content to write, and optional mode for the client-provided session filesystem.
+// Experimental: SessionFsWriteFileRequest is part of an experimental API and may change or
+// be removed.
 type SessionFsWriteFileRequest struct {
 	// Content to write
 	Content string `json:"content"`
@@ -3851,6 +4360,16 @@ type SessionLoadDeferredRepoHooksResult struct {
 // Experimental: SessionLspInitializeResult is part of an experimental API and may change or
 // be removed.
 type SessionLspInitializeResult struct {
+}
+
+// Standard MCP CallToolResult
+// Experimental: SessionMcpAppsCallToolResult is part of an experimental API and may change
+// or be removed.
+type SessionMcpAppsCallToolResult map[string]any
+
+// Experimental: SessionMcpAppsSetHostContextResult is part of an experimental API and may
+// change or be removed.
+type SessionMcpAppsSetHostContextResult struct {
 }
 
 // Experimental: SessionMcpDisableResult is part of an experimental API and may change or be
@@ -4302,6 +4821,8 @@ type SessionTelemetrySetFeatureOverridesResult struct {
 type SessionUpdateOptionsParams struct {
 	// Additional content-exclusion policies to merge into the session's policy set. Opaque
 	// shape; see `ContentExclusionApiResponse` in the runtime.
+	// Experimental: AdditionalContentExclusionPolicies is part of an experimental API and may
+	// change or be removed.
 	AdditionalContentExclusionPolicies []any `json:"additionalContentExclusionPolicies,omitempty"`
 	// Runtime context discriminator (e.g., `cli`, `actions`).
 	AgentContext *string `json:"agentContext,omitempty"`
@@ -4362,12 +4883,14 @@ type SessionUpdateOptionsParams struct {
 	Model *string `json:"model,omitempty"`
 	// Custom model-provider configuration (BYOK). Opaque shape; see `ProviderConfig` in the
 	// runtime.
+	// Experimental: Provider is part of an experimental API and may change or be removed.
 	Provider any `json:"provider,omitempty"`
 	// Reasoning effort for the selected model (model-defined enum).
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 	// Whether the session is running in an interactive UI.
 	RunningInInteractiveMode *bool `json:"runningInInteractiveMode,omitempty"`
 	// Sandbox configuration shape; opaque to SDK consumers. See `SandboxConfig` in the runtime.
+	// Experimental: SandboxConfig is part of an experimental API and may change or be removed.
 	SandboxConfig any `json:"sandboxConfig,omitempty"`
 	// Shell init profile (`None` or `NonInteractive`).
 	ShellInitProfile *string `json:"shellInitProfile,omitempty"`
@@ -5683,6 +6206,38 @@ func (UserToolSessionApprovalWrite) Kind() UserToolSessionApprovalKind {
 	return UserToolSessionApprovalKindWrite
 }
 
+// A single changed file and its unified diff.
+// Experimental: WorkspaceDiffFileChange is part of an experimental API and may change or be
+// removed.
+type WorkspaceDiffFileChange struct {
+	// Type of change represented by this file diff.
+	ChangeType WorkspaceDiffFileChangeType `json:"changeType"`
+	// Unified diff content for the file. Empty when the diff was truncated.
+	Diff string `json:"diff"`
+	// Whether the diff content was omitted because it exceeded the per-file size limit.
+	IsTruncated *bool `json:"isTruncated,omitempty"`
+	// Original file path for renamed files.
+	OldPath *string `json:"oldPath,omitempty"`
+	// Path to the changed file, relative to the workspace root.
+	Path string `json:"path"`
+}
+
+// Workspace diff result for the requested mode.
+// Experimental: WorkspaceDiffResult is part of an experimental API and may change or be
+// removed.
+type WorkspaceDiffResult struct {
+	// Default branch used for a branch diff, when branch mode was requested.
+	BaseBranch *string `json:"baseBranch,omitempty"`
+	// Changed files and their unified diffs.
+	Changes []WorkspaceDiffFileChange `json:"changes"`
+	// Whether a requested branch diff fell back to unstaged changes because branch diff failed.
+	IsFallback bool `json:"isFallback"`
+	// Effective mode used for the returned changes.
+	Mode WorkspaceDiffMode `json:"mode"`
+	// Diff mode requested by the client.
+	RequestedMode WorkspaceDiffMode `json:"requestedMode"`
+}
+
 // Schema for the `WorkspacesCheckpoints` type.
 // Experimental: WorkspacesCheckpoints is part of an experimental API and may change or be
 // removed.
@@ -5703,6 +6258,14 @@ type WorkspacesCreateFileRequest struct {
 	Content string `json:"content"`
 	// Relative path within the workspace files directory
 	Path string `json:"path"`
+}
+
+// Parameters for computing a workspace diff.
+// Experimental: WorkspacesDiffRequest is part of an experimental API and may change or be
+// removed.
+type WorkspacesDiffRequest struct {
+	// Diff mode requested by the client.
+	Mode WorkspaceDiffMode `json:"mode"`
 }
 
 // Current workspace metadata for the session, including its absolute filesystem path when
@@ -5881,6 +6444,20 @@ const (
 	AuthInfoTypeUser            AuthInfoType = "user"
 )
 
+// Runtime-controlled routing state for an open canvas instance.
+// Experimental: CanvasInstanceAvailability is part of an experimental API and may change or
+// be removed.
+type CanvasInstanceAvailability string
+
+const (
+	// The owning provider is currently connected and routing calls will be dispatched normally.
+	CanvasInstanceAvailabilityReady CanvasInstanceAvailability = "ready"
+	// The owning provider is not currently connected. Routing calls fail with
+	// canvas_provider_unavailable until the agent re-issues open_canvas (which rehydrates via a
+	// fresh canvas.open) or the provider reconnects.
+	CanvasInstanceAvailabilityStale CanvasInstanceAvailability = "stale"
+)
+
 // Neutral SDK discriminator for the connected remote session kind.
 // Experimental: ConnectedRemoteSessionMetadataKind is part of an experimental API and may
 // change or be removed.
@@ -5914,7 +6491,7 @@ const (
 	CopilotAPITokenAuthInfoHostHTTPSGithubCom CopilotAPITokenAuthInfoHost = "https://github.com"
 )
 
-// Server transport type: stdio, http, sse, or memory
+// Server transport type: stdio, http, sse (deprecated), or memory
 type DiscoveredMcpServerType string
 
 const (
@@ -5922,7 +6499,7 @@ const (
 	DiscoveredMcpServerTypeHTTP DiscoveredMcpServerType = "http"
 	// Server is backed by an in-memory runtime implementation.
 	DiscoveredMcpServerTypeMemory DiscoveredMcpServerType = "memory"
-	// Server communicates over Server-Sent Events.
+	// Server communicates over Server-Sent Events (deprecated).
 	DiscoveredMcpServerTypeSse DiscoveredMcpServerType = "sse"
 	// Server communicates over stdio with a local child process.
 	DiscoveredMcpServerTypeStdio DiscoveredMcpServerType = "stdio"
@@ -6090,6 +6667,114 @@ const (
 	InstructionsSourcesTypeRepo InstructionsSourcesType = "repo"
 	// Instructions loaded from VS Code instruction files.
 	InstructionsSourcesTypeVscode InstructionsSourcesType = "vscode"
+)
+
+// Allowed values for the `McpAppsHostContextDetailsAvailableDisplayMode` enumeration.
+// Experimental: McpAppsHostContextDetailsAvailableDisplayMode is part of an experimental
+// API and may change or be removed.
+type McpAppsHostContextDetailsAvailableDisplayMode string
+
+const (
+	// Rendered as a fullscreen overlay
+	McpAppsHostContextDetailsAvailableDisplayModeFullscreen McpAppsHostContextDetailsAvailableDisplayMode = "fullscreen"
+	// Rendered inline within the host conversation surface
+	McpAppsHostContextDetailsAvailableDisplayModeInline McpAppsHostContextDetailsAvailableDisplayMode = "inline"
+	// Rendered as a picture-in-picture floating panel
+	McpAppsHostContextDetailsAvailableDisplayModePip McpAppsHostContextDetailsAvailableDisplayMode = "pip"
+)
+
+// Current display mode (SEP-1865)
+// Experimental: McpAppsHostContextDetailsDisplayMode is part of an experimental API and may
+// change or be removed.
+type McpAppsHostContextDetailsDisplayMode string
+
+const (
+	// Rendered as a fullscreen overlay
+	McpAppsHostContextDetailsDisplayModeFullscreen McpAppsHostContextDetailsDisplayMode = "fullscreen"
+	// Rendered inline within the host conversation surface
+	McpAppsHostContextDetailsDisplayModeInline McpAppsHostContextDetailsDisplayMode = "inline"
+	// Rendered as a picture-in-picture floating panel
+	McpAppsHostContextDetailsDisplayModePip McpAppsHostContextDetailsDisplayMode = "pip"
+)
+
+// Platform type for responsive design
+// Experimental: McpAppsHostContextDetailsPlatform is part of an experimental API and may
+// change or be removed.
+type McpAppsHostContextDetailsPlatform string
+
+const (
+	// Host runs as a desktop application
+	McpAppsHostContextDetailsPlatformDesktop McpAppsHostContextDetailsPlatform = "desktop"
+	// Host runs on a mobile device
+	McpAppsHostContextDetailsPlatformMobile McpAppsHostContextDetailsPlatform = "mobile"
+	// Host runs in a web browser
+	McpAppsHostContextDetailsPlatformWeb McpAppsHostContextDetailsPlatform = "web"
+)
+
+// UI theme preference per SEP-1865
+// Experimental: McpAppsHostContextDetailsTheme is part of an experimental API and may
+// change or be removed.
+type McpAppsHostContextDetailsTheme string
+
+const (
+	// Dark UI theme
+	McpAppsHostContextDetailsThemeDark McpAppsHostContextDetailsTheme = "dark"
+	// Light UI theme
+	McpAppsHostContextDetailsThemeLight McpAppsHostContextDetailsTheme = "light"
+)
+
+// Allowed values for the `McpAppsSetHostContextDetailsAvailableDisplayMode` enumeration.
+// Experimental: McpAppsSetHostContextDetailsAvailableDisplayMode is part of an experimental
+// API and may change or be removed.
+type McpAppsSetHostContextDetailsAvailableDisplayMode string
+
+const (
+	// Rendered as a fullscreen overlay
+	McpAppsSetHostContextDetailsAvailableDisplayModeFullscreen McpAppsSetHostContextDetailsAvailableDisplayMode = "fullscreen"
+	// Rendered inline within the host conversation surface
+	McpAppsSetHostContextDetailsAvailableDisplayModeInline McpAppsSetHostContextDetailsAvailableDisplayMode = "inline"
+	// Rendered as a picture-in-picture floating panel
+	McpAppsSetHostContextDetailsAvailableDisplayModePip McpAppsSetHostContextDetailsAvailableDisplayMode = "pip"
+)
+
+// Current display mode (SEP-1865)
+// Experimental: McpAppsSetHostContextDetailsDisplayMode is part of an experimental API and
+// may change or be removed.
+type McpAppsSetHostContextDetailsDisplayMode string
+
+const (
+	// Rendered as a fullscreen overlay
+	McpAppsSetHostContextDetailsDisplayModeFullscreen McpAppsSetHostContextDetailsDisplayMode = "fullscreen"
+	// Rendered inline within the host conversation surface
+	McpAppsSetHostContextDetailsDisplayModeInline McpAppsSetHostContextDetailsDisplayMode = "inline"
+	// Rendered as a picture-in-picture floating panel
+	McpAppsSetHostContextDetailsDisplayModePip McpAppsSetHostContextDetailsDisplayMode = "pip"
+)
+
+// Platform type for responsive design
+// Experimental: McpAppsSetHostContextDetailsPlatform is part of an experimental API and may
+// change or be removed.
+type McpAppsSetHostContextDetailsPlatform string
+
+const (
+	// Host runs as a desktop application
+	McpAppsSetHostContextDetailsPlatformDesktop McpAppsSetHostContextDetailsPlatform = "desktop"
+	// Host runs on a mobile device
+	McpAppsSetHostContextDetailsPlatformMobile McpAppsSetHostContextDetailsPlatform = "mobile"
+	// Host runs in a web browser
+	McpAppsSetHostContextDetailsPlatformWeb McpAppsSetHostContextDetailsPlatform = "web"
+)
+
+// UI theme preference per SEP-1865
+// Experimental: McpAppsSetHostContextDetailsTheme is part of an experimental API and may
+// change or be removed.
+type McpAppsSetHostContextDetailsTheme string
+
+const (
+	// Dark UI theme
+	McpAppsSetHostContextDetailsThemeDark McpAppsSetHostContextDetailsTheme = "dark"
+	// Light UI theme
+	McpAppsSetHostContextDetailsThemeLight McpAppsSetHostContextDetailsTheme = "light"
 )
 
 // Outcome of the sampling inference. 'success' produced a response; 'failure' encountered
@@ -6482,6 +7167,8 @@ const (
 )
 
 // Error classification
+// Experimental: SessionFsErrorCode is part of an experimental API and may change or be
+// removed.
 type SessionFsErrorCode string
 
 const (
@@ -6492,6 +7179,8 @@ const (
 )
 
 // Entry type
+// Experimental: SessionFsReaddirWithTypesEntryType is part of an experimental API and may
+// change or be removed.
 type SessionFsReaddirWithTypesEntryType string
 
 const (
@@ -6513,6 +7202,8 @@ const (
 
 // How to execute the query: 'exec' for DDL/multi-statement (no results), 'query' for SELECT
 // (returns rows), 'run' for INSERT/UPDATE/DELETE (returns rowsAffected)
+// Experimental: SessionFsSqliteQueryType is part of an experimental API and may change or
+// be removed.
 type SessionFsSqliteQueryType string
 
 const (
@@ -6834,6 +7525,34 @@ const (
 	UserToolSessionApprovalKindWrite                     UserToolSessionApprovalKind = "write"
 )
 
+// Type of change represented by this file diff.
+// Experimental: WorkspaceDiffFileChangeType is part of an experimental API and may change
+// or be removed.
+type WorkspaceDiffFileChangeType string
+
+const (
+	// The file was added.
+	WorkspaceDiffFileChangeTypeAdded WorkspaceDiffFileChangeType = "added"
+	// The file was deleted.
+	WorkspaceDiffFileChangeTypeDeleted WorkspaceDiffFileChangeType = "deleted"
+	// The file was modified.
+	WorkspaceDiffFileChangeTypeModified WorkspaceDiffFileChangeType = "modified"
+	// The file was renamed.
+	WorkspaceDiffFileChangeTypeRenamed WorkspaceDiffFileChangeType = "renamed"
+)
+
+// Diff mode requested by the client.
+// Experimental: WorkspaceDiffMode is part of an experimental API and may change or be
+// removed.
+type WorkspaceDiffMode string
+
+const (
+	// Return changes compared with the default branch.
+	WorkspaceDiffModeBranch WorkspaceDiffMode = "branch"
+	// Return staged, unstaged, and untracked working tree changes.
+	WorkspaceDiffModeUnstaged WorkspaceDiffMode = "unstaged"
+)
+
 // Repository host type, if known
 // Experimental: WorkspaceSummaryHostType is part of an experimental API and may change or
 // be removed.
@@ -7036,6 +7755,28 @@ func (a *ServerModelsApi) List(ctx context.Context, params *ModelsListRequest) (
 	return &result, nil
 }
 
+type ServerSecretsApi serverApi
+
+// AddFilterValues registers secret values for redaction in session logs and exports. The
+// SDK calls this to inject dynamically generated secret values (e.g., OIDC tokens).
+//
+// RPC method: secrets.addFilterValues.
+//
+// Parameters: Secret values to add to the redaction filter.
+//
+// Returns: Confirmation that the secret values were registered.
+func (a *ServerSecretsApi) AddFilterValues(ctx context.Context, params *SecretsAddFilterValuesRequest) (*SecretsAddFilterValuesResult, error) {
+	raw, err := a.client.Request("secrets.addFilterValues", params)
+	if err != nil {
+		return nil, err
+	}
+	var result SecretsAddFilterValuesResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 type ServerSessionFsApi serverApi
 
 // SetProvider registers an SDK client as the session filesystem provider.
@@ -7150,8 +7891,8 @@ func (a *ServerSessionsApi) Connect(ctx context.Context, params *ConnectRemoteSe
 //
 // Parameters: Session metadata records to enrich with summary and context information.
 //
-// Returns: The same metadata records, with summary and context fields backfilled where
-// available.
+// Returns: The enriched metadata records, with summary and context fields backfilled where
+// available. Sessions confirmed empty and unnamed are omitted.
 func (a *ServerSessionsApi) EnrichMetadata(ctx context.Context, params *SessionsEnrichMetadataRequest) (*SessionEnrichMetadataResult, error) {
 	raw, err := a.client.Request("sessions.enrichMetadata", params)
 	if err != nil {
@@ -7525,6 +8266,7 @@ type ServerRpc struct {
 	Account   *ServerAccountApi
 	Mcp       *ServerMcpApi
 	Models    *ServerModelsApi
+	Secrets   *ServerSecretsApi
 	SessionFs *ServerSessionFsApi
 	Sessions  *ServerSessionsApi
 	Skills    *ServerSkillsApi
@@ -7557,6 +8299,7 @@ func NewServerRpc(client *jsonrpc2.Client) *ServerRpc {
 	r.Account = (*ServerAccountApi)(&r.common)
 	r.Mcp = (*ServerMcpApi)(&r.common)
 	r.Models = (*ServerModelsApi)(&r.common)
+	r.Secrets = (*ServerSecretsApi)(&r.common)
 	r.SessionFs = (*ServerSessionFsApi)(&r.common)
 	r.Sessions = (*ServerSessionsApi)(&r.common)
 	r.Skills = (*ServerSkillsApi)(&r.common)
@@ -7747,6 +8490,123 @@ func (a *AuthApi) SetCredentials(ctx context.Context, params *SessionSetCredenti
 		return nil, err
 	}
 	var result SessionSetCredentialsResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: CanvasApi contains experimental APIs that may change or be removed.
+type CanvasApi sessionApi
+
+// Closes an open canvas instance.
+//
+// RPC method: session.canvas.close.
+//
+// Parameters: Canvas close parameters.
+func (a *CanvasApi) Close(ctx context.Context, params *CanvasCloseRequest) (*SessionCanvasCloseResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["instanceId"] = params.InstanceID
+	}
+	raw, err := a.client.Request("session.canvas.close", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionCanvasCloseResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// InvokeAction invokes an action on an open canvas instance.
+//
+// RPC method: session.canvas.invokeAction.
+//
+// Parameters: Canvas action invocation parameters.
+//
+// Returns: Canvas action invocation result.
+func (a *CanvasApi) InvokeAction(ctx context.Context, params *CanvasInvokeActionRequest) (*CanvasInvokeActionResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["actionName"] = params.ActionName
+		if params.Input != nil {
+			req["input"] = params.Input
+		}
+		req["instanceId"] = params.InstanceID
+	}
+	raw, err := a.client.Request("session.canvas.invokeAction", req)
+	if err != nil {
+		return nil, err
+	}
+	var result CanvasInvokeActionResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Lists canvases declared for the session.
+//
+// RPC method: session.canvas.list.
+//
+// Returns: Declared canvases available in this session.
+func (a *CanvasApi) List(ctx context.Context) (*CanvasList, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.canvas.list", req)
+	if err != nil {
+		return nil, err
+	}
+	var result CanvasList
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListOpen lists currently open canvas instances for the live session.
+//
+// RPC method: session.canvas.listOpen.
+//
+// Returns: Live open-canvas snapshot.
+func (a *CanvasApi) ListOpen(ctx context.Context) (*CanvasListOpenResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.canvas.listOpen", req)
+	if err != nil {
+		return nil, err
+	}
+	var result CanvasListOpenResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Opens or focuses a canvas instance.
+//
+// RPC method: session.canvas.open.
+//
+// Parameters: Canvas open parameters.
+//
+// Returns: Open canvas instance snapshot.
+func (a *CanvasApi) Open(ctx context.Context, params *CanvasOpenRequest) (*OpenCanvasInstance, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["canvasId"] = params.CanvasID
+		if params.ExtensionID != nil {
+			req["extensionId"] = *params.ExtensionID
+		}
+		if params.Input != nil {
+			req["input"] = params.Input
+		}
+		req["instanceId"] = params.InstanceID
+	}
+	raw, err := a.client.Request("session.canvas.open", req)
+	if err != nil {
+		return nil, err
+	}
+	var result OpenCanvasInstance
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8178,10 +9038,21 @@ func (a *HistoryApi) CancelBackgroundCompaction(ctx context.Context) (*HistoryCa
 //
 // RPC method: session.history.compact.
 //
+// Parameters: Optional compaction parameters.
+//
 // Returns: Compaction outcome with the number of tokens and messages removed, summary text,
 // and the resulting context window breakdown.
-func (a *HistoryApi) Compact(ctx context.Context) (*HistoryCompactResult, error) {
+func (a *HistoryApi) Compact(ctx context.Context, params ...*HistoryCompactRequest) (*HistoryCompactResult, error) {
+	var requestParams *HistoryCompactRequest
+	if len(params) > 0 {
+		requestParams = params[0]
+	}
 	req := map[string]any{"sessionId": a.sessionID}
+	if requestParams != nil {
+		if requestParams.CustomInstructions != nil {
+			req["customInstructions"] = *requestParams.CustomInstructions
+		}
+	}
 	raw, err := a.client.Request("session.history.compact", req)
 	if err != nil {
 		return nil, err
@@ -8462,6 +9333,159 @@ func (a *McpApi) SetEnvValueMode(ctx context.Context, params *McpSetEnvValueMode
 		return nil, err
 	}
 	return &result, nil
+}
+
+// Experimental: McpAppsApi contains experimental APIs that may change or be removed.
+type McpAppsApi sessionApi
+
+// CallTool call an MCP tool from an MCP App view (SEP-1865). Enforces the visibility check
+// that prevents an app iframe from invoking model-only tools. Returns the standard MCP
+// `CallToolResult`.
+//
+// RPC method: session.mcp.apps.callTool.
+//
+// Parameters: MCP server, tool name, and arguments to invoke from an MCP App view.
+//
+// Returns: Standard MCP CallToolResult
+func (a *McpAppsApi) CallTool(ctx context.Context, params *McpAppsCallToolRequest) (*SessionMcpAppsCallToolResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		if params.Arguments != nil {
+			req["arguments"] = params.Arguments
+		}
+		req["originServerName"] = params.OriginServerName
+		req["serverName"] = params.ServerName
+		req["toolName"] = params.ToolName
+	}
+	raw, err := a.client.Request("session.mcp.apps.callTool", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionMcpAppsCallToolResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Diagnose MCP Apps wiring for a specific MCP server. Reports the session capability,
+// feature-flag state, advertised extension, and how many tools have `_meta.ui` populated.
+//
+// RPC method: session.mcp.apps.diagnose.
+//
+// Parameters: MCP server to diagnose MCP Apps wiring for.
+//
+// Returns: Diagnostic snapshot of MCP Apps wiring for the named server.
+func (a *McpAppsApi) Diagnose(ctx context.Context, params *McpAppsDiagnoseRequest) (*McpAppsDiagnoseResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["serverName"] = params.ServerName
+	}
+	raw, err := a.client.Request("session.mcp.apps.diagnose", req)
+	if err != nil {
+		return nil, err
+	}
+	var result McpAppsDiagnoseResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetHostContext read the current host context advertised to MCP App guests.
+//
+// RPC method: session.mcp.apps.getHostContext.
+//
+// Returns: Current host context advertised to MCP App guests.
+func (a *McpAppsApi) GetHostContext(ctx context.Context) (*McpAppsHostContext, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.mcp.apps.getHostContext", req)
+	if err != nil {
+		return nil, err
+	}
+	var result McpAppsHostContext
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListTools list tools that an MCP App view is allowed to call (SEP-1865 visibility
+// filter). Returns tools whose `_meta.ui.visibility` is unset (default `["model","app"]`)
+// or includes `"app"`.
+//
+// RPC method: session.mcp.apps.listTools.
+//
+// Parameters: MCP server to list app-callable tools for.
+//
+// Returns: App-callable tools from the named MCP server.
+func (a *McpAppsApi) ListTools(ctx context.Context, params *McpAppsListToolsRequest) (*McpAppsListToolsResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["originServerName"] = params.OriginServerName
+		req["serverName"] = params.ServerName
+	}
+	raw, err := a.client.Request("session.mcp.apps.listTools", req)
+	if err != nil {
+		return nil, err
+	}
+	var result McpAppsListToolsResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ReadResource fetch an MCP resource (typically a `ui://` MCP App bundle, per SEP-1865)
+// from a connected server. Requires the `mcp-apps` session capability.
+//
+// RPC method: session.mcp.apps.readResource.
+//
+// Parameters: MCP server and resource URI to fetch.
+//
+// Returns: Resource contents returned by the MCP server.
+func (a *McpAppsApi) ReadResource(ctx context.Context, params *McpAppsReadResourceRequest) (*McpAppsReadResourceResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["serverName"] = params.ServerName
+		req["uri"] = params.URI
+	}
+	raw, err := a.client.Request("session.mcp.apps.readResource", req)
+	if err != nil {
+		return nil, err
+	}
+	var result McpAppsReadResourceResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// SetHostContext replace the host context returned to MCP App guests on `ui/initialize`.
+// Hosts use this to advertise theme, locale, or other metadata to the guest UI.
+//
+// RPC method: session.mcp.apps.setHostContext.
+//
+// Parameters: Host context to advertise to MCP App guests.
+func (a *McpAppsApi) SetHostContext(ctx context.Context, params *McpAppsSetHostContextRequest) (*SessionMcpAppsSetHostContextResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["context"] = params.Context
+	}
+	raw, err := a.client.Request("session.mcp.apps.setHostContext", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionMcpAppsSetHostContextResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: Apps returns experimental APIs that may change or be removed.
+func (s *McpApi) Apps() *McpAppsApi {
+	return (*McpAppsApi)(s)
 }
 
 // Experimental: McpOauthApi contains experimental APIs that may change or be removed.
@@ -10509,6 +11533,29 @@ func (a *WorkspacesApi) CreateFile(ctx context.Context, params *WorkspacesCreate
 	return &result, nil
 }
 
+// Diff computes a diff for the session workspace.
+//
+// RPC method: session.workspaces.diff.
+//
+// Parameters: Parameters for computing a workspace diff.
+//
+// Returns: Workspace diff result for the requested mode.
+func (a *WorkspacesApi) Diff(ctx context.Context, params *WorkspacesDiffRequest) (*WorkspaceDiffResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["mode"] = params.Mode
+	}
+	raw, err := a.client.Request("session.workspaces.diff", req)
+	if err != nil {
+		return nil, err
+	}
+	var result WorkspaceDiffResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // GetWorkspace gets current workspace metadata for the session.
 //
 // RPC method: session.workspaces.getWorkspace.
@@ -10642,6 +11689,7 @@ type SessionRpc struct {
 
 	Agent        *AgentApi
 	Auth         *AuthApi
+	Canvas       *CanvasApi
 	Commands     *CommandsApi
 	EventLog     *EventLogApi
 	Extensions   *ExtensionsApi
@@ -10851,6 +11899,7 @@ func NewSessionRpc(client *jsonrpc2.Client, sessionID string) *SessionRpc {
 	r.common = sessionApi{client: client, sessionID: sessionID}
 	r.Agent = (*AgentApi)(&r.common)
 	r.Auth = (*AuthApi)(&r.common)
+	r.Canvas = (*CanvasApi)(&r.common)
 	r.Commands = (*CommandsApi)(&r.common)
 	r.EventLog = (*EventLogApi)(&r.common)
 	r.Extensions = (*ExtensionsApi)(&r.common)
@@ -10881,6 +11930,33 @@ func NewSessionRpc(client *jsonrpc2.Client, sessionID string) *SessionRpc {
 	return r
 }
 
+// Experimental: CanvasHandler contains experimental APIs that may change or be removed.
+type CanvasHandler interface {
+	// Closes a canvas instance on the provider.
+	//
+	// RPC method: canvas.close.
+	//
+	// Parameters: Canvas close parameters sent to the provider.
+	Close(request *CanvasProviderCloseRequest) (*CanvasCloseResult, error)
+	// InvokeAction invokes an action on an open canvas instance via the provider.
+	//
+	// RPC method: canvas.invokeAction.
+	//
+	// Parameters: Canvas action invocation parameters sent to the provider.
+	//
+	// Returns: Provider-supplied action result.
+	InvokeAction(request *CanvasProviderInvokeActionRequest) (any, error)
+	// Opens a canvas instance on the provider.
+	//
+	// RPC method: canvas.open.
+	//
+	// Parameters: Canvas open parameters sent to the provider.
+	//
+	// Returns: Canvas open result returned by the provider.
+	Open(request *CanvasProviderOpenRequest) (*CanvasProviderOpenResult, error)
+}
+
+// Experimental: SessionFsHandler contains experimental APIs that may change or be removed.
 type SessionFsHandler interface {
 	// AppendFile appends content to a file in the client-provided session filesystem.
 	//
@@ -10998,6 +12074,7 @@ type SessionFsHandler interface {
 
 // ClientSessionApiHandlers provides all client session API handler groups for a session.
 type ClientSessionApiHandlers struct {
+	Canvas    CanvasHandler
 	SessionFs SessionFsHandler
 }
 
@@ -11015,6 +12092,63 @@ func clientSessionHandlerError(err error) *jsonrpc2.Error {
 // RegisterClientSessionApiHandlers registers handlers for server-to-client session API
 // calls.
 func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(sessionID string) *ClientSessionApiHandlers) {
+	client.SetRequestHandler("canvas.close", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request CanvasProviderCloseRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.Canvas == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No canvas handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.Canvas.Close(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("canvas.invokeAction", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request CanvasProviderInvokeActionRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.Canvas == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No canvas handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.Canvas.InvokeAction(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("canvas.open", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request CanvasProviderOpenRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.Canvas == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No canvas handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.Canvas.Open(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
 	client.SetRequestHandler("sessionFs.appendFile", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
 		var request SessionFsAppendFileRequest
 		if err := json.Unmarshal(params, &request); err != nil {

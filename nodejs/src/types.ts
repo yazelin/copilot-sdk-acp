@@ -7,10 +7,12 @@
  */
 
 // Import and re-export generated session event types
+import type { Canvas } from "./canvas.js";
 import type { SessionFsProvider } from "./sessionFsProvider.js";
 import type { SessionEvent as GeneratedSessionEvent } from "./generated/session-events.js";
 import type { CopilotSession } from "./session.js";
 import type { RemoteSessionMode } from "./generated/rpc.js";
+import type { OpenCanvasInstance } from "./generated/rpc.js";
 export type { RemoteSessionMode } from "./generated/rpc.js";
 export type SessionEvent = GeneratedSessionEvent;
 export type { SessionFsProvider } from "./sessionFsProvider.js";
@@ -176,7 +178,7 @@ export interface CopilotClientOptions {
      * Working directory for the runtime process.
      * If not set, inherits the current process's working directory.
      */
-    cwd?: string;
+    workingDirectory?: string;
 
     /**
      * Base directory for Copilot data (session state, config, etc.).
@@ -319,13 +321,15 @@ export type ToolBinaryResult = {
     description?: string;
 };
 
+export type ToolTelemetry = Record<string, Record<string, unknown> | undefined>;
+
 export type ToolResultObject = {
     textResultForLlm: string;
     binaryResultsForLlm?: ToolBinaryResult[];
     resultType: ToolResultType;
     error?: string;
     sessionLog?: string;
-    toolTelemetry?: Record<string, unknown>;
+    toolTelemetry?: ToolTelemetry;
 };
 
 export type ToolResult = string | ToolResultObject;
@@ -562,6 +566,8 @@ export interface SessionCapabilities {
     ui?: {
         /** Whether the host supports interactive elicitation dialogs. */
         elicitation?: boolean;
+        /** Whether the host supports canvas rendering. */
+        canvases?: boolean;
     };
 }
 
@@ -752,10 +758,10 @@ export interface ToolCallResponsePayload {
 }
 
 /**
- * Known system prompt section identifiers for the "customize" mode.
+ * Known system message section identifiers for the "customize" mode.
  * Each section corresponds to a distinct part of the system prompt.
  */
-export type SystemPromptSection =
+export type SystemMessageSection =
     | "identity"
     | "tone"
     | "tool_efficiency"
@@ -765,10 +771,11 @@ export type SystemPromptSection =
     | "safety"
     | "tool_instructions"
     | "custom_instructions"
+    | "runtime_instructions"
     | "last_instructions";
 
 /** Section metadata for documentation and tooling. */
-export const SYSTEM_PROMPT_SECTIONS: Record<SystemPromptSection, { description: string }> = {
+export const SYSTEM_MESSAGE_SECTIONS: Record<SystemMessageSection, { description: string }> = {
     identity: { description: "Agent identity preamble and mode statement" },
     tone: { description: "Response style, conciseness rules, output formatting preferences" },
     tool_efficiency: { description: "Tool usage patterns, parallel calling, batching guidelines" },
@@ -778,6 +785,10 @@ export const SYSTEM_PROMPT_SECTIONS: Record<SystemPromptSection, { description: 
     safety: { description: "Environment limitations, prohibited actions, security policies" },
     tool_instructions: { description: "Per-tool usage instructions" },
     custom_instructions: { description: "Repository and organization custom instructions" },
+    runtime_instructions: {
+        description:
+            "Runtime-provided context and instructions (e.g. system notifications, memories, workspace context, mode-specific instructions, content-exclusion policy)",
+    },
     last_instructions: {
         description:
             "End-of-prompt instructions: parallel tool calling, persistence, task completion",
@@ -806,7 +817,7 @@ export type SectionOverrideAction =
     | SectionTransformFn;
 
 /**
- * Override operation for a single system prompt section.
+ * Override operation for a single system message section.
  */
 export interface SectionOverride {
     /**
@@ -862,7 +873,7 @@ export interface SystemMessageCustomizeConfig {
      * Unknown section IDs gracefully fall back: content-bearing overrides are appended
      * to additional instructions, and "remove" on unknown sections is a silent no-op.
      */
-    sections?: Partial<Record<SystemPromptSection, SectionOverride>>;
+    sections?: Partial<Record<SystemMessageSection, SectionOverride>>;
 
     /**
      * Additional content appended after all sections.
@@ -1031,7 +1042,7 @@ export interface BaseHookInput {
     sessionId: string;
     /** Time at which the hook event was emitted by the runtime. */
     timestamp: Date;
-    cwd: string;
+    workingDirectory: string;
 }
 
 /**
@@ -1062,6 +1073,38 @@ export type PreToolUseHandler = (
 ) => Promise<PreToolUseHookOutput | void> | PreToolUseHookOutput | void;
 
 /**
+ * Input for pre-MCP-tool-call hook
+ */
+export interface PreMcpToolCallHookInput extends BaseHookInput {
+    toolCallId?: string;
+    serverName: string;
+    toolName: string;
+    arguments: unknown;
+    _meta?: Record<string, unknown>;
+}
+
+/**
+ * Output for pre-MCP-tool-call hook
+ */
+export interface PreMcpToolCallHookOutput {
+    /**
+     * Hook-controlled metadata to use for the outgoing MCP request.
+     * - undefined/absent: preserve the current request `_meta`
+     * - object: use this object as request `_meta`
+     * - null: omit `_meta`
+     */
+    metaToUse?: Record<string, unknown> | null;
+}
+
+/**
+ * Handler for pre-MCP-tool-call hook
+ */
+export type PreMcpToolCallHandler = (
+    input: PreMcpToolCallHookInput,
+    invocation: { sessionId: string }
+) => Promise<PreMcpToolCallHookOutput | void> | PreMcpToolCallHookOutput | void;
+
+/**
  * Input for post-tool-use hook
  */
 export interface PostToolUseHookInput extends BaseHookInput {
@@ -1086,6 +1129,51 @@ export type PostToolUseHandler = (
     input: PostToolUseHookInput,
     invocation: { sessionId: string }
 ) => Promise<PostToolUseHookOutput | void> | PostToolUseHookOutput | void;
+
+/**
+ * Input for post-tool-use-failure hook.
+ *
+ * Dispatched after a tool execution whose `resultType` is `"failure"`.
+ * The input differs from {@link PostToolUseHookInput}: the host CLI does not
+ * forward the full `ToolResultObject` to failure hooks — only `error`, the
+ * stringified failure message extracted from the tool's result, is provided.
+ */
+export interface PostToolUseFailureHookInput extends BaseHookInput {
+    toolName: string;
+    toolArgs: unknown;
+    /**
+     * Failure message from the tool's result (the `error` field of the
+     * underlying `ToolResultObject`, falling back to its text/log fields).
+     */
+    error: string;
+}
+
+/**
+ * Output for post-tool-use-failure hook.
+ *
+ * Only `additionalContext` is consumed by the host CLI — it is appended as
+ * hidden guidance to the model alongside the failed tool result. Other fields
+ * such as `modifiedResult` or `suppressOutput` are not honored for failure
+ * hooks (see {@link PostToolUseHookOutput} for the success-only hook).
+ */
+export interface PostToolUseFailureHookOutput {
+    additionalContext?: string;
+}
+
+/**
+ * Handler for post-tool-use-failure hook.
+ *
+ * Fires after a tool execution whose result was `"failure"`. `onPostToolUse`
+ * only fires for successful results, so register this handler to observe or
+ * react to failed tool outcomes.
+ *
+ * Note: `"rejected"`, `"denied"`, and `"timeout"` results do not currently
+ * trigger this hook either — only `"failure"` does.
+ */
+export type PostToolUseFailureHandler = (
+    input: PostToolUseFailureHookInput,
+    invocation: { sessionId: string }
+) => Promise<PostToolUseFailureHookOutput | void> | PostToolUseFailureHookOutput | void;
 
 /**
  * Input for user-prompt-submitted hook
@@ -1198,9 +1286,26 @@ export interface SessionHooks {
     onPreToolUse?: PreToolUseHandler;
 
     /**
-     * Called after a tool is executed
+     * Called before an MCP tool is called
+     */
+    onPreMcpToolCall?: PreMcpToolCallHandler;
+
+    /**
+     * Called after a tool is executed with a successful result.
+     *
+     * For failed tool executions, register {@link onPostToolUseFailure} instead;
+     * this handler does not fire for non-success results.
      */
     onPostToolUse?: PostToolUseHandler;
+
+    /**
+     * Called after a tool execution whose result was `"failure"`.
+     *
+     * Register this handler alongside {@link onPostToolUse} to observe failed
+     * tool calls — `onPostToolUse` only fires for successful results, so
+     * without this hook failed tool calls are invisible to extensions.
+     */
+    onPostToolUseFailure?: PostToolUseFailureHandler;
 
     /**
      * Called when the user submits a prompt
@@ -1259,7 +1364,10 @@ export interface MCPStdioServerConfig extends MCPServerConfigBase {
      * Environment variables to pass to the server.
      */
     env?: Record<string, string>;
-    cwd?: string;
+    /**
+     * Working directory for the server process.
+     */
+    workingDirectory?: string;
 }
 
 /**
@@ -1384,6 +1492,16 @@ export interface InfiniteSessionConfig {
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 /**
+ * Stable extension identity for session participants that provide canvases.
+ */
+export interface ExtensionInfo {
+    /** Extension namespace/source, e.g. "github-app". */
+    source: string;
+    /** Stable provider name within the source namespace. */
+    name: string;
+}
+
+/**
  * Shared configuration fields used by both {@link SessionConfig} (for
  * creating a new session) and {@link ResumeSessionConfig} (for resuming
  * an existing one).
@@ -1435,6 +1553,38 @@ export interface SessionConfigBase {
      */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tools?: Tool<any>[];
+
+    /**
+     * Canvases contributed by this session participant. The declaring
+     * connection becomes the live provider for `canvas.open|focus|close|reload`
+     * and `canvas.action.invoke` dispatches targeting each canvas's `id` for
+     * the lifetime of the connection. Re-declaring the same id on resume
+     * replaces the prior declaration.
+     */
+    canvases?: Canvas[];
+
+    /**
+     * Renderer-side opt-in: when true, the runtime surfaces canvas agent tools
+     * (`list_canvas_capabilities`, `open_canvas`, `invoke_canvas_action`) to
+     * the model for this connection. Default off so SDK callers that cannot
+     * display canvases stay clean.
+     */
+    requestCanvasRenderer?: boolean;
+
+    /**
+     * Extension surface opt-in: when true, the runtime wires extension
+     * management tools and per-extension tool dispatch onto the session for
+     * this connection. Default off so callers that do not expose extensions
+     * stay clean.
+     */
+    requestExtensions?: boolean;
+
+    /**
+     * Stable extension identity for canvas providers on this connection. When
+     * set, the runtime uses `${source}:${name}` as the agent-facing extension
+     * id instead of a reconnect-specific connection id.
+     */
+    extensionInfo?: ExtensionInfo;
 
     /**
      * Slash commands registered for this session.
@@ -1666,6 +1816,12 @@ export interface ResumeSessionConfig extends SessionConfigBase {
      * @default false
      */
     continuePendingWork?: boolean;
+    /**
+     * Snapshot of canvases that were already open when the session was suspended.
+     * When provided on resume, the runtime can rehydrate canvas state so consumers
+     * do not need to re-open canvases that were active before the previous shutdown.
+     */
+    openCanvases?: OpenCanvasInstance[];
 }
 
 /**
@@ -1822,16 +1978,11 @@ export type TypedSessionEventHandler<T extends SessionEventType> = (
 export type SessionEventHandler = (event: SessionEvent) => void;
 
 /**
- * Connection state
- */
-export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
-
-/**
  * Working directory context for a session
  */
 export interface SessionContext {
     /** Working directory where the session was created */
-    cwd: string;
+    workingDirectory: string;
     /** Git repository root (if in a git repo) */
     gitRoot?: string;
     /** GitHub repository in "owner/repo" format */
@@ -1879,8 +2030,8 @@ export interface SessionFsConfig {
  * Filter options for listing sessions
  */
 export interface SessionListFilter {
-    /** Filter by exact cwd match */
-    cwd?: string;
+    /** Filter by exact working directory match */
+    workingDirectory?: string;
     /** Filter by git root */
     gitRoot?: string;
     /** Filter by repository (owner/repo format) */
@@ -1898,7 +2049,7 @@ export interface SessionMetadata {
     modifiedTime: Date;
     summary?: string;
     isRemote: boolean;
-    /** Working directory context (cwd, git info) from session creation */
+    /** Working directory context (working directory, git info) from session creation */
     context?: SessionContext;
 }
 

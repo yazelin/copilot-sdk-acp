@@ -12,11 +12,21 @@ export { CopilotClient } from "./client.js";
 export { RuntimeConnection } from "./types.js";
 export { CopilotSession, type AssistantMessageEvent } from "./session.js";
 export {
+    Canvas,
+    CanvasError,
+    createCanvas,
+    type CanvasAction,
+    type CanvasDeclaration,
+    type CanvasHostContext,
+    type CanvasJsonSchema,
+    type CanvasOptions,
+} from "./canvas.js";
+export {
     defineTool,
     approveAll,
     convertMcpCallToolResult,
     createSessionFsAdapter,
-    SYSTEM_PROMPT_SECTIONS,
+    SYSTEM_MESSAGE_SECTIONS,
 } from "./types.js";
 // Re-export the generated session-event types (every *Event interface and
 // its corresponding *Data payload type, plus supporting unions/aliases) so
@@ -40,7 +50,6 @@ export type {
     AutoModeSwitchHandler,
     AutoModeSwitchRequest,
     AutoModeSwitchResponse,
-    ConnectionState,
     CopilotClientOptions,
     StdioRuntimeConnection,
     TcpRuntimeConnection,
@@ -56,6 +65,7 @@ export type {
     ExitPlanModeHandler,
     ExitPlanModeRequest,
     ExitPlanModeResult,
+    ExtensionInfo,
     ForegroundSessionInfo,
     GetAuthStatusResponse,
     GetStatusResponse,
@@ -110,13 +120,14 @@ export type {
     SystemMessageConfig,
     SystemMessageCustomizeConfig,
     SystemMessageReplaceConfig,
-    SystemPromptSection,
+    SystemMessageSection,
     TelemetryConfig,
     TraceContext,
     TraceContextProvider,
     Tool,
     ToolHandler,
     ToolInvocation,
+    ToolTelemetry,
     ToolResultObject,
     TypedSessionEventHandler,
     TypedSessionLifecycleHandler,

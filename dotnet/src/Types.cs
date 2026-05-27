@@ -1,4 +1,4 @@
-﻿/*---------------------------------------------------------------------------------------------
+/*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
@@ -396,7 +396,8 @@ public sealed class SessionFsConfig
     /// <summary>
     /// Initial working directory for sessions (user's project directory).
     /// </summary>
-    public required string InitialCwd { get; init; }
+    [JsonPropertyName("initialCwd")]
+    public required string InitialWorkingDirectory { get; init; }
 
     /// <summary>
     /// Path within each session's SessionFs where the runtime stores
@@ -671,112 +672,7 @@ public sealed class ToolInvocation
     /// <summary>
     /// Arguments passed to the tool by the language model.
     /// </summary>
-    public object? Arguments { get; set; }
-}
-
-/// <summary>Describes the kind of a permission request result.</summary>
-[JsonConverter(typeof(PermissionRequestResultKind.Converter))]
-[DebuggerDisplay("{Value,nq}")]
-public readonly struct PermissionRequestResultKind : IEquatable<PermissionRequestResultKind>
-{
-    /// <summary>Gets the kind indicating the permission was approved for this one instance.</summary>
-    public static PermissionRequestResultKind Approved { get; } = new("approve-once");
-
-    /// <summary>Gets the kind indicating the permission was denied interactively by the user.</summary>
-    public static PermissionRequestResultKind Rejected { get; } = new("reject");
-
-    /// <summary>Gets the kind indicating the permission was denied because user confirmation was unavailable.</summary>
-    public static PermissionRequestResultKind UserNotAvailable { get; } = new("user-not-available");
-
-    /// <summary>Gets the kind indicating no permission decision was made.</summary>
-    public static PermissionRequestResultKind NoResult { get; } = new("no-result");
-
-    /// <summary>Gets the underlying string value of this <see cref="PermissionRequestResultKind"/>.</summary>
-    public string Value => _value ?? string.Empty;
-
-    private readonly string? _value;
-
-    /// <summary>Initializes a new instance of the <see cref="PermissionRequestResultKind"/> struct.</summary>
-    /// <param name="value">The string value for this kind.</param>
-    [JsonConstructor]
-    public PermissionRequestResultKind(string value) => _value = value;
-
-    /// <inheritdoc/>
-    public static bool operator ==(PermissionRequestResultKind left, PermissionRequestResultKind right) => left.Equals(right);
-
-    /// <inheritdoc/>
-    public static bool operator !=(PermissionRequestResultKind left, PermissionRequestResultKind right) => !left.Equals(right);
-
-    /// <inheritdoc/>
-    public override bool Equals([NotNullWhen(true)] object? obj) => obj is PermissionRequestResultKind other && Equals(other);
-
-    /// <inheritdoc/>
-    public bool Equals(PermissionRequestResultKind other) => string.Equals(Value, other.Value, StringComparison.OrdinalIgnoreCase);
-
-    /// <inheritdoc/>
-    public override int GetHashCode() => StringComparer.OrdinalIgnoreCase.GetHashCode(Value);
-
-    /// <inheritdoc/>
-    public override string ToString() => Value;
-
-    /// <summary>Provides a <see cref="JsonConverter{PermissionRequestResultKind}"/> for serializing <see cref="PermissionRequestResultKind"/> instances.</summary>
-    [EditorBrowsable(EditorBrowsableState.Never)]
-    public sealed class Converter : JsonConverter<PermissionRequestResultKind>
-    {
-        /// <inheritdoc/>
-        public override PermissionRequestResultKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-        {
-            if (reader.TokenType != JsonTokenType.String)
-            {
-                throw new JsonException("Expected string for PermissionRequestResultKind.");
-            }
-
-            var value = reader.GetString();
-            if (value is null)
-            {
-                throw new JsonException("PermissionRequestResultKind value cannot be null.");
-            }
-
-            return new PermissionRequestResultKind(value);
-        }
-
-        /// <inheritdoc/>
-        public override void Write(Utf8JsonWriter writer, PermissionRequestResultKind value, JsonSerializerOptions options) =>
-            writer.WriteStringValue(value.Value);
-    }
-}
-
-/// <summary>
-/// Result of a permission request evaluation.
-/// </summary>
-public sealed class PermissionRequestResult
-{
-    /// <summary>
-    /// Permission decision kind. Construct values with the static members on
-    /// <see cref="PermissionRequestResultKind"/>:
-    /// <list type="bullet">
-    /// <item><description><see cref="PermissionRequestResultKind.Approved"/> — allow this single request.</description></item>
-    /// <item><description><see cref="PermissionRequestResultKind.Rejected"/> — deny the request.</description></item>
-    /// <item><description><see cref="PermissionRequestResultKind.UserNotAvailable"/> — deny because no user is available to confirm.</description></item>
-    /// <item><description><see cref="PermissionRequestResultKind.NoResult"/> — leave the pending request unanswered (protocol v1 only; rejected by protocol v2 servers).</description></item>
-    /// </list>
-    /// </summary>
-    [JsonPropertyName("kind")]
-    public PermissionRequestResultKind Kind { get; set; }
-
-    /// <summary>
-    /// Permission rules to apply for the decision.
-    /// </summary>
-    [JsonPropertyName("rules")]
-    public IList<object>? Rules { get; set; }
-
-    /// <summary>
-    /// Optional human-readable feedback to forward to the LLM along with the
-    /// decision. Mirrors the <c>feedback</c> field on the RPC-level
-    /// <see cref="Rpc.PermissionDecision"/> type.
-    /// </summary>
-    [JsonPropertyName("feedback")]
-    public string? Feedback { get; set; }
+    public JsonElement? Arguments { get; set; }
 }
 
 /// <summary>
@@ -1215,7 +1111,7 @@ public sealed class PreToolUseHookInput
     /// Current working directory of the session.
     /// </summary>
     [JsonPropertyName("cwd")]
-    public string Cwd { get; set; } = string.Empty;
+    public string WorkingDirectory { get; set; } = string.Empty;
 
     /// <summary>
     /// Name of the tool about to be executed.
@@ -1227,7 +1123,7 @@ public sealed class PreToolUseHookInput
     /// Arguments that will be passed to the tool.
     /// </summary>
     [JsonPropertyName("toolArgs")]
-    public object? ToolArgs { get; set; }
+    public JsonElement? ToolArgs { get; set; }
 }
 
 /// <summary>
@@ -1272,6 +1168,83 @@ public sealed class PreToolUseHookOutput
 }
 
 /// <summary>
+/// Input for a pre-MCP-tool-call hook.
+/// </summary>
+public sealed class PreMcpToolCallHookInput
+{
+    /// <summary>
+    /// The runtime session ID of the session that triggered the hook.
+    /// </summary>
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Unix timestamp in milliseconds when the hook was triggered.
+    /// </summary>
+    [JsonPropertyName("timestamp")]
+    [JsonConverter(typeof(UnixMillisecondsDateTimeOffsetConverter))]
+    public DateTimeOffset Timestamp { get; set; }
+
+    /// <summary>
+    /// Current working directory of the session.
+    /// </summary>
+    [JsonPropertyName("cwd")]
+    public string WorkingDirectory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Name of the MCP server being called.
+    /// </summary>
+    [JsonPropertyName("serverName")]
+    public string ServerName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Name of the MCP tool being called.
+    /// </summary>
+    [JsonPropertyName("toolName")]
+    public string ToolName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Arguments for the MCP tool call.
+    /// </summary>
+    [JsonPropertyName("arguments")]
+    public JsonElement? Arguments { get; set; }
+
+    /// <summary>
+    /// Tool call ID, if available.
+    /// </summary>
+    [JsonPropertyName("toolCallId")]
+    public string? ToolCallId { get; set; }
+
+    /// <summary>
+    /// MCP request metadata, if present.
+    /// </summary>
+    [JsonPropertyName("_meta")]
+    public IDictionary<string, JsonElement>? Meta { get; set; }
+}
+
+/// <summary>
+/// Output for a pre-MCP-tool-call hook.
+/// </summary>
+/// <remarks>
+/// <para>The <see cref="MetaToUse"/> property controls outgoing MCP request metadata:</para>
+/// <list type="bullet">
+/// <item><description>Return <c>null</c> from the hook handler: preserve existing <c>_meta</c> (no-op).</description></item>
+/// <item><description>Return a <see cref="PreMcpToolCallHookOutput"/> with <see cref="MetaToUse"/> left as <c>null</c>: omit <c>_meta</c> from the request.</description></item>
+/// <item><description>Return a <see cref="PreMcpToolCallHookOutput"/> with <see cref="MetaToUse"/> set to a <see cref="JsonElement"/> object: replace <c>_meta</c> with that object.</description></item>
+/// </list>
+/// </remarks>
+public sealed class PreMcpToolCallHookOutput
+{
+    /// <summary>
+    /// Hook-controlled metadata to use for the outgoing MCP request.
+    /// See class remarks for semantics.
+    /// </summary>
+    [JsonPropertyName("metaToUse")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public JsonElement? MetaToUse { get; set; }
+}
+
+/// <summary>
 /// Input for a post-tool-use hook.
 /// </summary>
 public sealed class PostToolUseHookInput
@@ -1293,7 +1266,7 @@ public sealed class PostToolUseHookInput
     /// Current working directory of the session.
     /// </summary>
     [JsonPropertyName("cwd")]
-    public string Cwd { get; set; } = string.Empty;
+    public string WorkingDirectory { get; set; } = string.Empty;
 
     /// <summary>
     /// Name of the tool that was executed.
@@ -1305,13 +1278,13 @@ public sealed class PostToolUseHookInput
     /// Arguments that were passed to the tool.
     /// </summary>
     [JsonPropertyName("toolArgs")]
-    public object? ToolArgs { get; set; }
+    public JsonElement? ToolArgs { get; set; }
 
     /// <summary>
     /// Result returned by the tool execution.
     /// </summary>
     [JsonPropertyName("toolResult")]
-    public object? ToolResult { get; set; }
+    public JsonElement? ToolResult { get; set; }
 }
 
 /// <summary>
@@ -1339,6 +1312,68 @@ public sealed class PostToolUseHookOutput
 }
 
 /// <summary>
+/// Input for a post-tool-use-failure hook.
+///
+/// Fires after a tool execution whose result was "failure". The CLI extracts
+/// the failure message from the tool result and passes it as the
+/// <see cref="Error"/> field (rather than passing the full result object).
+/// </summary>
+public sealed class PostToolUseFailureHookInput
+{
+    /// <summary>
+    /// The runtime session ID of the session that triggered the hook.
+    /// </summary>
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Unix timestamp in milliseconds when the tool execution completed.
+    /// </summary>
+    [JsonPropertyName("timestamp")]
+    [JsonConverter(typeof(UnixMillisecondsDateTimeOffsetConverter))]
+    public DateTimeOffset Timestamp { get; set; }
+
+    /// <summary>
+    /// Current working directory of the session.
+    /// </summary>
+    [JsonPropertyName("cwd")]
+    public string WorkingDirectory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Name of the tool that failed.
+    /// </summary>
+    [JsonPropertyName("toolName")]
+    public string ToolName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Arguments that were passed to the tool.
+    /// </summary>
+    [JsonPropertyName("toolArgs")]
+    public JsonElement? ToolArgs { get; set; }
+
+    /// <summary>
+    /// Failure message extracted from the tool's result.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string Error { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Output for a post-tool-use-failure hook.
+///
+/// Only <see cref="AdditionalContext"/> is consumed by the host CLI — it is
+/// appended as hidden guidance to the model alongside the failed tool result.
+/// </summary>
+public sealed class PostToolUseFailureHookOutput
+{
+    /// <summary>
+    /// Additional context to inject into the conversation for the language model.
+    /// </summary>
+    [JsonPropertyName("additionalContext")]
+    public string? AdditionalContext { get; set; }
+}
+
+/// <summary>
 /// Input for a user-prompt-submitted hook.
 /// </summary>
 public sealed class UserPromptSubmittedHookInput
@@ -1360,7 +1395,7 @@ public sealed class UserPromptSubmittedHookInput
     /// Current working directory of the session.
     /// </summary>
     [JsonPropertyName("cwd")]
-    public string Cwd { get; set; } = string.Empty;
+    public string WorkingDirectory { get; set; } = string.Empty;
 
     /// <summary>
     /// The user's prompt text.
@@ -1415,7 +1450,7 @@ public sealed class SessionStartHookInput
     /// Current working directory of the session.
     /// </summary>
     [JsonPropertyName("cwd")]
-    public string Cwd { get; set; } = string.Empty;
+    public string WorkingDirectory { get; set; } = string.Empty;
 
     /// <summary>
     /// Source of the session start.
@@ -1475,7 +1510,7 @@ public sealed class SessionEndHookInput
     /// Current working directory of the session.
     /// </summary>
     [JsonPropertyName("cwd")]
-    public string Cwd { get; set; } = string.Empty;
+    public string WorkingDirectory { get; set; } = string.Empty;
 
     /// <summary>
     /// Reason for session end.
@@ -1549,7 +1584,7 @@ public sealed class ErrorOccurredHookInput
     /// Current working directory of the session.
     /// </summary>
     [JsonPropertyName("cwd")]
-    public string Cwd { get; set; } = string.Empty;
+    public string WorkingDirectory { get; set; } = string.Empty;
 
     /// <summary>
     /// Error message describing what went wrong.
@@ -1622,9 +1657,21 @@ public sealed class SessionHooks
     public Func<PreToolUseHookInput, HookInvocation, Task<PreToolUseHookOutput?>>? OnPreToolUse { get; set; }
 
     /// <summary>
+    /// Handler called before an MCP tool is called.
+    /// </summary>
+    public Func<PreMcpToolCallHookInput, HookInvocation, Task<PreMcpToolCallHookOutput?>>? OnPreMcpToolCall { get; set; }
+
+    /// <summary>
     /// Handler called after a tool has been executed.
     /// </summary>
     public Func<PostToolUseHookInput, HookInvocation, Task<PostToolUseHookOutput?>>? OnPostToolUse { get; set; }
+
+    /// <summary>
+    /// Handler called after a tool execution whose result was a failure.
+    /// <see cref="OnPostToolUse"/> only fires for successful tool executions;
+    /// register this handler in addition to observe failed tool calls.
+    /// </summary>
+    public Func<PostToolUseFailureHookInput, HookInvocation, Task<PostToolUseFailureHookOutput?>>? OnPostToolUseFailure { get; set; }
 
     /// <summary>
     /// Handler called when the user submits a prompt.
@@ -1665,7 +1712,7 @@ public enum SystemMessageMode
 }
 
 /// <summary>
-/// Specifies the operation to perform on a system prompt section.
+/// Specifies the operation to perform on a system message section.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<SectionOverrideAction>))]
 public enum SectionOverrideAction
@@ -1688,7 +1735,7 @@ public enum SectionOverrideAction
 }
 
 /// <summary>
-/// Override operation for a single system prompt section.
+/// Override operation for a single system message section.
 /// </summary>
 public sealed class SectionOverride
 {
@@ -1714,30 +1761,95 @@ public sealed class SectionOverride
 }
 
 /// <summary>
-/// Known system prompt section identifiers for the "customize" mode.
+/// Identifies a system message section for the "customize" mode.
 /// </summary>
-public static class SystemPromptSections
+[JsonConverter(typeof(SystemMessageSection.Converter))]
+public readonly struct SystemMessageSection : IEquatable<SystemMessageSection>
 {
     /// <summary>Agent identity preamble and mode statement.</summary>
-    public const string Identity = "identity";
+    public static SystemMessageSection Identity { get; } = new("identity");
     /// <summary>Response style, conciseness rules, output formatting preferences.</summary>
-    public const string Tone = "tone";
+    public static SystemMessageSection Tone { get; } = new("tone");
     /// <summary>Tool usage patterns, parallel calling, batching guidelines.</summary>
-    public const string ToolEfficiency = "tool_efficiency";
+    public static SystemMessageSection ToolEfficiency { get; } = new("tool_efficiency");
     /// <summary>CWD, OS, git root, directory listing, available tools.</summary>
-    public const string EnvironmentContext = "environment_context";
+    public static SystemMessageSection EnvironmentContext { get; } = new("environment_context");
     /// <summary>Coding rules, linting/testing, ecosystem tools, style.</summary>
-    public const string CodeChangeRules = "code_change_rules";
+    public static SystemMessageSection CodeChangeRules { get; } = new("code_change_rules");
     /// <summary>Tips, behavioral best practices, behavioral guidelines.</summary>
-    public const string Guidelines = "guidelines";
+    public static SystemMessageSection Guidelines { get; } = new("guidelines");
     /// <summary>Environment limitations, prohibited actions, security policies.</summary>
-    public const string Safety = "safety";
+    public static SystemMessageSection Safety { get; } = new("safety");
     /// <summary>Per-tool usage instructions.</summary>
-    public const string ToolInstructions = "tool_instructions";
+    public static SystemMessageSection ToolInstructions { get; } = new("tool_instructions");
     /// <summary>Repository and organization custom instructions.</summary>
-    public const string CustomInstructions = "custom_instructions";
+    public static SystemMessageSection CustomInstructions { get; } = new("custom_instructions");
+    /// <summary>Runtime-provided context and instructions (e.g. system notifications, memories, workspace context, mode-specific instructions, content-exclusion policy).</summary>
+    public static SystemMessageSection RuntimeInstructions { get; } = new("runtime_instructions");
     /// <summary>End-of-prompt instructions: parallel tool calling, persistence, task completion.</summary>
-    public const string LastInstructions = "last_instructions";
+    public static SystemMessageSection LastInstructions { get; } = new("last_instructions");
+
+    /// <summary>Gets the underlying string value of this <see cref="SystemMessageSection"/>.</summary>
+    public string Value => _value ?? string.Empty;
+
+    private readonly string? _value;
+
+    /// <summary>Initializes a new instance of the <see cref="SystemMessageSection"/> struct.</summary>
+    /// <param name="value">The string value for this section identifier.</param>
+    [JsonConstructor]
+    public SystemMessageSection(string value) => _value = value;
+
+    /// <inheritdoc/>
+    public static bool operator ==(SystemMessageSection left, SystemMessageSection right) => left.Equals(right);
+
+    /// <inheritdoc/>
+    public static bool operator !=(SystemMessageSection left, SystemMessageSection right) => !left.Equals(right);
+
+    /// <inheritdoc/>
+    public override bool Equals([NotNullWhen(true)] object? obj) => obj is SystemMessageSection other && Equals(other);
+
+    /// <inheritdoc/>
+    public bool Equals(SystemMessageSection other) => string.Equals(Value, other.Value, StringComparison.OrdinalIgnoreCase);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => StringComparer.OrdinalIgnoreCase.GetHashCode(Value);
+
+    /// <inheritdoc/>
+    public override string ToString() => Value;
+
+    /// <summary>Provides a <see cref="JsonConverter{SystemMessageSection}"/> for serializing <see cref="SystemMessageSection"/> instances.</summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public sealed class Converter : JsonConverter<SystemMessageSection>
+    {
+        /// <inheritdoc/>
+        public override SystemMessageSection Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                throw new JsonException("Expected string for SystemMessageSection.");
+            }
+
+            var value = reader.GetString();
+            if (value is null)
+            {
+                throw new JsonException("SystemMessageSection value cannot be null.");
+            }
+
+            return new SystemMessageSection(value);
+        }
+
+        /// <inheritdoc/>
+        public override void Write(Utf8JsonWriter writer, SystemMessageSection value, JsonSerializerOptions options) =>
+            writer.WriteStringValue(value.Value);
+
+        /// <inheritdoc/>
+        public override SystemMessageSection ReadAsPropertyName(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            new(reader.GetString()!);
+
+        /// <inheritdoc/>
+        public override void WriteAsPropertyName(Utf8JsonWriter writer, SystemMessageSection value, JsonSerializerOptions options) =>
+            writer.WritePropertyName(value.Value);
+    }
 }
 
 /// <summary>
@@ -1758,9 +1870,9 @@ public sealed class SystemMessageConfig
 
     /// <summary>
     /// Section-level overrides for customize mode.
-    /// Keys are section identifiers (see <see cref="SystemPromptSections"/>).
+    /// Keys are section identifiers (see <see cref="SystemMessageSection"/>).
     /// </summary>
-    public IDictionary<string, SectionOverride>? Sections { get; set; }
+    public IDictionary<SystemMessageSection, SectionOverride>? Sections { get; set; }
 }
 
 /// <summary>
@@ -2175,6 +2287,13 @@ public abstract class SessionConfigBase
         CreateSessionFsProvider = other.CreateSessionFsProvider;
         GitHubToken = other.GitHubToken;
         RemoteSession = other.RemoteSession;
+#pragma warning disable GHCP001
+        Canvases = other.Canvases is not null ? [.. other.Canvases] : null;
+        RequestCanvasRenderer = other.RequestCanvasRenderer;
+        RequestExtensions = other.RequestExtensions;
+        ExtensionInfo = other.ExtensionInfo;
+        CanvasHandler = other.CanvasHandler;
+#pragma warning restore GHCP001
         SkillDirectories = other.SkillDirectories is not null ? [.. other.SkillDirectories] : null;
         InstructionDirectories = other.InstructionDirectories is not null ? [.. other.InstructionDirectories] : null;
         Streaming = other.Streaming;
@@ -2250,7 +2369,7 @@ public abstract class SessionConfigBase
     public bool? EnableSessionTelemetry { get; set; }
 
     /// <summary>Handler for permission requests from the server.</summary>
-    public Func<PermissionRequest, PermissionInvocation, Task<PermissionRequestResult>>? OnPermissionRequest { get; set; }
+    public Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>>? OnPermissionRequest { get; set; }
 
     /// <summary>Handler for user input requests from the agent.</summary>
     public Func<UserInputRequest, UserInputInvocation, Task<UserInputResponse>>? OnUserInputRequest { get; set; }
@@ -2357,6 +2476,47 @@ public abstract class SessionConfigBase
     /// </list>
     /// </summary>
     public RemoteSessionMode? RemoteSession { get; set; }
+
+#pragma warning disable GHCP001
+    /// <summary>
+    /// Canvas declarations advertised by this connection. The runtime forwards
+    /// these to the agent and routes inbound <c>canvas.*</c> requests for any
+    /// declared canvas to <see cref="CanvasHandler"/>.
+    /// </summary>
+    [Experimental(Diagnostics.Experimental)]
+    public IList<CanvasDeclaration>? Canvases { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, asks the host to expose canvas renderer tools
+    /// for this session. The host typically grants this only to trusted clients.
+    /// </summary>
+    [Experimental(Diagnostics.Experimental)]
+    public bool? RequestCanvasRenderer { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, asks the host to expose extension-discovery
+    /// tools for this session. The host typically grants this only to trusted clients.
+    /// </summary>
+    [Experimental(Diagnostics.Experimental)]
+    public bool? RequestExtensions { get; set; }
+
+    /// <summary>
+    /// Stable extension identity for canvas/tool providers on this connection.
+    /// Required when <see cref="Canvases"/> is set so the runtime can attribute
+    /// declared canvases back to this provider.
+    /// </summary>
+    [Experimental(Diagnostics.Experimental)]
+    public ExtensionInfo? ExtensionInfo { get; set; }
+
+    /// <summary>
+    /// Provider-side canvas lifecycle handler. The SDK routes inbound
+    /// <c>canvas.open</c> / <c>canvas.close</c> / <c>canvas.invokeAction</c>
+    /// requests to this handler.
+    /// </summary>
+    [Experimental(Diagnostics.Experimental)]
+    [JsonIgnore]
+    public ICanvasHandler? CanvasHandler { get; set; }
+#pragma warning restore GHCP001
 }
 
 /// <summary>
@@ -2419,6 +2579,7 @@ public sealed class ResumeSessionConfig : SessionConfigBase
 
         SuppressResumeEvent = other.SuppressResumeEvent;
         ContinuePendingWork = other.ContinuePendingWork;
+        OpenCanvases = other.OpenCanvases is not null ? [.. other.OpenCanvases] : null;
     }
 
     /// <summary>
@@ -2440,6 +2601,16 @@ public sealed class ResumeSessionConfig : SessionConfigBase
     /// </para>
     /// </summary>
     public bool? ContinuePendingWork { get; set; }
+
+#pragma warning disable GHCP001
+    /// <summary>
+    /// Snapshot of canvases that were already open when the session was suspended.
+    /// When provided on resume, the runtime can rehydrate canvas state so consumers
+    /// do not need to re-open canvases that were active before the previous shutdown.
+    /// </summary>
+    [Experimental(Diagnostics.Experimental)]
+    public IList<OpenCanvasInstance>? OpenCanvases { get; set; }
+#pragma warning restore GHCP001
 
     /// <summary>
     /// Creates a shallow clone of this <see cref="ResumeSessionConfig"/> instance.
@@ -2518,7 +2689,8 @@ public sealed class MessageOptions
 public sealed class SessionContext
 {
     /// <summary>Working directory where the session was created.</summary>
-    public string Cwd { get; set; } = string.Empty;
+    [JsonPropertyName("cwd")]
+    public string WorkingDirectory { get; set; } = string.Empty;
     /// <summary>Git repository root (if in a git repo).</summary>
     public string? GitRoot { get; set; }
     /// <summary>GitHub repository in "owner/repo" format.</summary>
@@ -2917,7 +3089,7 @@ public sealed class SetForegroundSessionResponse
 }
 
 /// <summary>
-/// Content data for a single system prompt section in a transform RPC call.
+/// Content data for a single system message section in a transform RPC call.
 /// </summary>
 public sealed class SystemMessageTransformSection
 {
@@ -2965,8 +3137,6 @@ public sealed class SystemMessageTransformRpcResponse
 [JsonSerializable(typeof(ModelPolicy))]
 [JsonSerializable(typeof(ModelSupports))]
 [JsonSerializable(typeof(ModelVisionLimits))]
-[JsonSerializable(typeof(PermissionRequestResult))]
-[JsonSerializable(typeof(PermissionRequestResultKind))]
 [JsonSerializable(typeof(PingRequest))]
 [JsonSerializable(typeof(PingResponse))]
 [JsonSerializable(typeof(ProviderConfig))]
@@ -2987,4 +3157,10 @@ public sealed class SystemMessageTransformRpcResponse
 [JsonSerializable(typeof(object))]
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(string[]))]
+#pragma warning disable GHCP001
+[JsonSerializable(typeof(CanvasDeclaration))]
+[JsonSerializable(typeof(CanvasProviderOpenResult))]
+[JsonSerializable(typeof(CanvasHostContext))]
+[JsonSerializable(typeof(ExtensionInfo))]
+#pragma warning restore GHCP001
 internal partial class TypesJsonContext : JsonSerializerContext;
