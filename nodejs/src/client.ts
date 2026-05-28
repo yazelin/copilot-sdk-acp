@@ -31,28 +31,38 @@ import {
     createInternalServerRpc,
     registerClientSessionApiHandlers,
 } from "./generated/rpc.js";
+import type { OpenCanvasInstance, SessionUpdateOptionsParams } from "./generated/rpc.js";
 import { getSdkProtocolVersion } from "./sdkProtocolVersion.js";
+<<<<<<< HEAD
 import { CopilotSession, NO_RESULT_PERMISSION_V2_ERROR } from "./session.js";
 import type { ProtocolAdapter, ProtocolConnection } from "./protocols/protocol-adapter.js";
 import { AcpProtocolAdapter } from "./protocols/acp/index.js";
+=======
+import { CopilotSession } from "./session.js";
+>>>>>>> upstream/main
 import { createSessionFsAdapter, type SessionFsProvider } from "./sessionFsProvider.js";
 import { getTraceContext } from "./telemetry.js";
+import { ToolSet } from "./toolSet.js";
 import type {
     AutoModeSwitchRequest,
     AutoModeSwitchResponse,
-    ConnectionState,
+    CopilotClientMode,
     CopilotClientOptions,
+    CustomAgentConfig,
     ExitPlanModeRequest,
     ExitPlanModeResult,
     ForegroundSessionInfo,
     GetAuthStatusResponse,
     GetStatusResponse,
     InternalRuntimeConnection,
+    MCPServerConfig,
     ModelInfo,
     ResumeSessionConfig,
     SectionTransformFn,
     SessionConfig,
-    SessionContext,
+    SessionConfigBase,
+    SystemMessageConfig,
+    SessionCapabilities,
     SessionEvent,
     SessionFsConfig,
     SessionLifecycleEvent,
@@ -63,9 +73,6 @@ import type {
     SystemMessageCustomizeConfig,
     TelemetryConfig,
     Tool,
-    ToolCallRequestPayload,
-    ToolCallResponsePayload,
-    ToolResultObject,
     TraceContextProvider,
     TypedSessionLifecycleHandler,
 } from "./types.js";
@@ -75,7 +82,7 @@ import { defaultJoinSessionPermissionHandler } from "./types.js";
  * Minimum protocol version this SDK can communicate with.
  * Servers reporting a version below this are rejected.
  */
-const MIN_PROTOCOL_VERSION = 2;
+const MIN_PROTOCOL_VERSION = 3;
 
 /**
  * Check if value is a Zod schema (has toJSONSchema method)
@@ -98,6 +105,70 @@ function toJsonSchema(parameters: Tool["parameters"]): Record<string, unknown> |
         return parameters.toJSONSchema();
     }
     return parameters;
+}
+
+/**
+ * Convert MCP server configs from public API format (workingDirectory) to
+ * wire format (cwd) expected by the runtime.
+ */
+function toWireMcpServers(
+    mcpServers: Record<string, MCPServerConfig> | undefined
+): Record<string, unknown> | undefined {
+    if (!mcpServers) return undefined;
+    return Object.fromEntries(
+        Object.entries(mcpServers).map(([name, server]) => {
+            if ("workingDirectory" in server) {
+                const { workingDirectory, ...rest } = server;
+                return [name, { ...rest, cwd: workingDirectory }];
+            }
+            return [name, server];
+        })
+    );
+}
+
+/**
+ * Convert custom agent configs, transforming nested mcpServers from
+ * public API format (workingDirectory) to wire format (cwd).
+ */
+function toWireCustomAgents(agents: CustomAgentConfig[] | undefined): unknown[] | undefined {
+    if (!agents) return undefined;
+    return agents.map((agent) => {
+        if (!agent.mcpServers) return agent;
+        const { mcpServers, ...rest } = agent;
+        return { ...rest, mcpServers: toWireMcpServers(mcpServers) };
+    });
+}
+
+function toolFilterListToArray(value: string[] | ToolSet | undefined): string[] | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    return value instanceof ToolSet ? value.toArray() : value;
+}
+
+/**
+ * Catches misuse of `availableTools`/`excludedTools` at the SDK boundary so
+ * users get an actionable error rather than a silently-empty filter.
+ *
+ * The runtime treats a bare `"*"` as a literal name match for a tool whose
+ * name is the single character `*`, which the runtime's charset guard would
+ * reject at registration — so the filter effectively matches nothing. We
+ * surface that here as an error pointing the developer at the source-qualified
+ * forms produced by {@link ToolSet}.
+ */
+function validateToolFilterList(field: string, list: string[] | undefined): void {
+    if (!list) {
+        return;
+    }
+    for (const entry of list) {
+        if (entry === "*") {
+            throw new Error(
+                `Invalid ${field} entry '*': there is no bare wildcard. ` +
+                    "Use one or more of `new ToolSet().addBuiltIn('*')`, `.addMcp('*')`, " +
+                    "or `.addCustom('*')` to target a specific source."
+            );
+        }
+    }
 }
 
 /**
@@ -220,7 +291,7 @@ export class CopilotClient {
     private socket: Socket | null = null;
     private runtimePort: number | null = null;
     private actualHost: string = "localhost";
-    private state: ConnectionState = "disconnected";
+    private state: "disconnected" | "connecting" | "connected" | "error" = "disconnected";
     private sessions: Map<string, CopilotSession> = new Map();
     private stderrBuffer: string = ""; // Captures CLI stderr for error messages
     /** Resolved connection mode chosen in the constructor. */
@@ -230,7 +301,7 @@ export class CopilotClient {
     /** Resolved environment passed to the spawned runtime. */
     private resolvedEnv: Record<string, string | undefined>;
     private options: {
-        cwd: string;
+        workingDirectory: string;
         logLevel?: string;
         gitHubToken?: string;
         useLoggedInUser: boolean;
@@ -238,7 +309,11 @@ export class CopilotClient {
         baseDirectory?: string;
         sessionIdleTimeoutSeconds: number;
         enableRemoteSessions: boolean;
+<<<<<<< HEAD
         protocol: "copilot" | "acp";
+=======
+        mode: CopilotClientMode;
+>>>>>>> upstream/main
     };
     private isExternalServer: boolean = false;
     private protocolAdapter: ProtocolAdapter | null = null;
@@ -378,7 +453,7 @@ export class CopilotClient {
         this.connectionExtraArgs = [...connArgs];
 
         this.options = {
-            cwd: options.cwd ?? process.cwd(),
+            workingDirectory: options.workingDirectory ?? process.cwd(),
             logLevel: options.logLevel,
             gitHubToken: options.gitHubToken,
             // Default useLoggedInUser to false when gitHubToken is provided, otherwise true.
@@ -387,11 +462,37 @@ export class CopilotClient {
             baseDirectory: options.baseDirectory,
             sessionIdleTimeoutSeconds: options.sessionIdleTimeoutSeconds ?? 0,
             enableRemoteSessions: options.enableRemoteSessions ?? false,
+<<<<<<< HEAD
             protocol: options.protocol ?? "copilot",
         };
         // Preserve original options for the ACP adapter, which still needs
         // ACP-only fields (cliPath, cliArgs, env).
         this.originalOptions = options;
+=======
+            mode: options.mode ?? "copilot-cli",
+        };
+
+        // Empty mode: validate at construction time that the app supplied a
+        // per-session persistence location. The runtime is mode-agnostic, so
+        // without this check it would silently fall back to ~/.copilot, which
+        // defeats the point of empty mode for multi-tenant scenarios.
+        if (this.options.mode === "empty") {
+            const hasPersistence =
+                this.options.baseDirectory !== undefined ||
+                this.sessionFsConfig !== null ||
+                // External runtimes manage their own persistence layer; the SDK
+                // can't enforce it from here.
+                conn.kind === "uri" ||
+                conn.kind === "parent-process";
+            if (!hasPersistence) {
+                throw new Error(
+                    "CopilotClient was created with mode: 'empty' but neither " +
+                        "'baseDirectory' nor 'sessionFs' was set. Empty mode requires " +
+                        "an explicit per-session persistence location; pick one."
+                );
+            }
+        }
+>>>>>>> upstream/main
     }
 
     /** Original options passed to constructor — used by ACP adapter. */
@@ -809,10 +910,153 @@ export class CopilotClient {
      * });
      * ```
      */
+    /**
+     * Normalizes session-level tool filter options. Converts {@link ToolSet}
+     * instances to plain string arrays, rejects misuse (bare `"*"`) and the
+     * missing-availableTools case in `mode = "empty"`.
+     *
+     * The SDK always sends `toolFilterPrecedence: "excluded"` so callers can
+     * compose include + exclude lists naturally (e.g. "everything matching X
+     * except Y") regardless of mode. Allowlist-precedence is intentionally not
+     * exposed — it's available on the runtime side as a CLI-only concession to
+     * legacy behavior, but SDK consumers always get the composable semantics.
+     *
+     * @internal
+     */
+    private resolveToolFilterOptions(config: {
+        availableTools?: string[] | ToolSet;
+        excludedTools?: string[] | ToolSet;
+    }): {
+        availableTools: string[] | undefined;
+        excludedTools: string[] | undefined;
+        toolFilterPrecedence: "excluded";
+    } {
+        const availableTools = toolFilterListToArray(config.availableTools);
+        const excludedTools = toolFilterListToArray(config.excludedTools);
+        validateToolFilterList("availableTools", availableTools);
+        validateToolFilterList("excludedTools", excludedTools);
+
+        if (this.options.mode === "empty") {
+            if (availableTools === undefined) {
+                throw new Error(
+                    "CopilotClient is in mode: 'empty' but the session config did not " +
+                        "specify 'availableTools'. Empty mode requires every session to " +
+                        "explicitly opt into the tools it wants — e.g. " +
+                        "`new ToolSet().addBuiltIn(BuiltInTools.Isolated)`."
+                );
+            }
+        }
+
+        return { availableTools, excludedTools, toolFilterPrecedence: "excluded" };
+    }
+
+    /** Mode-specific defaults spread under the caller's config (app values win). */
+    private configDefaultsForMode(): Partial<SessionConfigBase> {
+        if (this.options.mode === "empty") {
+            return { enableSessionTelemetry: false };
+        }
+        return {};
+    }
+
+    /**
+     * Returns the systemMessage config to use, adjusted for the current mode.
+     * In empty mode we ensure the environment_context section is removed
+     * unless the app has already taken control of it. `append` (and
+     * unspecified) mode is promoted to `customize` so we can also strip
+     * environment_context; the caller's `content` is preserved verbatim
+     * because the runtime appends it as additional instructions in both
+     * customize and append modes.
+     */
+    private getSystemMessageConfigForMode(
+        supplied: SystemMessageConfig | undefined
+    ): SystemMessageConfig | undefined {
+        if (this.options.mode !== "empty") return supplied;
+        if (!supplied) {
+            return {
+                mode: "customize",
+                sections: { environment_context: { action: "remove" } },
+            };
+        }
+        switch (supplied.mode) {
+            case "replace":
+                return supplied;
+            case "customize":
+                if (supplied.sections?.environment_context) return supplied;
+                return {
+                    ...supplied,
+                    sections: {
+                        ...supplied.sections,
+                        environment_context: { action: "remove" },
+                    },
+                };
+            case "append":
+            case undefined:
+                // Promote to customize so we can also strip environment_context.
+                // The runtime appends `content` to additional instructions in
+                // both customize and append modes, so the caller's text is
+                // preserved verbatim.
+                return {
+                    mode: "customize",
+                    content: supplied.content,
+                    sections: { environment_context: { action: "remove" } },
+                };
+        }
+    }
+
+    /**
+     * Mode-specific options applied via session.options.update after create/resume.
+     *
+     * In empty mode, defaults the four overridable feature flags to safe values
+     * (caller values from `config` win). `installedPlugins=[]` is unconditional
+     * in empty mode — apps that need custom plugins should switch modes.
+     */
+    private async updateSessionOptionsForMode(
+        session: CopilotSession,
+        config: SessionConfigBase
+    ): Promise<void> {
+        const patch: SessionUpdateOptionsParams = {};
+        if (this.options.mode === "empty") {
+            patch.skipCustomInstructions = config.skipCustomInstructions ?? true;
+            patch.customAgentsLocalOnly = config.customAgentsLocalOnly ?? true;
+            patch.coauthorEnabled = config.coauthorEnabled ?? false;
+            patch.manageScheduleEnabled = config.manageScheduleEnabled ?? false;
+            patch.installedPlugins = [];
+        } else {
+            if (config.skipCustomInstructions !== undefined)
+                patch.skipCustomInstructions = config.skipCustomInstructions;
+            if (config.customAgentsLocalOnly !== undefined)
+                patch.customAgentsLocalOnly = config.customAgentsLocalOnly;
+            if (config.coauthorEnabled !== undefined)
+                patch.coauthorEnabled = config.coauthorEnabled;
+            if (config.manageScheduleEnabled !== undefined)
+                patch.manageScheduleEnabled = config.manageScheduleEnabled;
+        }
+        if (Object.keys(patch).length === 0) {
+            return;
+        }
+        try {
+            await session.rpc.options.update(patch);
+        } catch (e) {
+            // The runtime session exists but the post-create options
+            // patch failed — best-effort disconnect so we don't leak
+            // it (in empty mode it would otherwise keep running with
+            // permissive defaults).
+            try {
+                await session.disconnect();
+            } catch {
+                // Swallow: original error is the one the caller needs.
+            }
+            throw e;
+        }
+    }
+
     async createSession(config: SessionConfig): Promise<CopilotSession> {
         if (!this.connection) {
             await this.start();
         }
+
+        config = { ...this.configDefaultsForMode(), ...config };
+        config.systemMessage = this.getSystemMessageConfigForMode(config.systemMessage);
 
         const sessionId = config.sessionId ?? randomUUID();
 
@@ -825,6 +1069,7 @@ export class CopilotClient {
             this.onGetTraceContext
         );
         session.registerTools(config.tools);
+        session.registerCanvases(config.canvases);
         session.registerCommands(config.commands);
         session.registerPermissionHandler(config.onPermissionRequest);
         if (config.onUserInputRequest) {
@@ -857,6 +1102,8 @@ export class CopilotClient {
         this.sessions.set(sessionId, session);
         this.setupSessionFs(session, config);
 
+        const toolFilterOptions = this.resolveToolFilterOptions(config);
+
         try {
             const response = await this.connection!.sendRequest("session.create", {
                 ...(await getTraceContext(this.onGetTraceContext)),
@@ -871,17 +1118,22 @@ export class CopilotClient {
                     overridesBuiltInTool: tool.overridesBuiltInTool,
                     skipPermission: tool.skipPermission,
                 })),
+                canvases: config.canvases?.map((canvas) => canvas.declaration),
+                requestCanvasRenderer: config.requestCanvasRenderer,
+                requestExtensions: config.requestExtensions,
+                extensionInfo: config.extensionInfo,
                 commands: config.commands?.map((cmd) => ({
                     name: cmd.name,
                     description: cmd.description,
                 })),
                 systemMessage: wireSystemMessage,
-                availableTools: config.availableTools,
-                excludedTools: config.excludedTools,
+                availableTools: toolFilterOptions.availableTools,
+                excludedTools: toolFilterOptions.excludedTools,
+                toolFilterPrecedence: toolFilterOptions.toolFilterPrecedence,
                 provider: config.provider,
                 enableSessionTelemetry: config.enableSessionTelemetry,
                 modelCapabilities: config.modelCapabilities,
-                requestPermission: true,
+                requestPermission: !!config.onPermissionRequest,
                 requestUserInput: !!config.onUserInputRequest,
                 requestElicitation: !!config.onElicitationRequest,
                 requestExitPlanMode: !!config.onExitPlanModeRequest,
@@ -890,9 +1142,9 @@ export class CopilotClient {
                 workingDirectory: config.workingDirectory,
                 streaming: config.streaming,
                 includeSubAgentStreamingEvents: config.includeSubAgentStreamingEvents ?? true,
-                mcpServers: config.mcpServers,
+                mcpServers: toWireMcpServers(config.mcpServers),
                 envValueMode: "direct",
-                customAgents: config.customAgents,
+                customAgents: toWireCustomAgents(config.customAgents),
                 defaultAgent: config.defaultAgent,
                 agent: config.agent,
                 configDir: config.configDir,
@@ -909,10 +1161,12 @@ export class CopilotClient {
             const { workspacePath, capabilities } = response as {
                 sessionId: string;
                 workspacePath?: string;
-                capabilities?: { ui?: { elicitation?: boolean } };
+                capabilities?: SessionCapabilities;
             };
             session["_workspacePath"] = workspacePath;
             session.setCapabilities(capabilities);
+
+            await this.updateSessionOptionsForMode(session, config);
         } catch (e) {
             this.sessions.delete(sessionId);
             throw e;
@@ -959,6 +1213,7 @@ export class CopilotClient {
             this.onGetTraceContext
         );
         session.registerTools(config.tools);
+        session.registerCanvases(config.canvases);
         session.registerCommands(config.commands);
         session.registerPermissionHandler(config.onPermissionRequest);
         if (config.onUserInputRequest) {
@@ -977,7 +1232,9 @@ export class CopilotClient {
             session.registerHooks(config.hooks);
         }
 
-        // Extract transform callbacks from system message config before serialization.
+        config = { ...this.configDefaultsForMode(), ...config };
+        config.systemMessage = this.getSystemMessageConfigForMode(config.systemMessage);
+
         const { wirePayload: wireSystemMessage, transformCallbacks } = extractTransformCallbacks(
             config.systemMessage
         );
@@ -991,6 +1248,8 @@ export class CopilotClient {
         this.sessions.set(sessionId, session);
         this.setupSessionFs(session, config);
 
+        const toolFilterOptions = this.resolveToolFilterOptions(config);
+
         try {
             const response = await this.connection!.sendRequest("session.resume", {
                 ...(await getTraceContext(this.onGetTraceContext)),
@@ -999,8 +1258,9 @@ export class CopilotClient {
                 model: config.model,
                 reasoningEffort: config.reasoningEffort,
                 systemMessage: wireSystemMessage,
-                availableTools: config.availableTools,
-                excludedTools: config.excludedTools,
+                availableTools: toolFilterOptions.availableTools,
+                excludedTools: toolFilterOptions.excludedTools,
+                toolFilterPrecedence: toolFilterOptions.toolFilterPrecedence,
                 enableSessionTelemetry: config.enableSessionTelemetry,
                 tools: config.tools?.map((tool) => ({
                     name: tool.name,
@@ -1009,6 +1269,10 @@ export class CopilotClient {
                     overridesBuiltInTool: tool.overridesBuiltInTool,
                     skipPermission: tool.skipPermission,
                 })),
+                canvases: config.canvases?.map((canvas) => canvas.declaration),
+                requestCanvasRenderer: config.requestCanvasRenderer,
+                requestExtensions: config.requestExtensions,
+                extensionInfo: config.extensionInfo,
                 commands: config.commands?.map((cmd) => ({
                     name: cmd.name,
                     description: cmd.description,
@@ -1027,9 +1291,9 @@ export class CopilotClient {
                 enableConfigDiscovery: config.enableConfigDiscovery,
                 streaming: config.streaming,
                 includeSubAgentStreamingEvents: config.includeSubAgentStreamingEvents ?? true,
-                mcpServers: config.mcpServers,
+                mcpServers: toWireMcpServers(config.mcpServers),
                 envValueMode: "direct",
-                customAgents: config.customAgents,
+                customAgents: toWireCustomAgents(config.customAgents),
                 defaultAgent: config.defaultAgent,
                 agent: config.agent,
                 skillDirectories: config.skillDirectories,
@@ -1040,37 +1304,26 @@ export class CopilotClient {
                 continuePendingWork: config.continuePendingWork,
                 gitHubToken: config.gitHubToken,
                 remoteSession: config.remoteSession,
+                openCanvases: config.openCanvases,
             });
 
-            const { workspacePath, capabilities } = response as {
+            const { workspacePath, capabilities, openCanvases } = response as {
                 sessionId: string;
                 workspacePath?: string;
-                capabilities?: { ui?: { elicitation?: boolean } };
+                capabilities?: SessionCapabilities;
+                openCanvases?: OpenCanvasInstance[];
             };
             session["_workspacePath"] = workspacePath;
             session.setCapabilities(capabilities);
+            session.setOpenCanvases(openCanvases ?? []);
+
+            await this.updateSessionOptionsForMode(session, config);
         } catch (e) {
             this.sessions.delete(sessionId);
             throw e;
         }
 
         return session;
-    }
-
-    /**
-     * Gets the current connection state of the client.
-     *
-     * @returns The current connection state: "disconnected", "connecting", "connected", or "error"
-     *
-     * @example
-     * ```typescript
-     * if (client.getState() === "connected") {
-     *   const session = await client.createSession({ onPermissionRequest: approveAll });
-     * }
-     * ```
-     */
-    getState(): ConnectionState {
-        return this.state;
     }
 
     /**
@@ -1323,8 +1576,15 @@ export class CopilotClient {
             throw new Error("Client not connected");
         }
 
+        // Transform filter to wire format (workingDirectory → cwd)
+        let wireFilter: Record<string, unknown> | undefined;
+        if (filter) {
+            const { workingDirectory, ...rest } = filter;
+            wireFilter = { ...rest, cwd: workingDirectory };
+        }
+
         const response = await this.connection.sendRequest("session.list", {
-            filter,
+            filter: wireFilter,
         });
         const { sessions } = response as {
             sessions: Array<{
@@ -1333,7 +1593,7 @@ export class CopilotClient {
                 modifiedTime: string;
                 summary?: string;
                 isRemote: boolean;
-                context?: SessionContext;
+                context?: { cwd: string; gitRoot?: string; repository?: string; branch?: string };
             }>;
         };
 
@@ -1371,7 +1631,7 @@ export class CopilotClient {
                 modifiedTime: string;
                 summary?: string;
                 isRemote: boolean;
-                context?: SessionContext;
+                context?: { cwd: string; gitRoot?: string; repository?: string; branch?: string };
             };
         };
 
@@ -1388,15 +1648,23 @@ export class CopilotClient {
         modifiedTime: string;
         summary?: string;
         isRemote: boolean;
-        context?: SessionContext;
+        context?: { cwd: string; gitRoot?: string; repository?: string; branch?: string };
     }): SessionMetadata {
+        const { context } = raw;
         return {
             sessionId: raw.sessionId,
             startTime: new Date(raw.startTime),
             modifiedTime: new Date(raw.modifiedTime),
             summary: raw.summary,
             isRemote: raw.isRemote,
-            context: raw.context,
+            context: context
+                ? {
+                      workingDirectory: context.cwd,
+                      gitRoot: context.gitRoot,
+                      repository: context.repository,
+                      branch: context.branch,
+                  }
+                : undefined,
         };
     }
 
@@ -1597,6 +1865,14 @@ export class CopilotClient {
                 envWithoutNodeDebug.COPILOT_HOME = this.options.baseDirectory;
             }
 
+            // In empty mode, disable the system keychain. Keytar reads from a
+            // process-wide store that's shared across sessions, which is unsafe
+            // for multi-tenant hosts. The runtime falls back to file-based
+            // credential storage scoped to COPILOT_HOME.
+            if (this.options.mode === "empty") {
+                envWithoutNodeDebug.COPILOT_DISABLE_KEYTAR = "1";
+            }
+
             if (!this.resolvedCliPath) {
                 throw new Error(
                     "Path to Copilot CLI is required. Please supply it via " +
@@ -1642,14 +1918,14 @@ export class CopilotClient {
             if (isJsFile) {
                 this.cliProcess = spawn(getNodeExecPath(), [this.resolvedCliPath, ...args], {
                     stdio: stdioConfig,
-                    cwd: this.options.cwd,
+                    cwd: this.options.workingDirectory,
                     env: envWithoutNodeDebug,
                     windowsHide: true,
                 });
             } else {
                 this.cliProcess = spawn(this.resolvedCliPath, args, {
                     stdio: stdioConfig,
-                    cwd: this.options.cwd,
+                    cwd: this.options.workingDirectory,
                     env: envWithoutNodeDebug,
                     windowsHide: true,
                 });
@@ -1742,13 +2018,13 @@ export class CopilotClient {
                 }
             });
 
-            // Timeout after 10 seconds
+            // Timeout after 30 seconds (Windows CI runners can be slow to spawn processes)
             this.cliStartTimeout = setTimeout(() => {
                 if (!resolved) {
                     resolved = true;
                     reject(new Error("Timeout waiting for CLI server to start"));
                 }
-            }, 10000);
+            }, 30000);
         });
     }
 
@@ -1858,25 +2134,6 @@ export class CopilotClient {
         this.connection.onNotification("session.lifecycle", (notification: unknown) => {
             this.handleSessionLifecycleNotification(notification);
         });
-
-        // Protocol v3 servers send tool calls and permission requests as broadcast events
-        // (external_tool.requested / permission.requested) handled in CopilotSession._dispatchEvent.
-        // Protocol v2 servers use the older tool.call / permission.request RPC model instead.
-        // We always register v2 adapters because handlers are set up before version negotiation;
-        // a v3 server will simply never send these requests.
-        this.connection.onRequest(
-            "tool.call",
-            async (params: ToolCallRequestPayload): Promise<ToolCallResponsePayload> =>
-                await this.handleToolCallRequestV2(params)
-        );
-
-        this.connection.onRequest(
-            "permission.request",
-            async (params: {
-                sessionId: string;
-                permissionRequest: unknown;
-            }): Promise<{ result: unknown }> => await this.handlePermissionRequestV2(params)
-        );
 
         this.connection.onRequest(
             "userInput.request",
@@ -2125,6 +2382,7 @@ export class CopilotClient {
 
         return await session._handleSystemMessageTransform(params.sections);
     }
+<<<<<<< HEAD
 
     // ========================================================================
     // Protocol v2 backward-compatibility adapters
@@ -2301,4 +2559,6 @@ export class CopilotClient {
         };
         return wrapper as unknown as MessageConnection;
     }
+=======
+>>>>>>> upstream/main
 }

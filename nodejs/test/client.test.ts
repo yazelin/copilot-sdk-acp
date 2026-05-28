@@ -1,6 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { approveAll, CopilotClient, RuntimeConnection, type ModelInfo } from "../src/index.js";
+import {
+    approveAll,
+    CopilotClient,
+    createCanvas,
+    RuntimeConnection,
+    type ModelInfo,
+} from "../src/index.js";
 import { CopilotSession } from "../src/session.js";
 import { defaultJoinSessionPermissionHandler } from "../src/types.js";
 
@@ -17,18 +23,157 @@ describe("CopilotClient", () => {
         expect(spy).not.toHaveBeenCalled();
     });
 
-    it("throws when a v2 permission handler returns no-result", async () => {
-        const session = new CopilotSession("session-1", {} as any);
-        session.registerPermissionHandler(() => ({ kind: "no-result" }));
+    it("forwards canvas declarations and request flags in session.create", async () => {
         const client = new CopilotClient();
-        (client as any).sessions.set(session.sessionId, session);
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const canvas = createCanvas({
+            id: "counter",
+            displayName: "Counter",
+            description: "A counter canvas",
+            actions: [{ name: "increment", description: "Increment the counter" }],
+            open: () => ({ url: "https://example.test/counter" }),
+        });
+        const spy = vi
+            .spyOn((client as any).connection!, "sendRequest")
+            .mockImplementation(async (method: string, params: any) => {
+                if (method === "session.create") return { sessionId: params.sessionId };
+                throw new Error(`Unexpected method: ${method}`);
+            });
+
+        await client.createSession({
+            onPermissionRequest: approveAll,
+            canvases: [canvas],
+            requestCanvasRenderer: true,
+            requestExtensions: true,
+            extensionInfo: { source: "github-app", name: "counter-provider" },
+        });
+
+        const payload = spy.mock.calls.find(([method]) => method === "session.create")![1] as any;
+        expect(payload.canvases).toEqual([
+            expect.objectContaining({
+                id: "counter",
+                displayName: "Counter",
+                description: "A counter canvas",
+                actions: [{ name: "increment", description: "Increment the counter" }],
+            }),
+        ]);
+        expect(payload.requestCanvasRenderer).toBe(true);
+        expect(payload.requestExtensions).toBe(true);
+        expect(payload.extensionInfo).toEqual({
+            source: "github-app",
+            name: "counter-provider",
+        });
+    });
+
+    it("forwards canvas declarations in session.resume", async () => {
+        const client = new CopilotClient();
+        await client.start();
+        onTestFinished(() => client.forceStop());
+
+        const session = await client.createSession({ onPermissionRequest: approveAll });
+        const canvas = createCanvas({
+            id: "counter",
+            displayName: "Counter",
+            description: "A counter canvas",
+            open: () => ({ url: "https://example.test/counter" }),
+        });
+        const spy = vi
+            .spyOn((client as any).connection!, "sendRequest")
+            .mockImplementation(async (method: string, params: any) => {
+                if (method === "session.resume") return { sessionId: params.sessionId };
+                throw new Error(`Unexpected method: ${method}`);
+            });
+
+        await client.resumeSession(session.sessionId, {
+            onPermissionRequest: approveAll,
+            canvases: [canvas],
+            requestCanvasRenderer: true,
+            requestExtensions: true,
+            extensionInfo: { source: "github-app", name: "counter-provider" },
+        });
+
+        const payload = spy.mock.calls.find(([method]) => method === "session.resume")![1] as any;
+        expect(payload.canvases).toEqual([expect.objectContaining({ id: "counter" })]);
+        expect(payload.requestCanvasRenderer).toBe(true);
+        expect(payload.requestExtensions).toBe(true);
+        expect(payload.extensionInfo).toEqual({
+            source: "github-app",
+            name: "counter-provider",
+        });
+        expect(payload.openCanvasInstances).toBeUndefined();
+    });
+
+    it("routes canvas.action.invoke to registered canvas action handlers via clientSessionApis", async () => {
+        const canvas = createCanvas({
+            id: "counter",
+            displayName: "Counter",
+            description: "A counter canvas",
+            open: ({ instanceId }) => ({ url: `https://example.test/${instanceId}` }),
+            actions: [
+                {
+                    name: "increment",
+                    handler: ({ actionName, input }) => ({ actionName, input }),
+                },
+            ],
+        });
+        const session = new CopilotSession("session-1", {} as any);
+        session.registerCanvases([canvas]);
+
+        const result = await session.clientSessionApis.canvas!.invoke({
+            sessionId: session.sessionId,
+            extensionId: "project:counter",
+            canvasId: "counter",
+            instanceId: "counter-1",
+            actionName: "increment",
+            input: { amount: 1 },
+        });
+
+        expect(result).toEqual({ actionName: "increment", input: { amount: 1 } });
+    });
+
+    it("returns canvas_action_no_handler when no per-action handler is registered", async () => {
+        const canvas = createCanvas({
+            id: "counter",
+            displayName: "Counter",
+            description: "A counter canvas",
+            open: () => ({ url: "https://example.test/counter" }),
+        });
+
+        const session = new CopilotSession("session-1", {} as any);
+        session.registerCanvases([canvas]);
 
         await expect(
-            (client as any).handlePermissionRequestV2({
+            session.clientSessionApis.canvas!.invoke({
                 sessionId: session.sessionId,
-                permissionRequest: { kind: "write" },
+                extensionId: "project:counter",
+                canvasId: "counter",
+                instanceId: "counter-1",
+                actionName: "ghost",
+                input: undefined,
             })
-        ).rejects.toThrow(/protocol v2 server/);
+        ).rejects.toMatchObject({ code: "canvas_action_no_handler" });
+    });
+
+    it("throws for unknown canvasId in canvas.open via clientSessionApis", async () => {
+        const session = new CopilotSession("session-1", {} as any);
+        const canvas = createCanvas({
+            id: "other",
+            displayName: "Other",
+            description: "Some other canvas",
+            open: () => ({ url: "https://example.test/other" }),
+        });
+        session.registerCanvases([canvas]);
+
+        await expect(
+            session.clientSessionApis.canvas!.open({
+                sessionId: session.sessionId,
+                extensionId: "project:missing",
+                canvasId: "missing",
+                instanceId: "missing-1",
+            })
+        ).rejects.toThrow('No canvas registered with id "missing"');
     });
 
     it("forwards clientName in session.create request", async () => {
@@ -1012,7 +1157,7 @@ describe("CopilotClient", () => {
             await client.start();
             onTestFinished(() => client.forceStop());
 
-            expect(client.getState()).toBe("connected");
+            expect((client as any).state).toBe("connected");
 
             // Kill the child process to simulate unexpected termination
             const proc = (client as any).cliProcess as import("node:child_process").ChildProcess;
@@ -1020,7 +1165,7 @@ describe("CopilotClient", () => {
 
             // Wait for the connection.onClose handler to fire
             await vi.waitFor(() => {
-                expect(client.getState()).toBe("disconnected");
+                expect((client as any).state).toBe("disconnected");
             });
         });
     });
@@ -1571,6 +1716,179 @@ describe("CopilotClient", () => {
             });
 
             expect((client as any).options.sessionIdleTimeoutSeconds).toBe(600);
+        });
+    });
+
+    describe("hooks dispatcher", () => {
+        // Direct unit tests for CopilotSession._handleHooksInvoke. The hook
+        // dispatch logic maps the CLI-emitted hook type (string) to the
+        // corresponding SessionHooks handler. These tests guard against
+        // regressions like the one fixed for postToolUseFailure (issue #1220).
+
+        it("dispatches postToolUseFailure to onPostToolUseFailure handler", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const received: { input: any; invocation: any }[] = [];
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                hooks: {
+                    onPostToolUseFailure: async (input, invocation) => {
+                        received.push({ input, invocation });
+                        return { additionalContext: "failure observed" };
+                    },
+                },
+            });
+
+            const failureInput = {
+                toolName: "failing-tool",
+                toolArgs: { foo: "bar" },
+                error: "exit 1",
+                timestamp: 1234,
+                cwd: "/tmp",
+            };
+            const expectedInput = {
+                toolName: "failing-tool",
+                toolArgs: { foo: "bar" },
+                error: "exit 1",
+                timestamp: new Date(1234),
+                workingDirectory: "/tmp",
+            };
+            const result = await (session as any)._handleHooksInvoke(
+                "postToolUseFailure",
+                failureInput
+            );
+
+            expect(received).toHaveLength(1);
+            expect(received[0].input).toEqual(expectedInput);
+            expect(received[0].invocation.sessionId).toBe(session.sessionId);
+            expect(result).toEqual({ additionalContext: "failure observed" });
+        });
+
+        it("does not fall back to onPostToolUse for postToolUseFailure events", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const postUseCalls: string[] = [];
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                hooks: {
+                    // Only onPostToolUse registered; postToolUseFailure events
+                    // must not be routed here.
+                    onPostToolUse: async (input) => {
+                        postUseCalls.push(input.toolName);
+                    },
+                },
+            });
+
+            const result = await (session as any)._handleHooksInvoke("postToolUseFailure", {
+                toolName: "failing-tool",
+                toolArgs: {},
+                error: "boom",
+                timestamp: 0,
+                cwd: "/tmp",
+            });
+
+            expect(postUseCalls).toHaveLength(0);
+            expect(result).toBeUndefined();
+        });
+
+        it("dispatches postToolUse and postToolUseFailure to their respective handlers", async () => {
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const postCalls: string[] = [];
+            const failureCalls: string[] = [];
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                hooks: {
+                    onPostToolUse: async (input) => {
+                        postCalls.push(input.toolName);
+                    },
+                    onPostToolUseFailure: async (input) => {
+                        failureCalls.push(input.toolName);
+                    },
+                },
+            });
+
+            await (session as any)._handleHooksInvoke("postToolUse", {
+                toolName: "success-tool",
+                toolArgs: {},
+                toolResult: {
+                    textResultForLlm: "ok",
+                    resultType: "success" as const,
+                },
+                timestamp: 0,
+                cwd: "/tmp",
+            });
+            await (session as any)._handleHooksInvoke("postToolUseFailure", {
+                toolName: "fail-tool",
+                toolArgs: {},
+                error: "bad",
+                timestamp: 0,
+                cwd: "/tmp",
+            });
+
+            expect(postCalls).toEqual(["success-tool"]);
+            expect(failureCalls).toEqual(["fail-tool"]);
+        });
+
+        it("routes hooks.invoke JSON-RPC requests to the SessionHooks handler", async () => {
+            // Validates the full JSON-RPC entry point used by the CLI:
+            // CopilotClient.handleHooksInvoke({sessionId, hookType, input})
+            // → CopilotSession._handleHooksInvoke(hookType, input)
+            // → SessionHooks.onPostToolUseFailure(normalizedInput, {sessionId})
+            //
+            // This guards the wire-format contract that the bundled Copilot
+            // CLI relies on: the hookType string "postToolUseFailure" and the
+            // input shape `{toolName, toolArgs, error, timestamp, cwd}`.
+            // The SDK maps that to public `{..., timestamp: Date, workingDirectory}`.
+            const client = new CopilotClient();
+            await client.start();
+            onTestFinished(() => client.forceStop());
+
+            const received: { input: any; invocation: any }[] = [];
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                hooks: {
+                    onPostToolUseFailure: async (input, invocation) => {
+                        received.push({ input, invocation });
+                        return { additionalContext: "context from failure hook" };
+                    },
+                },
+            });
+
+            const failureInput = {
+                toolName: "shell",
+                toolArgs: { command: "false" },
+                error: "exit 1",
+                timestamp: 1700000000000,
+                cwd: "/tmp",
+            };
+
+            const response = await (client as any).handleHooksInvoke({
+                sessionId: session.sessionId,
+                hookType: "postToolUseFailure",
+                input: failureInput,
+            });
+
+            expect(received).toHaveLength(1);
+            expect(received[0].input).toEqual({
+                toolName: "shell",
+                toolArgs: { command: "false" },
+                error: "exit 1",
+                timestamp: new Date(1700000000000),
+                workingDirectory: "/tmp",
+            });
+            expect(received[0].invocation.sessionId).toBe(session.sessionId);
+            // The CLI only consumes output.additionalContext; the SDK returns
+            // it wrapped in `{ output }` per the JSON-RPC contract.
+            expect(response).toEqual({
+                output: { additionalContext: "context from failure hook" },
+            });
         });
     });
 });

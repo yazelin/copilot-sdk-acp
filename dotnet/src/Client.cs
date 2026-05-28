@@ -1,4 +1,4 @@
-﻿/*---------------------------------------------------------------------------------------------
+/*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
@@ -53,13 +53,10 @@ namespace GitHub.Copilot;
 /// </example>
 public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 {
-    internal const string NoResultPermissionV2ErrorMessage =
-        "Permission handlers cannot return 'no-result' when connected to a protocol v2 server.";
-
     /// <summary>
     /// Minimum protocol version this SDK can communicate with.
     /// </summary>
-    private const int MinProtocolVersion = 2;
+    private const int MinProtocolVersion = 3;
 
     /// <summary>
     /// Provides a thread-safe collection of active Copilot sessions, indexed by session identifier.
@@ -165,6 +162,28 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 
         _logger = _options.Logger ?? NullLogger.Instance;
         _onListModels = _options.OnListModels;
+
+        // Empty mode: validate at construction time that the app supplied a
+        // per-session persistence location. The runtime is mode-agnostic, so
+        // without this check it would silently fall back to ~/.copilot, which
+        // defeats the point of empty mode for multi-tenant scenarios.
+        if (_options.Mode == CopilotClientMode.Empty)
+        {
+            var hasPersistence =
+                !string.IsNullOrEmpty(_options.BaseDirectory) ||
+                _options.SessionFs is not null ||
+                // External runtimes manage their own persistence layer; the SDK
+                // can't enforce it from here.
+                _connection is UriRuntimeConnection;
+            if (!hasPersistence)
+            {
+                throw new ArgumentException(
+                    "CopilotClient was created with Mode = CopilotClientMode.Empty but neither " +
+                    "BaseDirectory nor SessionFs was set. Empty mode requires an explicit " +
+                    "per-session persistence location; pick one.",
+                    nameof(options));
+            }
+        }
     }
 
     /// <summary>
@@ -464,13 +483,13 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         }
 
         var callbacks = new Dictionary<string, Func<string, Task<string>>>();
-        var wireSections = new Dictionary<string, SectionOverride>();
+        var wireSections = new Dictionary<SystemMessageSection, SectionOverride>();
 
         foreach (var (sectionId, sectionOverride) in systemMessage.Sections)
         {
             if (sectionOverride.Transform != null)
             {
-                callbacks[sectionId] = sectionOverride.Transform;
+                callbacks[sectionId.Value] = sectionOverride.Transform;
                 wireSections[sectionId] = new SectionOverride { Action = SectionOverrideAction.Transform };
             }
             else
@@ -492,6 +511,200 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         };
 
         return (wireConfig, callbacks);
+    }
+
+    /// <summary>
+    /// Catches misuse of <see cref="SessionConfigBase.AvailableTools"/> /
+    /// <see cref="SessionConfigBase.ExcludedTools"/> at the SDK boundary so
+    /// callers get an actionable error rather than a silently-empty filter.
+    /// The runtime treats a bare <c>"*"</c> as a literal name match for a tool
+    /// whose name is the single character <c>*</c>, which the runtime's
+    /// charset guard would reject at registration — so the filter effectively
+    /// matches nothing.
+    /// </summary>
+    private static void ValidateToolFilterList(string field, IList<string>? list)
+    {
+        if (list is null) return;
+        foreach (var entry in list)
+        {
+            if (entry == "*")
+            {
+                throw new ArgumentException(
+                    $"Invalid {field} entry '*': there is no bare wildcard. " +
+                    "Use `new ToolSet().AddBuiltIn(\"*\")`, `.AddMcp(\"*\")`, or " +
+                    "`.AddCustom(\"*\")` to target a specific source.",
+                    nameof(list));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolves <see cref="SessionConfigBase.AvailableTools"/> /
+    /// <see cref="SessionConfigBase.ExcludedTools"/> for the wire payload,
+    /// validating empty-mode requirements. <c>toolFilterPrecedence</c> is
+    /// always <c>excluded</c> so SDK consumers get composable allowlist /
+    /// denylist semantics.
+    /// </summary>
+    private (IList<string>? AvailableTools, IList<string>? ExcludedTools, OptionsUpdateToolFilterPrecedence ToolFilterPrecedence) ResolveToolFilterOptions(SessionConfigBase config)
+    {
+        ValidateToolFilterList(nameof(SessionConfigBase.AvailableTools), config.AvailableTools);
+        ValidateToolFilterList(nameof(SessionConfigBase.ExcludedTools), config.ExcludedTools);
+
+        if (_options.Mode == CopilotClientMode.Empty && config.AvailableTools is null)
+        {
+            throw new ArgumentException(
+                "CopilotClient is in Mode = CopilotClientMode.Empty but the session config did " +
+                "not specify AvailableTools. Empty mode requires every session to explicitly " +
+                "opt into the tools it wants — e.g. " +
+                "`AvailableTools = new ToolSet().AddBuiltIn(BuiltInTools.Isolated)`.",
+                nameof(config));
+        }
+
+        return (config.AvailableTools, config.ExcludedTools, OptionsUpdateToolFilterPrecedence.Excluded);
+    }
+
+    /// <summary>
+    /// Applies mode-specific defaults to a session config in place. Caller
+    /// values win — only fields left unset by the caller are filled in.
+    /// </summary>
+    private void ApplyConfigDefaultsForMode(SessionConfigBase config)
+    {
+        if (_options.Mode == CopilotClientMode.Empty)
+        {
+            config.EnableSessionTelemetry ??= false;
+        }
+    }
+
+    /// <summary>
+    /// Returns the <see cref="SystemMessageConfig"/> to send to the runtime,
+    /// adjusted for the current mode. In empty mode the
+    /// <c>environment_context</c> section is stripped unless the caller has
+    /// already taken control of it; append-mode messages are promoted to
+    /// customize so the env-context strip can apply alongside the caller's
+    /// content (the runtime appends <see cref="SystemMessageConfig.Content"/>
+    /// in both modes).
+    /// </summary>
+    private SystemMessageConfig? GetSystemMessageConfigForMode(SystemMessageConfig? supplied)
+    {
+        if (_options.Mode != CopilotClientMode.Empty)
+        {
+            return supplied;
+        }
+
+        if (supplied is null)
+        {
+            return new SystemMessageConfig
+            {
+                Mode = SystemMessageMode.Customize,
+                Sections = new Dictionary<SystemMessageSection, SectionOverride>
+                {
+                    [SystemMessageSection.EnvironmentContext] = new() { Action = SectionOverrideAction.Remove },
+                },
+            };
+        }
+
+        switch (supplied.Mode)
+        {
+            case SystemMessageMode.Replace:
+                return supplied;
+            case SystemMessageMode.Customize:
+                if (supplied.Sections is not null && supplied.Sections.ContainsKey(SystemMessageSection.EnvironmentContext))
+                {
+                    return supplied;
+                }
+                var mergedSections = supplied.Sections is null
+                    ? new Dictionary<SystemMessageSection, SectionOverride>()
+                    : new Dictionary<SystemMessageSection, SectionOverride>(supplied.Sections);
+                mergedSections[SystemMessageSection.EnvironmentContext] = new() { Action = SectionOverrideAction.Remove };
+                return new SystemMessageConfig
+                {
+                    Mode = SystemMessageMode.Customize,
+                    Content = supplied.Content,
+                    Sections = mergedSections,
+                };
+            case SystemMessageMode.Append:
+            case null:
+                // Promote to customize so we can also strip environment_context.
+                // The runtime appends Content to additional instructions in both
+                // customize and append modes, so the caller's text is preserved.
+                return new SystemMessageConfig
+                {
+                    Mode = SystemMessageMode.Customize,
+                    Content = supplied.Content,
+                    Sections = new Dictionary<SystemMessageSection, SectionOverride>
+                    {
+                        [SystemMessageSection.EnvironmentContext] = new() { Action = SectionOverrideAction.Remove },
+                    },
+                };
+            default:
+                return supplied;
+        }
+    }
+
+    /// <summary>
+    /// Applies the post-create / post-resume <c>session.options.update</c>
+    /// patch for the current mode. In empty mode this defaults the four
+    /// overridable feature flags to safe values (caller values from
+    /// <paramref name="config"/> win); <c>installedPlugins=[]</c> is
+    /// unconditional under empty mode so apps that need plugins must switch
+    /// modes. In copilot-cli mode only explicitly-set fields are forwarded.
+    /// </summary>
+    private async Task UpdateSessionOptionsForModeAsync(CopilotSession session, SessionConfigBase config, CancellationToken cancellationToken)
+    {
+        var hasAnyPatch = false;
+        bool? skipCustomInstructions = null;
+        bool? customAgentsLocalOnly = null;
+        bool? coauthorEnabled = null;
+        bool? manageScheduleEnabled = null;
+        IList<SessionInstalledPlugin>? installedPlugins = null;
+
+        if (_options.Mode == CopilotClientMode.Empty)
+        {
+            skipCustomInstructions = config.SkipCustomInstructions ?? true;
+            customAgentsLocalOnly = config.CustomAgentsLocalOnly ?? true;
+            coauthorEnabled = config.CoauthorEnabled ?? false;
+            manageScheduleEnabled = config.ManageScheduleEnabled ?? false;
+            installedPlugins = new List<SessionInstalledPlugin>();
+            hasAnyPatch = true;
+        }
+        else
+        {
+            if (config.SkipCustomInstructions is not null) { skipCustomInstructions = config.SkipCustomInstructions; hasAnyPatch = true; }
+            if (config.CustomAgentsLocalOnly is not null) { customAgentsLocalOnly = config.CustomAgentsLocalOnly; hasAnyPatch = true; }
+            if (config.CoauthorEnabled is not null) { coauthorEnabled = config.CoauthorEnabled; hasAnyPatch = true; }
+            if (config.ManageScheduleEnabled is not null) { manageScheduleEnabled = config.ManageScheduleEnabled; hasAnyPatch = true; }
+        }
+
+        if (!hasAnyPatch) return;
+
+        try
+        {
+#pragma warning disable GHCP001
+            await session.Rpc.Options.UpdateAsync(
+                skipCustomInstructions: skipCustomInstructions,
+                customAgentsLocalOnly: customAgentsLocalOnly,
+                coauthorEnabled: coauthorEnabled,
+                manageScheduleEnabled: manageScheduleEnabled,
+                installedPlugins: installedPlugins,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+#pragma warning restore GHCP001
+        }
+        catch
+        {
+            // The runtime session exists but the post-create options
+            // patch failed — best-effort destroy so we don't leak it
+            // (in empty mode it would otherwise stay alive with
+            // permissive defaults).
+            try
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Swallow: original error is what the caller needs.
+            }
+            throw;
+        }
     }
 
     /// <summary>
@@ -526,9 +739,15 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         var connection = await EnsureConnectedAsync(cancellationToken);
         var totalTimestamp = Stopwatch.GetTimestamp();
 
+        ApplyConfigDefaultsForMode(config);
+        config.SystemMessage = GetSystemMessageConfigForMode(config.SystemMessage);
+        var toolFilter = ResolveToolFilterOptions(config);
+
         var hasHooks = config.Hooks != null && (
             config.Hooks.OnPreToolUse != null ||
+            config.Hooks.OnPreMcpToolCall != null ||
             config.Hooks.OnPostToolUse != null ||
+            config.Hooks.OnPostToolUseFailure != null ||
             config.Hooks.OnUserPromptSubmitted != null ||
             config.Hooks.OnSessionStart != null ||
             config.Hooks.OnSessionEnd != null ||
@@ -569,6 +788,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             session.On<SessionEvent>(config.OnEvent);
         }
         ConfigureSessionFsHandlers(session, config.CreateSessionFsProvider);
+        session.SetCanvasHandler(config.CanvasHandler);
         RegisterSession(session);
         session.StartProcessingEvents();
         LoggingHelpers.LogTiming(_logger, LogLevel.Debug, null,
@@ -590,11 +810,11 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
                 config.ReasoningEffort,
                 config.Tools?.Select(ToolDefinition.FromAIFunction).ToList(),
                 wireSystemMessage,
-                config.AvailableTools,
-                config.ExcludedTools,
+                toolFilter.AvailableTools,
+                toolFilter.ExcludedTools,
                 config.Provider,
                 config.EnableSessionTelemetry,
-                (bool?)true,
+                config.OnPermissionRequest != null ? true : null,
                 config.OnUserInputRequest != null ? true : null,
                 config.OnExitPlanModeRequest != null ? true : null,
                 config.OnAutoModeSwitchRequest != null ? true : null,
@@ -620,7 +840,12 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
                 GitHubToken: config.GitHubToken,
                 RemoteSession: config.RemoteSession,
                 Cloud: config.Cloud,
-                InstructionDirectories: config.InstructionDirectories);
+                InstructionDirectories: config.InstructionDirectories,
+                Canvases: config.Canvases,
+                RequestCanvasRenderer: config.RequestCanvasRenderer,
+                RequestExtensions: config.RequestExtensions,
+                ExtensionInfo: config.ExtensionInfo,
+                ToolFilterPrecedence: toolFilter.ToolFilterPrecedence);
 
             var rpcTimestamp = Stopwatch.GetTimestamp();
             var response = await InvokeRpcAsync<CreateSessionResponse>(
@@ -632,6 +857,9 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 
             session.WorkspacePath = response.WorkspacePath;
             session.SetCapabilities(response.Capabilities);
+            session.SetOpenCanvases(response.OpenCanvases);
+
+            await UpdateSessionOptionsForModeAsync(session, config, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -686,9 +914,15 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         var connection = await EnsureConnectedAsync(cancellationToken);
         var totalTimestamp = Stopwatch.GetTimestamp();
 
+        ApplyConfigDefaultsForMode(config);
+        config.SystemMessage = GetSystemMessageConfigForMode(config.SystemMessage);
+        var toolFilter = ResolveToolFilterOptions(config);
+
         var hasHooks = config.Hooks != null && (
             config.Hooks.OnPreToolUse != null ||
+            config.Hooks.OnPreMcpToolCall != null ||
             config.Hooks.OnPostToolUse != null ||
+            config.Hooks.OnPostToolUseFailure != null ||
             config.Hooks.OnUserPromptSubmitted != null ||
             config.Hooks.OnSessionStart != null ||
             config.Hooks.OnSessionEnd != null ||
@@ -727,6 +961,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             session.On<SessionEvent>(config.OnEvent);
         }
         ConfigureSessionFsHandlers(session, config.CreateSessionFsProvider);
+        session.SetCanvasHandler(config.CanvasHandler);
         RegisterSession(session);
         session.StartProcessingEvents();
         LoggingHelpers.LogTiming(_logger, LogLevel.Debug, null,
@@ -748,11 +983,11 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
                 config.ReasoningEffort,
                 config.Tools?.Select(ToolDefinition.FromAIFunction).ToList(),
                 wireSystemMessage,
-                config.AvailableTools,
-                config.ExcludedTools,
+                toolFilter.AvailableTools,
+                toolFilter.ExcludedTools,
                 config.Provider,
                 config.EnableSessionTelemetry,
-                (bool?)true,
+                config.OnPermissionRequest != null ? true : null,
                 config.OnUserInputRequest != null ? true : null,
                 config.OnExitPlanModeRequest != null ? true : null,
                 config.OnAutoModeSwitchRequest != null ? true : null,
@@ -779,7 +1014,13 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
                 GitHubToken: config.GitHubToken,
                 RemoteSession: config.RemoteSession,
                 ContinuePendingWork: config.ContinuePendingWork,
-                InstructionDirectories: config.InstructionDirectories);
+                InstructionDirectories: config.InstructionDirectories,
+                Canvases: config.Canvases,
+                RequestCanvasRenderer: config.RequestCanvasRenderer,
+                RequestExtensions: config.RequestExtensions,
+                ExtensionInfo: config.ExtensionInfo,
+                OpenCanvases: config.OpenCanvases,
+                ToolFilterPrecedence: toolFilter.ToolFilterPrecedence);
 
             var rpcTimestamp = Stopwatch.GetTimestamp();
             var response = await InvokeRpcAsync<ResumeSessionResponse>(
@@ -791,6 +1032,9 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
 
             session.WorkspacePath = response.WorkspacePath;
             session.SetCapabilities(response.Capabilities);
+            session.SetOpenCanvases(response.OpenCanvases);
+
+            await UpdateSessionOptionsForModeAsync(session, config, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1231,7 +1475,7 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         }
 
         await Rpc.SessionFs.SetProviderAsync(
-            _options.SessionFs.InitialCwd,
+            _options.SessionFs.InitialWorkingDirectory,
             _options.SessionFs.SessionStatePath,
             _options.SessionFs.Conventions,
             _options.SessionFs.Capabilities,
@@ -1425,6 +1669,15 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             startInfo.Environment["COPILOT_HOME"] = options.BaseDirectory;
         }
 
+        // In empty mode, disable the system keychain. Keytar reads from a
+        // process-wide store that's shared across sessions, which is unsafe
+        // for multi-tenant hosts. The runtime falls back to file-based
+        // credential storage scoped to COPILOT_HOME.
+        if (options.Mode == CopilotClientMode.Empty)
+        {
+            startInfo.Environment["COPILOT_DISABLE_KEYTAR"] = "1";
+        }
+
         // Set telemetry environment variables if configured
         if (options.Telemetry is { } telemetry)
         {
@@ -1608,12 +1861,6 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         var handler = new RpcHandler(this);
         rpc.SetLocalRpcMethod("session.event", handler.OnSessionEvent);
         rpc.SetLocalRpcMethod("session.lifecycle", handler.OnSessionLifecycle);
-        // Protocol v3 servers send tool calls / permission requests as broadcast events.
-        // Protocol v2 servers use the older tool.call / permission.request RPC model.
-        // We always register v2 adapters because handlers are set up before version
-        // negotiation; a v3 server will simply never send these requests.
-        rpc.SetLocalRpcMethod("tool.call", handler.OnToolCallV2);
-        rpc.SetLocalRpcMethod("permission.request", handler.OnPermissionRequestV2);
         rpc.SetLocalRpcMethod("userInput.request", handler.OnUserInputRequest);
         rpc.SetLocalRpcMethod("exitPlanMode.request", handler.OnExitPlanModeRequest);
         rpc.SetLocalRpcMethod("autoModeSwitch.request", handler.OnAutoModeSwitchRequest);
@@ -1635,6 +1882,20 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     }
 
     private static JsonSerializerOptions SerializerOptionsForMessageFormatter { get; } = CreateSerializerOptions();
+
+    /// <summary>
+    /// Converts an arbitrary value into the <see cref="JsonElement"/> representation that wire
+    /// DTOs use for opaque-JSON fields. Pass-through for <see cref="JsonElement"/>, otherwise
+    /// serializes the runtime type using the shared JSON-RPC serializer options so that any
+    /// type registered in the SDK's source-generated contexts (e.g. primitives,
+    /// <c>Dictionary&lt;string, object&gt;</c>, generated DTOs) is supported.
+    /// </summary>
+    public static JsonElement? ToJsonElementForWire(object? value) => value switch
+    {
+        null => null,
+        JsonElement je => je,
+        _ => JsonSerializer.SerializeToElement(value, SerializerOptionsForMessageFormatter.GetTypeInfo(value.GetType()))
+    };
 
     private static JsonSerializerOptions CreateSerializerOptions()
     {
@@ -1798,110 +2059,6 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
             return await session.HandleSystemMessageTransformAsync(sections);
         }
 
-        // Protocol v2 backward-compatibility adapters
-
-        public async ValueTask<ToolCallResponseV2> OnToolCallV2(string sessionId,
-            string toolCallId,
-            string toolName,
-            object? arguments,
-            string? traceparent = null,
-            string? tracestate = null)
-        {
-            using var _ = TelemetryHelpers.RestoreTraceContext(traceparent, tracestate);
-
-            var session = client.GetSession(sessionId) ?? throw new ArgumentException($"Unknown session {sessionId}");
-            if (session.GetTool(toolName) is not { } tool)
-            {
-                // Support for not providing the tool handler is only available in the v3+ model.
-                // For v2, it must have been provided.
-                return new ToolCallResponseV2(new ToolResultObject
-                {
-                    TextResultForLlm = $"Tool '{toolName}' is not supported.",
-                    ResultType = "failure",
-                    Error = $"tool '{toolName}' not supported"
-                });
-            }
-
-            try
-            {
-                var invocation = new ToolInvocation
-                {
-                    SessionId = sessionId,
-                    ToolCallId = toolCallId,
-                    ToolName = toolName,
-                    Arguments = arguments
-                };
-
-                var aiFunctionArgs = new AIFunctionArguments
-                {
-                    Context = new Dictionary<object, object?>
-                    {
-                        [typeof(ToolInvocation)] = invocation
-                    }
-                };
-
-                if (arguments is not null)
-                {
-                    if (arguments is not JsonElement incomingJsonArgs)
-                    {
-                        throw new InvalidOperationException($"Incoming arguments must be a {nameof(JsonElement)}; received {arguments.GetType().Name}");
-                    }
-
-                    foreach (var prop in incomingJsonArgs.EnumerateObject())
-                    {
-                        aiFunctionArgs[prop.Name] = prop.Value;
-                    }
-                }
-
-                var toolTimestamp = Stopwatch.GetTimestamp();
-                var result = await tool.InvokeAsync(aiFunctionArgs);
-                LoggingHelpers.LogTiming(client._logger, LogLevel.Debug, null,
-                    "RpcHandler.OnToolCallV2 tool dispatch. Elapsed={Elapsed}, SessionId={SessionId}, ToolCallId={ToolCallId}, Tool={ToolName}",
-                    toolTimestamp,
-                    sessionId,
-                    toolCallId,
-                    toolName);
-
-                var toolResultObject = ToolResultObject.ConvertFromInvocationResult(result, tool.JsonSerializerOptions);
-                return new ToolCallResponseV2(toolResultObject);
-            }
-            catch (Exception ex)
-            {
-                return new ToolCallResponseV2(new ToolResultObject
-                {
-                    TextResultForLlm = "Invoking this tool produced an error. Detailed information is not available.",
-                    ResultType = "failure",
-                    Error = ex.Message
-                });
-            }
-        }
-
-        public async ValueTask<PermissionRequestResponseV2> OnPermissionRequestV2(string sessionId, JsonElement permissionRequest)
-        {
-            var session = client.GetSession(sessionId)
-                ?? throw new ArgumentException($"Unknown session {sessionId}");
-
-            try
-            {
-                var result = await session.HandlePermissionRequestAsync(permissionRequest);
-                if (result.Kind == new PermissionRequestResultKind("no-result"))
-                {
-                    throw new InvalidOperationException(NoResultPermissionV2ErrorMessage);
-                }
-                return new PermissionRequestResponseV2(result);
-            }
-            catch (InvalidOperationException ex) when (ex.Message == NoResultPermissionV2ErrorMessage)
-            {
-                throw;
-            }
-            catch (Exception)
-            {
-                return new PermissionRequestResponseV2(new PermissionRequestResult
-                {
-                    Kind = PermissionRequestResultKind.UserNotAvailable
-                });
-            }
-        }
     }
 
     private class Connection(
@@ -1964,7 +2121,14 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         string? GitHubToken = null,
         RemoteSessionMode? RemoteSession = null,
         CloudSessionOptions? Cloud = null,
-        IList<string>? InstructionDirectories = null);
+        IList<string>? InstructionDirectories = null,
+#pragma warning disable GHCP001
+        IList<CanvasDeclaration>? Canvases = null,
+        bool? RequestCanvasRenderer = null,
+        bool? RequestExtensions = null,
+        ExtensionInfo? ExtensionInfo = null,
+        OptionsUpdateToolFilterPrecedence? ToolFilterPrecedence = null);
+#pragma warning restore GHCP001
 
     internal record ToolDefinition(
         string Name,
@@ -1986,7 +2150,10 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     internal record CreateSessionResponse(
         string SessionId,
         string? WorkspacePath,
-        SessionCapabilities? Capabilities = null);
+        SessionCapabilities? Capabilities = null,
+#pragma warning disable GHCP001
+        IList<OpenCanvasInstance>? OpenCanvases = null);
+#pragma warning restore GHCP001
 
     internal record ResumeSessionRequest(
         string SessionId,
@@ -2026,12 +2193,23 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
         string? GitHubToken = null,
         RemoteSessionMode? RemoteSession = null,
         bool? ContinuePendingWork = null,
-        IList<string>? InstructionDirectories = null);
+        IList<string>? InstructionDirectories = null,
+#pragma warning disable GHCP001
+        IList<CanvasDeclaration>? Canvases = null,
+        bool? RequestCanvasRenderer = null,
+        bool? RequestExtensions = null,
+        ExtensionInfo? ExtensionInfo = null,
+        IList<OpenCanvasInstance>? OpenCanvases = null,
+        OptionsUpdateToolFilterPrecedence? ToolFilterPrecedence = null);
+#pragma warning restore GHCP001
 
     internal record ResumeSessionResponse(
         string SessionId,
         string? WorkspacePath,
-        SessionCapabilities? Capabilities = null);
+        SessionCapabilities? Capabilities = null,
+#pragma warning disable GHCP001
+        IList<OpenCanvasInstance>? OpenCanvases = null);
+#pragma warning restore GHCP001
 
     internal record CommandWireDefinition(
         string Name,
@@ -2072,13 +2250,6 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     internal record HooksInvokeResponse(
         object? Output);
 
-    // Protocol v2 backward-compatibility response types
-    internal record ToolCallResponseV2(
-        ToolResultObject Result);
-
-    internal record PermissionRequestResponseV2(
-        PermissionRequestResult Result);
-
     [JsonSourceGenerationOptions(
         JsonSerializerDefaults.Web,
         AllowOutOfOrderMetadataProperties = true,
@@ -2101,9 +2272,6 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     [JsonSerializable(typeof(GetSessionMetadataRequest))]
     [JsonSerializable(typeof(GetSessionMetadataResponse))]
     [JsonSerializable(typeof(ModelCapabilitiesOverride))]
-    [JsonSerializable(typeof(PermissionRequestResult))]
-    [JsonSerializable(typeof(PermissionRequestResultKind))]
-    [JsonSerializable(typeof(PermissionRequestResponseV2))]
     [JsonSerializable(typeof(ProviderConfig))]
     [JsonSerializable(typeof(ResumeSessionRequest))]
     [JsonSerializable(typeof(ResumeSessionResponse))]
@@ -2114,7 +2282,6 @@ public sealed partial class CopilotClient : IDisposable, IAsyncDisposable
     [JsonSerializable(typeof(SystemMessageConfig))]
     [JsonSerializable(typeof(SystemMessageTransformRpcResponse))]
     [JsonSerializable(typeof(CommandWireDefinition))]
-    [JsonSerializable(typeof(ToolCallResponseV2))]
     [JsonSerializable(typeof(ToolDefinition))]
     [JsonSerializable(typeof(ToolResultAIContent))]
     [JsonSerializable(typeof(ToolResultObject))]

@@ -131,10 +131,6 @@ Resume an existing session. Returns the session with `workspacePath` populated i
 
 Ping the server to check connectivity.
 
-##### `getState(): ConnectionState`
-
-Get current connection state.
-
 ##### `listSessions(filter?: SessionListFilter): Promise<SessionMetadata[]>`
 
 List all available sessions. Optionally filter by working directory context.
@@ -573,8 +569,8 @@ The SDK auto-injects environment context, tool instructions, and security guardr
 Use `mode: "customize"` to selectively override individual sections of the prompt while preserving the rest:
 
 ```typescript
-import { SYSTEM_PROMPT_SECTIONS } from "@github/copilot-sdk";
-import type { SectionOverride, SystemPromptSection } from "@github/copilot-sdk";
+import { SYSTEM_MESSAGE_SECTIONS } from "@github/copilot-sdk";
+import type { SectionOverride, SystemMessageSection } from "@github/copilot-sdk";
 
 const session = await client.createSession({
     model: "gpt-5",
@@ -597,7 +593,7 @@ const session = await client.createSession({
 });
 ```
 
-Available section IDs: `identity`, `tone`, `tool_efficiency`, `environment_context`, `code_change_rules`, `guidelines`, `safety`, `tool_instructions`, `custom_instructions`, `last_instructions`. Use the `SYSTEM_PROMPT_SECTIONS` constant for descriptions of each section.
+Available section IDs: `identity`, `tone`, `tool_efficiency`, `environment_context`, `code_change_rules`, `guidelines`, `safety`, `tool_instructions`, `custom_instructions`, `runtime_instructions`, `last_instructions`. Use the `SYSTEM_MESSAGE_SECTIONS` constant for descriptions of each section.
 
 Each section override supports four actions:
 
@@ -961,13 +957,23 @@ const session = await client.createSession({
             };
         },
 
-        // Called after each tool execution
+        // Called after each successful tool execution
         onPostToolUse: async (input, invocation) => {
             console.log(`Tool ${input.toolName} completed`);
             // Optionally modify the result or add context
             return {
                 additionalContext: "Post-execution notes",
             };
+        },
+
+        // Called after a tool execution whose result was "failure".
+        // onPostToolUse does NOT fire for failed tool calls — register this
+        // hook to observe them. Input includes `error` (the failure message
+        // extracted from the tool's result), not the full result object.
+        onPostToolUseFailure: async (input, invocation) => {
+            console.log(`Tool ${input.toolName} failed: ${input.error}`);
+            // Optionally append hidden guidance to the model.
+            return { additionalContext: "Suggest checking inputs and retrying." };
         },
 
         // Called when user submits a prompt
@@ -1005,7 +1011,8 @@ const session = await client.createSession({
 **Available hooks:**
 
 - `onPreToolUse` - Intercept tool calls before execution. Can allow/deny or modify arguments.
-- `onPostToolUse` - Process tool results after execution. Can modify results or add context.
+- `onPostToolUse` - Process tool results after **successful** execution. Can modify results or add context.
+- `onPostToolUseFailure` - Observe and append hidden guidance to the model after tool executions whose result was `"failure"`. Register this in addition to `onPostToolUse` to see failed tool calls.
 - `onUserPromptSubmitted` - Intercept user prompts. Can modify the prompt before processing.
 - `onSessionStart` - Run logic when a session starts or resumes.
 - `onSessionEnd` - Cleanup or logging when session ends.
