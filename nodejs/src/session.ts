@@ -8,9 +8,11 @@
  */
 
 import type { MessageConnection } from "vscode-jsonrpc/node.js";
-import { ConnectionError, ResponseError } from "vscode-jsonrpc/node.js";
+import { ConnectionError, ErrorCodes, ResponseError } from "vscode-jsonrpc/node.js";
 import { createSessionRpc } from "./generated/rpc.js";
-import type { ClientSessionApiHandlers } from "./generated/rpc.js";
+import type { ClientSessionApiHandlers, CanvasActionInvokeResult } from "./generated/rpc.js";
+import { type Canvas, CanvasError } from "./canvas.js";
+import type { OpenCanvasInstance } from "./generated/rpc.js";
 import { getTraceContext } from "./telemetry.js";
 import type {
     CommandHandler,
@@ -28,8 +30,8 @@ import type {
     MessageOptions,
     PermissionHandler,
     PermissionRequest,
-    PermissionRequestResult,
     ReasoningEffort,
+    ReasoningSummary,
     ModelCapabilitiesOverride,
     SectionTransformFn,
     SessionCapabilities,
@@ -50,14 +52,10 @@ import type {
     UserInputResponse,
 } from "./types.js";
 
-/** @internal */
-export const NO_RESULT_PERMISSION_V2_ERROR =
-    "Permission handlers cannot return 'no-result' when connected to a protocol v2 server.";
-
 /**
  * Convert a raw hook input received over the wire into its public-facing shape.
- * Currently this only deserializes the numeric Unix-ms `timestamp` field on
- * BaseHookInput into a Date. Anything else passes through unchanged.
+ * This deserializes the numeric Unix-ms `timestamp` field on BaseHookInput
+ * into a Date and maps the wire `cwd` field to `workingDirectory`.
  */
 function deserializeHookInput(raw: unknown): unknown {
     if (
@@ -67,8 +65,26 @@ function deserializeHookInput(raw: unknown): unknown {
     ) {
         return raw;
     }
-    const obj = raw as Record<string, unknown> & { timestamp: number };
-    return { ...obj, timestamp: new Date(obj.timestamp) };
+    const obj = raw as Record<string, unknown> & { timestamp: number; cwd?: string };
+    const { cwd, ...rest } = obj;
+    return { ...rest, timestamp: new Date(obj.timestamp), workingDirectory: cwd };
+}
+
+function isOpenCanvasInstance(value: unknown): value is OpenCanvasInstance {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const instance = value as Partial<OpenCanvasInstance>;
+    return (
+        typeof instance.instanceId === "string" &&
+        instance.instanceId.length > 0 &&
+        typeof instance.extensionId === "string" &&
+        instance.extensionId.length > 0 &&
+        typeof instance.canvasId === "string" &&
+        instance.canvasId.length > 0 &&
+        typeof instance.reopen === "boolean" &&
+        (instance.availability === "ready" || instance.availability === "stale")
+    );
 }
 
 /** Assistant message event - the final response from the assistant. */
@@ -104,6 +120,7 @@ export class CopilotSession {
     private typedEventHandlers: Map<SessionEventType, Set<(event: SessionEvent) => void>> =
         new Map();
     private toolHandlers: Map<string, ToolHandler> = new Map();
+    private canvases: Map<string, Canvas> = new Map();
     private commandHandlers: Map<string, CommandHandler> = new Map();
     private permissionHandler?: PermissionHandler;
     private userInputHandler?: UserInputHandler;
@@ -115,6 +132,7 @@ export class CopilotSession {
     private _rpc: ReturnType<typeof createSessionRpc> | null = null;
     private traceContextProvider?: TraceContextProvider;
     private _capabilities: SessionCapabilities = {};
+    private openCanvasInstances: OpenCanvasInstance[] = [];
 
     /** @internal Client session API handlers, populated by CopilotClient during create/resume. */
     clientSessionApis: ClientSessionApiHandlers = {};
@@ -212,8 +230,10 @@ export class CopilotSession {
             ...(await getTraceContext(this.traceContextProvider)),
             sessionId: this.sessionId,
             prompt: options.prompt,
+            displayPrompt: options.displayPrompt,
             attachments: options.attachments,
             mode: options.mode,
+            agentMode: options.agentMode,
             requestHeaders: options.requestHeaders,
         });
 
@@ -484,6 +504,27 @@ export class CopilotSession {
             }
         } else if (event.type === "capabilities.changed") {
             this._capabilities = { ...this._capabilities, ...event.data };
+        } else if (event.type === "session.canvas.opened") {
+            this.upsertOpenCanvasFromEvent(event.data);
+        }
+    }
+
+    private upsertOpenCanvasFromEvent(data: unknown): void {
+        if (!isOpenCanvasInstance(data)) {
+            console.warn("failed to deserialize session.canvas.opened payload");
+            return;
+        }
+        this.upsertOpenCanvas(data);
+    }
+
+    private upsertOpenCanvas(instance: OpenCanvasInstance): void {
+        const index = this.openCanvasInstances.findIndex(
+            (open) => open.instanceId === instance.instanceId
+        );
+        if (index >= 0) {
+            this.openCanvasInstances[index] = instance;
+        } else {
+            this.openCanvasInstances.push(instance);
         }
     }
 
@@ -640,6 +681,63 @@ export class CopilotSession {
     }
 
     /**
+     * Registers canvas declarations and handlers for this session.
+     *
+     * @param canvases - Canvases created via `createCanvas`, or undefined to clear all canvases
+     * @internal Called by the SDK when creating/resuming a session with `canvases`.
+     */
+    registerCanvases(canvases?: Canvas[]): void {
+        this.canvases.clear();
+        if (!canvases || canvases.length === 0) {
+            delete this.clientSessionApis.canvas;
+            return;
+        }
+        for (const canvas of canvases) {
+            this.canvases.set(canvas.declaration.id, canvas);
+        }
+
+        const self = this;
+        this.clientSessionApis.canvas = {
+            async open(params) {
+                const canvas = self.canvases.get(params.canvasId);
+                if (!canvas) throw new Error(`No canvas registered with id "${params.canvasId}"`);
+                try {
+                    return (await canvas.open(params)) ?? {};
+                } catch (error) {
+                    throw toCanvasRpcError(error);
+                }
+            },
+            async close(params) {
+                const canvas = self.canvases.get(params.canvasId);
+                if (!canvas) throw new Error(`No canvas registered with id "${params.canvasId}"`);
+                try {
+                    if (canvas.onClose) {
+                        await canvas.onClose(params);
+                    }
+                } catch (error) {
+                    throw toCanvasRpcError(error);
+                }
+            },
+            async invoke(params) {
+                const canvas = self.canvases.get(params.canvasId);
+                if (!canvas) throw new Error(`No canvas registered with id "${params.canvasId}"`);
+                const handler = canvas.actionHandlers.get(params.actionName);
+                if (!handler) {
+                    throw new CanvasError(
+                        "canvas_action_no_handler",
+                        "No handler implemented for this canvas action"
+                    );
+                }
+                try {
+                    return (await handler(params)) as CanvasActionInvokeResult;
+                } catch (error) {
+                    throw toCanvasRpcError(error);
+                }
+            },
+        };
+    }
+
+    /**
      * Registers command handlers for this session.
      *
      * @param commands - An array of command definitions with handlers, or undefined to clear
@@ -747,6 +845,26 @@ export class CopilotSession {
      */
     setCapabilities(capabilities?: SessionCapabilities): void {
         this._capabilities = capabilities ?? {};
+    }
+
+    /**
+     * Snapshot of canvas instances currently known to be open for this session.
+     * Populated from the `session.resume` response and live `session.canvas.opened`
+     * events. Returns a defensive copy — mutating the returned array has no effect
+     * on the session.
+     */
+    get openCanvases(): OpenCanvasInstance[] {
+        return [...this.openCanvasInstances];
+    }
+
+    /**
+     * Sets the open-canvas snapshot for this session.
+     *
+     * @param instances - The `openCanvases` array from the `session.resume` response.
+     * @internal This method is typically called internally when resuming a session.
+     */
+    setOpenCanvases(instances: OpenCanvasInstance[]): void {
+        this.openCanvasInstances = [...instances];
     }
 
     private assertElicitation(): void {
@@ -907,35 +1025,6 @@ export class CopilotSession {
     }
 
     /**
-     * Handles a permission request in the v2 protocol format (synchronous RPC).
-     * Used as a back-compat adapter when connected to a v2 server.
-     *
-     * @param request - The permission request data from the CLI
-     * @returns A promise that resolves with the permission decision
-     * @internal This method is for internal use by the SDK.
-     */
-    async _handlePermissionRequestV2(request: unknown): Promise<PermissionRequestResult> {
-        if (!this.permissionHandler) {
-            return { kind: "user-not-available" };
-        }
-
-        try {
-            const result = await this.permissionHandler(request as PermissionRequest, {
-                sessionId: this.sessionId,
-            });
-            if (result.kind === "no-result") {
-                throw new Error(NO_RESULT_PERMISSION_V2_ERROR);
-            }
-            return result;
-        } catch (error) {
-            if (error instanceof Error && error.message === NO_RESULT_PERMISSION_V2_ERROR) {
-                throw error;
-            }
-            return { kind: "user-not-available" };
-        }
-    }
-
-    /**
      * Handles a user input request from the Copilot CLI.
      *
      * @param request - The user input request data from the CLI
@@ -987,7 +1076,9 @@ export class CopilotSession {
 
         const handlerMap: Record<string, GenericHandler | undefined> = {
             preToolUse: this.hooks.onPreToolUse as GenericHandler | undefined,
+            preMcpToolCall: this.hooks.onPreMcpToolCall as GenericHandler | undefined,
             postToolUse: this.hooks.onPostToolUse as GenericHandler | undefined,
+            postToolUseFailure: this.hooks.onPostToolUseFailure as GenericHandler | undefined,
             userPromptSubmitted: this.hooks.onUserPromptSubmitted as GenericHandler | undefined,
             sessionStart: this.hooks.onSessionStart as GenericHandler | undefined,
             sessionEnd: this.hooks.onSessionEnd as GenericHandler | undefined,
@@ -1118,6 +1209,7 @@ export class CopilotSession {
         model: string,
         options?: {
             reasoningEffort?: ReasoningEffort;
+            reasoningSummary?: ReasoningSummary;
             modelCapabilities?: ModelCapabilitiesOverride;
         }
     ): Promise<void> {
@@ -1177,4 +1269,12 @@ function isToolResultObject(value: unknown): value is ToolResultObject {
     ];
 
     return allowedResultTypes.includes((value as ToolResultObject).resultType);
+}
+
+/** Convert a canvas handler error into a ResponseError with a structured data envelope. */
+function toCanvasRpcError(error: unknown): ResponseError<unknown> {
+    if (error instanceof ResponseError) return error;
+    const code = error instanceof CanvasError ? error.code : "canvas_handler_error";
+    const message = error instanceof Error ? error.message : String(error);
+    return new ResponseError(ErrorCodes.InternalError, message, { code, message });
 }
