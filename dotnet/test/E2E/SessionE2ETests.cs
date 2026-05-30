@@ -1,4 +1,4 @@
-﻿/*---------------------------------------------------------------------------------------------
+/*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
@@ -101,25 +101,28 @@ public class SessionE2ETests(E2ETestFixture fixture, ITestOutputHelper output) :
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Customize,
-                Sections = new Dictionary<string, SectionOverride>
+                Sections = new Dictionary<SystemMessageSection, SectionOverride>
                 {
-                    [SystemPromptSections.Tone] = new() { Action = SectionOverrideAction.Replace, Content = customTone },
-                    [SystemPromptSections.CodeChangeRules] = new() { Action = SectionOverrideAction.Remove },
+                    [SystemMessageSection.Tone] = new() { Action = SectionOverrideAction.Replace, Content = customTone },
+                    [SystemMessageSection.CodeChangeRules] = new() { Action = SectionOverrideAction.Remove },
                 },
                 Content = appendedContent
             }
         });
 
-        await session.SendAsync(new MessageOptions { Prompt = "Who are you?" });
-        var assistantMessage = await TestHelper.GetFinalAssistantMessageAsync(session);
-        Assert.NotNull(assistantMessage);
-
-        var traffic = await Ctx.GetExchangesAsync();
-        Assert.NotEmpty(traffic);
-        var systemMessage = GetSystemMessage(traffic[0]);
-        Assert.Contains(customTone, systemMessage);
-        Assert.Contains(appendedContent, systemMessage);
-        Assert.DoesNotContain("<code_change_instructions>", systemMessage);
+        try
+        {
+            await session.SendAsync(new MessageOptions { Prompt = "Who are you?" });
+            var traffic = await WaitForExchangesAsync();
+            var systemMessage = GetSystemMessage(traffic[0]);
+            Assert.Contains(customTone, systemMessage);
+            Assert.Contains(appendedContent, systemMessage);
+            Assert.DoesNotContain("<code_change_instructions>", systemMessage);
+        }
+        finally
+        {
+            await session.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -130,16 +133,20 @@ public class SessionE2ETests(E2ETestFixture fixture, ITestOutputHelper output) :
             AvailableTools = ["view", "edit"]
         });
 
-        await session.SendAsync(new MessageOptions { Prompt = "What is 1+1?" });
-        await TestHelper.GetFinalAssistantMessageAsync(session);
-
-        var traffic = await Ctx.GetExchangesAsync();
-        Assert.NotEmpty(traffic);
-
-        var toolNames = GetToolNames(traffic[0]);
-        Assert.Equal(2, toolNames.Count);
-        Assert.Contains("view", toolNames);
-        Assert.Contains("edit", toolNames);
+        try
+        {
+            var traffic = await SendAndWaitForExchangesAsync(
+                session,
+                new MessageOptions { Prompt = "What is 1+1?" });
+            var toolNames = GetToolNames(traffic[0]);
+            Assert.Equal(2, toolNames.Count);
+            Assert.Contains("view", toolNames);
+            Assert.Contains("edit", toolNames);
+        }
+        finally
+        {
+            await session.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -150,16 +157,20 @@ public class SessionE2ETests(E2ETestFixture fixture, ITestOutputHelper output) :
             ExcludedTools = ["view"]
         });
 
-        await session.SendAsync(new MessageOptions { Prompt = "What is 1+1?" });
-        await TestHelper.GetFinalAssistantMessageAsync(session);
-
-        var traffic = await Ctx.GetExchangesAsync();
-        Assert.NotEmpty(traffic);
-
-        var toolNames = GetToolNames(traffic[0]);
-        Assert.DoesNotContain("view", toolNames);
-        Assert.Contains("edit", toolNames);
-        Assert.Contains("grep", toolNames);
+        try
+        {
+            var traffic = await SendAndWaitForExchangesAsync(
+                session,
+                new MessageOptions { Prompt = "What is 1+1?" });
+            var toolNames = GetToolNames(traffic[0]);
+            Assert.DoesNotContain("view", toolNames);
+            Assert.Contains("edit", toolNames);
+            Assert.Contains("grep", toolNames);
+        }
+        finally
+        {
+            await session.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -180,14 +191,18 @@ public class SessionE2ETests(E2ETestFixture fixture, ITestOutputHelper output) :
             },
         });
 
-        await session.SendAsync(new MessageOptions { Prompt = "What is 1+1?" });
-        await TestHelper.GetFinalAssistantMessageAsync(session);
-
-        var traffic = await Ctx.GetExchangesAsync();
-        Assert.NotEmpty(traffic);
-
-        var toolNames = GetToolNames(traffic[0]);
-        Assert.DoesNotContain("secret_tool", toolNames);
+        try
+        {
+            var traffic = await SendAndWaitForExchangesAsync(
+                session,
+                new MessageOptions { Prompt = "What is 1+1?" });
+            var toolNames = GetToolNames(traffic[0]);
+            Assert.DoesNotContain("secret_tool", toolNames);
+        }
+        finally
+        {
+            await session.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -450,7 +465,7 @@ public class SessionE2ETests(E2ETestFixture fixture, ITestOutputHelper output) :
         // Context may be present on sessions that have been persisted with workspace.yaml
         if (ourSession.Context != null)
         {
-            Assert.False(string.IsNullOrEmpty(ourSession.Context.Cwd), "Expected context.Cwd to be non-empty when context is present");
+            Assert.False(string.IsNullOrEmpty(ourSession.Context.WorkingDirectory), "Expected context.WorkingDirectory to be non-empty when context is present");
         }
     }
 
@@ -535,15 +550,21 @@ public class SessionE2ETests(E2ETestFixture fixture, ITestOutputHelper output) :
     public async Task Should_Create_Session_With_Custom_Config_Dir()
     {
         var customConfigDir = Path.Join(Ctx.HomeDir, "custom-config");
-        var session = await CreateSessionAsync(new SessionConfig { ConfigDir = customConfigDir });
+        var session = await CreateSessionAsync(new SessionConfig { ConfigDirectory = customConfigDir });
 
         Assert.Matches(@"^[a-f0-9-]+$", session.SessionId);
 
-        // Session should work normally with custom config dir
-        await session.SendAsync(new MessageOptions { Prompt = "What is 1+1?" });
-        var assistantMessage = await TestHelper.GetFinalAssistantMessageAsync(session);
-        Assert.NotNull(assistantMessage);
-        Assert.Contains("2", assistantMessage!.Data.Content);
+        try
+        {
+            // Session should work normally with custom config dir.
+            var assistantMessage = await session.SendAndWaitAsync(new MessageOptions { Prompt = "What is 1+1?" });
+            Assert.NotNull(assistantMessage);
+            Assert.Contains("2", assistantMessage!.Data.Content);
+        }
+        finally
+        {
+            await session.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -840,13 +861,12 @@ public class SessionE2ETests(E2ETestFixture fixture, ITestOutputHelper output) :
         await session.SendAndWaitAsync(new MessageOptions
         {
             Prompt = "Say mode ok.",
-            Mode = "plan",
+            AgentMode = AgentMode.Plan,
         });
 
         var userMessage = (await session.GetEventsAsync()).OfType<UserMessageEvent>().Last();
         Assert.Equal("Say mode ok.", userMessage.Data.Content);
-        // The current runtime accepts the per-message mode option but does not echo it on user.message.
-        Assert.Null(userMessage.Data.AgentMode);
+        Assert.Equal(UserMessageAgentMode.Plan, userMessage.Data.AgentMode);
     }
 
     [Fact]

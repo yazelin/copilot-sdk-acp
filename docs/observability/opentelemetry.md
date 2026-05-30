@@ -27,13 +27,13 @@ const client = new CopilotClient({
 
 <!-- docs-validate: skip -->
 ```python
-from copilot import CopilotClient, SubprocessConfig
+from copilot import CopilotClient
 
-client = CopilotClient(SubprocessConfig(
+client = CopilotClient(
     telemetry={
         "otlp_endpoint": "http://localhost:4318",
     },
-))
+)
 ```
 
 </details>
@@ -73,8 +73,8 @@ var client = new CopilotClient(new CopilotClientOptions
 
 <!-- docs-validate: skip -->
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 
 var client = new CopilotClient(new CopilotClientOptions()
     .setTelemetry(new TelemetryConfig()
