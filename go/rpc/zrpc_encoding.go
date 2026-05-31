@@ -8,6 +8,234 @@ import (
 	"errors"
 )
 
+func unmarshalAgentRegistrySpawnResult(data []byte) (AgentRegistrySpawnResult, error) {
+	if string(data) == "null" {
+		return nil, nil
+	}
+	type rawUnion struct {
+		Kind AgentRegistrySpawnResultKind `json:"kind"`
+	}
+	var raw rawUnion
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+
+	switch raw.Kind {
+	case AgentRegistrySpawnResultKindRegistryTimeout:
+		var d AgentRegistrySpawnRegistryTimeout
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case AgentRegistrySpawnResultKindSpawnError:
+		var d AgentRegistrySpawnError
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case AgentRegistrySpawnResultKindSpawned:
+		var d AgentRegistrySpawnSpawned
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case AgentRegistrySpawnResultKindValidationError:
+		var d AgentRegistrySpawnValidationError
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	default:
+		return &RawAgentRegistrySpawnResultData{Discriminator: raw.Kind, Raw: data}, nil
+	}
+}
+
+func (r RawAgentRegistrySpawnResultData) MarshalJSON() ([]byte, error) {
+	if r.Raw != nil {
+		return r.Raw, nil
+	}
+	return json.Marshal(struct {
+		Kind AgentRegistrySpawnResultKind `json:"kind"`
+	}{
+		Kind: r.Discriminator,
+	})
+}
+
+func (r AgentRegistrySpawnError) MarshalJSON() ([]byte, error) {
+	type alias AgentRegistrySpawnError
+	return json.Marshal(struct {
+		Kind AgentRegistrySpawnResultKind `json:"kind"`
+		alias
+	}{
+		Kind:  r.Kind(),
+		alias: alias(r),
+	})
+}
+
+func (r AgentRegistrySpawnRegistryTimeout) MarshalJSON() ([]byte, error) {
+	type alias AgentRegistrySpawnRegistryTimeout
+	return json.Marshal(struct {
+		Kind AgentRegistrySpawnResultKind `json:"kind"`
+		alias
+	}{
+		Kind:  r.Kind(),
+		alias: alias(r),
+	})
+}
+
+func (r AgentRegistrySpawnSpawned) MarshalJSON() ([]byte, error) {
+	type alias AgentRegistrySpawnSpawned
+	return json.Marshal(struct {
+		Kind AgentRegistrySpawnResultKind `json:"kind"`
+		alias
+	}{
+		Kind:  r.Kind(),
+		alias: alias(r),
+	})
+}
+
+func (r AgentRegistrySpawnValidationError) MarshalJSON() ([]byte, error) {
+	type alias AgentRegistrySpawnValidationError
+	return json.Marshal(struct {
+		Kind AgentRegistrySpawnResultKind `json:"kind"`
+		alias
+	}{
+		Kind:  r.Kind(),
+		alias: alias(r),
+	})
+}
+
+func unmarshalAttachment(data []byte) (Attachment, error) {
+	if string(data) == "null" {
+		return nil, nil
+	}
+	type rawUnion struct {
+		Type AttachmentType `json:"type"`
+	}
+	var raw rawUnion
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+
+	switch raw.Type {
+	case AttachmentTypeBlob:
+		var d AttachmentBlob
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case AttachmentTypeDirectory:
+		var d AttachmentDirectory
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case AttachmentTypeExtensionContext:
+		var d AttachmentExtensionContext
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case AttachmentTypeFile:
+		var d AttachmentFile
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case AttachmentTypeGithubReference:
+		var d AttachmentGithubReference
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case AttachmentTypeSelection:
+		var d AttachmentSelection
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	default:
+		return &RawAttachmentData{Discriminator: raw.Type, Raw: data}, nil
+	}
+}
+
+func (r RawAttachmentData) MarshalJSON() ([]byte, error) {
+	if r.Raw != nil {
+		return r.Raw, nil
+	}
+	return json.Marshal(struct {
+		Type AttachmentType `json:"type"`
+	}{
+		Type: r.Discriminator,
+	})
+}
+
+func (r AttachmentBlob) MarshalJSON() ([]byte, error) {
+	type alias AttachmentBlob
+	return json.Marshal(struct {
+		Type AttachmentType `json:"type"`
+		alias
+	}{
+		Type:  r.Type(),
+		alias: alias(r),
+	})
+}
+
+func (r AttachmentDirectory) MarshalJSON() ([]byte, error) {
+	type alias AttachmentDirectory
+	return json.Marshal(struct {
+		Type AttachmentType `json:"type"`
+		alias
+	}{
+		Type:  r.Type(),
+		alias: alias(r),
+	})
+}
+
+func (r AttachmentExtensionContext) MarshalJSON() ([]byte, error) {
+	type alias AttachmentExtensionContext
+	return json.Marshal(struct {
+		Type AttachmentType `json:"type"`
+		alias
+	}{
+		Type:  r.Type(),
+		alias: alias(r),
+	})
+}
+
+func (r AttachmentFile) MarshalJSON() ([]byte, error) {
+	type alias AttachmentFile
+	return json.Marshal(struct {
+		Type AttachmentType `json:"type"`
+		alias
+	}{
+		Type:  r.Type(),
+		alias: alias(r),
+	})
+}
+
+func (r AttachmentGithubReference) MarshalJSON() ([]byte, error) {
+	type alias AttachmentGithubReference
+	return json.Marshal(struct {
+		Type AttachmentType `json:"type"`
+		alias
+	}{
+		Type:  r.Type(),
+		alias: alias(r),
+	})
+}
+
+func (r AttachmentSelection) MarshalJSON() ([]byte, error) {
+	type alias AttachmentSelection
+	return json.Marshal(struct {
+		Type AttachmentType `json:"type"`
+		alias
+	}{
+		Type:  r.Type(),
+		alias: alias(r),
+	})
+}
+
 func unmarshalAuthInfo(data []byte) (AuthInfo, error) {
 	if string(data) == "null" {
 		return nil, nil
@@ -668,15 +896,35 @@ func (r RawMcpServerConfigData) MarshalJSON() ([]byte, error) {
 	return []byte("null"), nil
 }
 
+func unmarshalMcpServerAuthConfig(data []byte) (McpServerAuthConfig, error) {
+	if string(data) == "null" {
+		return nil, nil
+	}
+	{
+		var value bool
+		if err := json.Unmarshal(data, &value); err == nil {
+			return McpServerAuthConfigBoolean(value), nil
+		}
+	}
+	{
+		var value McpServerAuthConfigRedirectPort
+		if err := json.Unmarshal(data, &value); err == nil {
+			return &value, nil
+		}
+	}
+	return nil, errors.New("data did not match any union variant for McpServerAuthConfig")
+}
+
 func (r *McpServerConfigHTTP) UnmarshalJSON(data []byte) error {
 	type rawMcpServerConfigHTTP struct {
-		Auth              *McpServerConfigHTTPAuth           `json:"auth,omitempty"`
+		Auth              json.RawMessage                    `json:"auth,omitempty"`
 		FilterMapping     json.RawMessage                    `json:"filterMapping,omitempty"`
 		Headers           map[string]string                  `json:"headers,omitempty"`
 		IsDefaultServer   *bool                              `json:"isDefaultServer,omitempty"`
 		OauthClientID     *string                            `json:"oauthClientId,omitempty"`
 		OauthGrantType    *McpServerConfigHTTPOauthGrantType `json:"oauthGrantType,omitempty"`
 		OauthPublicClient *bool                              `json:"oauthPublicClient,omitempty"`
+		Oidc              json.RawMessage                    `json:"oidc,omitempty"`
 		Timeout           *int64                             `json:"timeout,omitempty"`
 		Tools             []string                           `json:"tools,omitempty"`
 		Type              *McpServerConfigHTTPType           `json:"type,omitempty"`
@@ -686,7 +934,13 @@ func (r *McpServerConfigHTTP) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	r.Auth = raw.Auth
+	if raw.Auth != nil {
+		value, err := unmarshalMcpServerAuthConfig(raw.Auth)
+		if err != nil {
+			return err
+		}
+		r.Auth = value
+	}
 	if raw.FilterMapping != nil {
 		value, err := unmarshalFilterMapping(raw.FilterMapping)
 		if err != nil {
@@ -699,6 +953,13 @@ func (r *McpServerConfigHTTP) UnmarshalJSON(data []byte) error {
 	r.OauthClientID = raw.OauthClientID
 	r.OauthGrantType = raw.OauthGrantType
 	r.OauthPublicClient = raw.OauthPublicClient
+	if raw.Oidc != nil {
+		value, err := unmarshalMcpServerAuthConfig(raw.Oidc)
+		if err != nil {
+			return err
+		}
+		r.Oidc = value
+	}
 	r.Timeout = raw.Timeout
 	r.Tools = raw.Tools
 	r.Type = raw.Type
@@ -709,11 +970,13 @@ func (r *McpServerConfigHTTP) UnmarshalJSON(data []byte) error {
 func (r *McpServerConfigStdio) UnmarshalJSON(data []byte) error {
 	type rawMcpServerConfigStdio struct {
 		Args            []string          `json:"args,omitempty"`
+		Auth            json.RawMessage   `json:"auth,omitempty"`
 		Command         string            `json:"command"`
 		Cwd             *string           `json:"cwd,omitempty"`
 		Env             map[string]string `json:"env,omitempty"`
 		FilterMapping   json.RawMessage   `json:"filterMapping,omitempty"`
 		IsDefaultServer *bool             `json:"isDefaultServer,omitempty"`
+		Oidc            json.RawMessage   `json:"oidc,omitempty"`
 		Timeout         *int64            `json:"timeout,omitempty"`
 		Tools           []string          `json:"tools,omitempty"`
 	}
@@ -722,6 +985,13 @@ func (r *McpServerConfigStdio) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	r.Args = raw.Args
+	if raw.Auth != nil {
+		value, err := unmarshalMcpServerAuthConfig(raw.Auth)
+		if err != nil {
+			return err
+		}
+		r.Auth = value
+	}
 	r.Command = raw.Command
 	r.Cwd = raw.Cwd
 	r.Env = raw.Env
@@ -733,6 +1003,13 @@ func (r *McpServerConfigStdio) UnmarshalJSON(data []byte) error {
 		r.FilterMapping = value
 	}
 	r.IsDefaultServer = raw.IsDefaultServer
+	if raw.Oidc != nil {
+		value, err := unmarshalMcpServerAuthConfig(raw.Oidc)
+		if err != nil {
+			return err
+		}
+		r.Oidc = value
+	}
 	r.Timeout = raw.Timeout
 	r.Tools = raw.Tools
 	return nil
@@ -1912,12 +2189,12 @@ func (r *PermissionLocationAddToolApprovalParams) UnmarshalJSON(data []byte) err
 	return nil
 }
 
-func unmarshalSendAttachment(data []byte) (SendAttachment, error) {
+func unmarshalPushAttachment(data []byte) (PushAttachment, error) {
 	if string(data) == "null" {
 		return nil, nil
 	}
 	type rawUnion struct {
-		Type SendAttachmentType `json:"type"`
+		Type PushAttachmentType `json:"type"`
 	}
 	var raw rawUnion
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -1925,56 +2202,62 @@ func unmarshalSendAttachment(data []byte) (SendAttachment, error) {
 	}
 
 	switch raw.Type {
-	case SendAttachmentTypeBlob:
-		var d SendAttachmentBlob
+	case PushAttachmentTypeBlob:
+		var d PushAttachmentBlob
 		if err := json.Unmarshal(data, &d); err != nil {
 			return nil, err
 		}
 		return &d, nil
-	case SendAttachmentTypeDirectory:
-		var d SendAttachmentDirectory
+	case PushAttachmentTypeDirectory:
+		var d PushAttachmentDirectory
 		if err := json.Unmarshal(data, &d); err != nil {
 			return nil, err
 		}
 		return &d, nil
-	case SendAttachmentTypeFile:
-		var d SendAttachmentFile
+	case PushAttachmentTypeExtensionContext:
+		var d ExtensionContextPushInput
 		if err := json.Unmarshal(data, &d); err != nil {
 			return nil, err
 		}
 		return &d, nil
-	case SendAttachmentTypeGithubReference:
-		var d SendAttachmentGithubReference
+	case PushAttachmentTypeFile:
+		var d PushAttachmentFile
 		if err := json.Unmarshal(data, &d); err != nil {
 			return nil, err
 		}
 		return &d, nil
-	case SendAttachmentTypeSelection:
-		var d SendAttachmentSelection
+	case PushAttachmentTypeGithubReference:
+		var d PushAttachmentGithubReference
+		if err := json.Unmarshal(data, &d); err != nil {
+			return nil, err
+		}
+		return &d, nil
+	case PushAttachmentTypeSelection:
+		var d PushAttachmentSelection
 		if err := json.Unmarshal(data, &d); err != nil {
 			return nil, err
 		}
 		return &d, nil
 	default:
-		return &RawSendAttachmentData{Discriminator: raw.Type, Raw: data}, nil
+		return &RawPushAttachmentData{Discriminator: raw.Type, Raw: data}, nil
 	}
 }
 
-func (r RawSendAttachmentData) MarshalJSON() ([]byte, error) {
+func (r RawPushAttachmentData) MarshalJSON() ([]byte, error) {
 	if r.Raw != nil {
 		return r.Raw, nil
 	}
 	return json.Marshal(struct {
-		Type SendAttachmentType `json:"type"`
+		Type PushAttachmentType `json:"type"`
 	}{
 		Type: r.Discriminator,
 	})
 }
 
-func (r SendAttachmentBlob) MarshalJSON() ([]byte, error) {
-	type alias SendAttachmentBlob
+func (r ExtensionContextPushInput) MarshalJSON() ([]byte, error) {
+	type alias ExtensionContextPushInput
 	return json.Marshal(struct {
-		Type SendAttachmentType `json:"type"`
+		Type PushAttachmentType `json:"type"`
 		alias
 	}{
 		Type:  r.Type(),
@@ -1982,10 +2265,10 @@ func (r SendAttachmentBlob) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (r SendAttachmentDirectory) MarshalJSON() ([]byte, error) {
-	type alias SendAttachmentDirectory
+func (r PushAttachmentBlob) MarshalJSON() ([]byte, error) {
+	type alias PushAttachmentBlob
 	return json.Marshal(struct {
-		Type SendAttachmentType `json:"type"`
+		Type PushAttachmentType `json:"type"`
 		alias
 	}{
 		Type:  r.Type(),
@@ -1993,10 +2276,10 @@ func (r SendAttachmentDirectory) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (r SendAttachmentFile) MarshalJSON() ([]byte, error) {
-	type alias SendAttachmentFile
+func (r PushAttachmentDirectory) MarshalJSON() ([]byte, error) {
+	type alias PushAttachmentDirectory
 	return json.Marshal(struct {
-		Type SendAttachmentType `json:"type"`
+		Type PushAttachmentType `json:"type"`
 		alias
 	}{
 		Type:  r.Type(),
@@ -2004,10 +2287,10 @@ func (r SendAttachmentFile) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (r SendAttachmentGithubReference) MarshalJSON() ([]byte, error) {
-	type alias SendAttachmentGithubReference
+func (r PushAttachmentFile) MarshalJSON() ([]byte, error) {
+	type alias PushAttachmentFile
 	return json.Marshal(struct {
-		Type SendAttachmentType `json:"type"`
+		Type PushAttachmentType `json:"type"`
 		alias
 	}{
 		Type:  r.Type(),
@@ -2015,15 +2298,49 @@ func (r SendAttachmentGithubReference) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (r SendAttachmentSelection) MarshalJSON() ([]byte, error) {
-	type alias SendAttachmentSelection
+func (r PushAttachmentGithubReference) MarshalJSON() ([]byte, error) {
+	type alias PushAttachmentGithubReference
 	return json.Marshal(struct {
-		Type SendAttachmentType `json:"type"`
+		Type PushAttachmentType `json:"type"`
 		alias
 	}{
 		Type:  r.Type(),
 		alias: alias(r),
 	})
+}
+
+func (r PushAttachmentSelection) MarshalJSON() ([]byte, error) {
+	type alias PushAttachmentSelection
+	return json.Marshal(struct {
+		Type PushAttachmentType `json:"type"`
+		alias
+	}{
+		Type:  r.Type(),
+		alias: alias(r),
+	})
+}
+
+func (r *SendAttachmentsToMessageParams) UnmarshalJSON(data []byte) error {
+	type rawSendAttachmentsToMessageParams struct {
+		Attachments []json.RawMessage `json:"attachments"`
+		InstanceID  *string           `json:"instanceId,omitempty"`
+	}
+	var raw rawSendAttachmentsToMessageParams
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if raw.Attachments != nil {
+		r.Attachments = make([]PushAttachment, 0, len(raw.Attachments))
+		for _, rawItem := range raw.Attachments {
+			value, err := unmarshalPushAttachment(rawItem)
+			if err != nil {
+				return err
+			}
+			r.Attachments = append(r.Attachments, value)
+		}
+	}
+	r.InstanceID = raw.InstanceID
+	return nil
 }
 
 func (r *SendRequest) UnmarshalJSON(data []byte) error {
@@ -2048,9 +2365,9 @@ func (r *SendRequest) UnmarshalJSON(data []byte) error {
 	}
 	r.AgentMode = raw.AgentMode
 	if raw.Attachments != nil {
-		r.Attachments = make([]SendAttachment, 0, len(raw.Attachments))
+		r.Attachments = make([]Attachment, 0, len(raw.Attachments))
 		for _, rawItem := range raw.Attachments {
-			value, err := unmarshalSendAttachment(rawItem)
+			value, err := unmarshalAttachment(rawItem)
 			if err != nil {
 				return err
 			}

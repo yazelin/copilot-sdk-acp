@@ -53,87 +53,94 @@ func (r RawSessionEventData) Type() SessionEventType {
 type SessionEventType string
 
 const (
-	SessionEventTypeAbort                         SessionEventType = "abort"
-	SessionEventTypeAssistantIntent               SessionEventType = "assistant.intent"
-	SessionEventTypeAssistantMessage              SessionEventType = "assistant.message"
-	SessionEventTypeAssistantMessageDelta         SessionEventType = "assistant.message_delta"
-	SessionEventTypeAssistantMessageStart         SessionEventType = "assistant.message_start"
-	SessionEventTypeAssistantReasoning            SessionEventType = "assistant.reasoning"
-	SessionEventTypeAssistantReasoningDelta       SessionEventType = "assistant.reasoning_delta"
-	SessionEventTypeAssistantStreamingDelta       SessionEventType = "assistant.streaming_delta"
-	SessionEventTypeAssistantTurnEnd              SessionEventType = "assistant.turn_end"
-	SessionEventTypeAssistantTurnStart            SessionEventType = "assistant.turn_start"
-	SessionEventTypeAssistantUsage                SessionEventType = "assistant.usage"
-	SessionEventTypeAutoModeSwitchCompleted       SessionEventType = "auto_mode_switch.completed"
-	SessionEventTypeAutoModeSwitchRequested       SessionEventType = "auto_mode_switch.requested"
-	SessionEventTypeCapabilitiesChanged           SessionEventType = "capabilities.changed"
-	SessionEventTypeCommandCompleted              SessionEventType = "command.completed"
-	SessionEventTypeCommandExecute                SessionEventType = "command.execute"
-	SessionEventTypeCommandQueued                 SessionEventType = "command.queued"
-	SessionEventTypeCommandsChanged               SessionEventType = "commands.changed"
-	SessionEventTypeElicitationCompleted          SessionEventType = "elicitation.completed"
-	SessionEventTypeElicitationRequested          SessionEventType = "elicitation.requested"
-	SessionEventTypeExitPlanModeCompleted         SessionEventType = "exit_plan_mode.completed"
-	SessionEventTypeExitPlanModeRequested         SessionEventType = "exit_plan_mode.requested"
-	SessionEventTypeExternalToolCompleted         SessionEventType = "external_tool.completed"
-	SessionEventTypeExternalToolRequested         SessionEventType = "external_tool.requested"
-	SessionEventTypeHookEnd                       SessionEventType = "hook.end"
-	SessionEventTypeHookStart                     SessionEventType = "hook.start"
-	SessionEventTypeMcpOauthCompleted             SessionEventType = "mcp.oauth_completed"
-	SessionEventTypeMcpOauthRequired              SessionEventType = "mcp.oauth_required"
-	SessionEventTypeModelCallFailure              SessionEventType = "model.call_failure"
-	SessionEventTypePendingMessagesModified       SessionEventType = "pending_messages.modified"
-	SessionEventTypePermissionCompleted           SessionEventType = "permission.completed"
-	SessionEventTypePermissionRequested           SessionEventType = "permission.requested"
-	SessionEventTypeSamplingCompleted             SessionEventType = "sampling.completed"
-	SessionEventTypeSamplingRequested             SessionEventType = "sampling.requested"
-	SessionEventTypeSessionBackgroundTasksChanged SessionEventType = "session.background_tasks_changed"
-	SessionEventTypeSessionCompactionComplete     SessionEventType = "session.compaction_complete"
-	SessionEventTypeSessionCompactionStart        SessionEventType = "session.compaction_start"
-	SessionEventTypeSessionContextChanged         SessionEventType = "session.context_changed"
-	SessionEventTypeSessionCustomAgentsUpdated    SessionEventType = "session.custom_agents_updated"
-	SessionEventTypeSessionCustomNotification     SessionEventType = "session.custom_notification"
-	SessionEventTypeSessionError                  SessionEventType = "session.error"
-	SessionEventTypeSessionExtensionsLoaded       SessionEventType = "session.extensions_loaded"
-	SessionEventTypeSessionHandoff                SessionEventType = "session.handoff"
-	SessionEventTypeSessionIdle                   SessionEventType = "session.idle"
-	SessionEventTypeSessionInfo                   SessionEventType = "session.info"
-	SessionEventTypeSessionMcpServersLoaded       SessionEventType = "session.mcp_servers_loaded"
-	SessionEventTypeSessionMcpServerStatusChanged SessionEventType = "session.mcp_server_status_changed"
-	SessionEventTypeSessionModeChanged            SessionEventType = "session.mode_changed"
-	SessionEventTypeSessionModelChange            SessionEventType = "session.model_change"
-	SessionEventTypeSessionPlanChanged            SessionEventType = "session.plan_changed"
-	SessionEventTypeSessionRemoteSteerableChanged SessionEventType = "session.remote_steerable_changed"
-	SessionEventTypeSessionResume                 SessionEventType = "session.resume"
-	SessionEventTypeSessionScheduleCancelled      SessionEventType = "session.schedule_cancelled"
-	SessionEventTypeSessionScheduleCreated        SessionEventType = "session.schedule_created"
-	SessionEventTypeSessionShutdown               SessionEventType = "session.shutdown"
-	SessionEventTypeSessionSkillsLoaded           SessionEventType = "session.skills_loaded"
-	SessionEventTypeSessionSnapshotRewind         SessionEventType = "session.snapshot_rewind"
-	SessionEventTypeSessionStart                  SessionEventType = "session.start"
-	SessionEventTypeSessionTaskComplete           SessionEventType = "session.task_complete"
-	SessionEventTypeSessionTitleChanged           SessionEventType = "session.title_changed"
-	SessionEventTypeSessionToolsUpdated           SessionEventType = "session.tools_updated"
-	SessionEventTypeSessionTruncation             SessionEventType = "session.truncation"
-	SessionEventTypeSessionUsageInfo              SessionEventType = "session.usage_info"
-	SessionEventTypeSessionWarning                SessionEventType = "session.warning"
-	SessionEventTypeSessionWorkspaceFileChanged   SessionEventType = "session.workspace_file_changed"
-	SessionEventTypeSkillInvoked                  SessionEventType = "skill.invoked"
-	SessionEventTypeSubagentCompleted             SessionEventType = "subagent.completed"
-	SessionEventTypeSubagentDeselected            SessionEventType = "subagent.deselected"
-	SessionEventTypeSubagentFailed                SessionEventType = "subagent.failed"
-	SessionEventTypeSubagentSelected              SessionEventType = "subagent.selected"
-	SessionEventTypeSubagentStarted               SessionEventType = "subagent.started"
-	SessionEventTypeSystemMessage                 SessionEventType = "system.message"
-	SessionEventTypeSystemNotification            SessionEventType = "system.notification"
-	SessionEventTypeToolExecutionComplete         SessionEventType = "tool.execution_complete"
-	SessionEventTypeToolExecutionPartialResult    SessionEventType = "tool.execution_partial_result"
-	SessionEventTypeToolExecutionProgress         SessionEventType = "tool.execution_progress"
-	SessionEventTypeToolExecutionStart            SessionEventType = "tool.execution_start"
-	SessionEventTypeToolUserRequested             SessionEventType = "tool.user_requested"
-	SessionEventTypeUserInputCompleted            SessionEventType = "user_input.completed"
-	SessionEventTypeUserInputRequested            SessionEventType = "user_input.requested"
-	SessionEventTypeUserMessage                   SessionEventType = "user.message"
+	SessionEventTypeAbort                              SessionEventType = "abort"
+	SessionEventTypeAssistantIntent                    SessionEventType = "assistant.intent"
+	SessionEventTypeAssistantMessage                   SessionEventType = "assistant.message"
+	SessionEventTypeAssistantMessageDelta              SessionEventType = "assistant.message_delta"
+	SessionEventTypeAssistantMessageStart              SessionEventType = "assistant.message_start"
+	SessionEventTypeAssistantReasoning                 SessionEventType = "assistant.reasoning"
+	SessionEventTypeAssistantReasoningDelta            SessionEventType = "assistant.reasoning_delta"
+	SessionEventTypeAssistantStreamingDelta            SessionEventType = "assistant.streaming_delta"
+	SessionEventTypeAssistantTurnEnd                   SessionEventType = "assistant.turn_end"
+	SessionEventTypeAssistantTurnStart                 SessionEventType = "assistant.turn_start"
+	SessionEventTypeAssistantUsage                     SessionEventType = "assistant.usage"
+	SessionEventTypeAutoModeSwitchCompleted            SessionEventType = "auto_mode_switch.completed"
+	SessionEventTypeAutoModeSwitchRequested            SessionEventType = "auto_mode_switch.requested"
+	SessionEventTypeCapabilitiesChanged                SessionEventType = "capabilities.changed"
+	SessionEventTypeCommandCompleted                   SessionEventType = "command.completed"
+	SessionEventTypeCommandExecute                     SessionEventType = "command.execute"
+	SessionEventTypeCommandQueued                      SessionEventType = "command.queued"
+	SessionEventTypeCommandsChanged                    SessionEventType = "commands.changed"
+	SessionEventTypeElicitationCompleted               SessionEventType = "elicitation.completed"
+	SessionEventTypeElicitationRequested               SessionEventType = "elicitation.requested"
+	SessionEventTypeExitPlanModeCompleted              SessionEventType = "exit_plan_mode.completed"
+	SessionEventTypeExitPlanModeRequested              SessionEventType = "exit_plan_mode.requested"
+	SessionEventTypeExternalToolCompleted              SessionEventType = "external_tool.completed"
+	SessionEventTypeExternalToolRequested              SessionEventType = "external_tool.requested"
+	SessionEventTypeHookEnd                            SessionEventType = "hook.end"
+	SessionEventTypeHookProgress                       SessionEventType = "hook.progress"
+	SessionEventTypeHookStart                          SessionEventType = "hook.start"
+	SessionEventTypeMcpAppToolCallComplete             SessionEventType = "mcp_app.tool_call_complete"
+	SessionEventTypeMcpOauthCompleted                  SessionEventType = "mcp.oauth_completed"
+	SessionEventTypeMcpOauthRequired                   SessionEventType = "mcp.oauth_required"
+	SessionEventTypeModelCallFailure                   SessionEventType = "model.call_failure"
+	SessionEventTypePendingMessagesModified            SessionEventType = "pending_messages.modified"
+	SessionEventTypePermissionCompleted                SessionEventType = "permission.completed"
+	SessionEventTypePermissionRequested                SessionEventType = "permission.requested"
+	SessionEventTypeSamplingCompleted                  SessionEventType = "sampling.completed"
+	SessionEventTypeSamplingRequested                  SessionEventType = "sampling.requested"
+	SessionEventTypeSessionAutopilotObjectiveChanged   SessionEventType = "session.autopilot_objective_changed"
+	SessionEventTypeSessionBackgroundTasksChanged      SessionEventType = "session.background_tasks_changed"
+	SessionEventTypeSessionCanvasOpened                SessionEventType = "session.canvas.opened"
+	SessionEventTypeSessionCanvasRegistryChanged       SessionEventType = "session.canvas.registry_changed"
+	SessionEventTypeSessionCompactionComplete          SessionEventType = "session.compaction_complete"
+	SessionEventTypeSessionCompactionStart             SessionEventType = "session.compaction_start"
+	SessionEventTypeSessionContextChanged              SessionEventType = "session.context_changed"
+	SessionEventTypeSessionCustomAgentsUpdated         SessionEventType = "session.custom_agents_updated"
+	SessionEventTypeSessionCustomNotification          SessionEventType = "session.custom_notification"
+	SessionEventTypeSessionError                       SessionEventType = "session.error"
+	SessionEventTypeSessionExtensionsAttachmentsPushed SessionEventType = "session.extensions.attachments_pushed"
+	SessionEventTypeSessionExtensionsLoaded            SessionEventType = "session.extensions_loaded"
+	SessionEventTypeSessionHandoff                     SessionEventType = "session.handoff"
+	SessionEventTypeSessionIdle                        SessionEventType = "session.idle"
+	SessionEventTypeSessionInfo                        SessionEventType = "session.info"
+	SessionEventTypeSessionMcpServersLoaded            SessionEventType = "session.mcp_servers_loaded"
+	SessionEventTypeSessionMcpServerStatusChanged      SessionEventType = "session.mcp_server_status_changed"
+	SessionEventTypeSessionModeChanged                 SessionEventType = "session.mode_changed"
+	SessionEventTypeSessionModelChange                 SessionEventType = "session.model_change"
+	SessionEventTypeSessionPermissionsChanged          SessionEventType = "session.permissions_changed"
+	SessionEventTypeSessionPlanChanged                 SessionEventType = "session.plan_changed"
+	SessionEventTypeSessionRemoteSteerableChanged      SessionEventType = "session.remote_steerable_changed"
+	SessionEventTypeSessionResume                      SessionEventType = "session.resume"
+	SessionEventTypeSessionScheduleCancelled           SessionEventType = "session.schedule_cancelled"
+	SessionEventTypeSessionScheduleCreated             SessionEventType = "session.schedule_created"
+	SessionEventTypeSessionShutdown                    SessionEventType = "session.shutdown"
+	SessionEventTypeSessionSkillsLoaded                SessionEventType = "session.skills_loaded"
+	SessionEventTypeSessionSnapshotRewind              SessionEventType = "session.snapshot_rewind"
+	SessionEventTypeSessionStart                       SessionEventType = "session.start"
+	SessionEventTypeSessionTaskComplete                SessionEventType = "session.task_complete"
+	SessionEventTypeSessionTitleChanged                SessionEventType = "session.title_changed"
+	SessionEventTypeSessionToolsUpdated                SessionEventType = "session.tools_updated"
+	SessionEventTypeSessionTruncation                  SessionEventType = "session.truncation"
+	SessionEventTypeSessionUsageInfo                   SessionEventType = "session.usage_info"
+	SessionEventTypeSessionWarning                     SessionEventType = "session.warning"
+	SessionEventTypeSessionWorkspaceFileChanged        SessionEventType = "session.workspace_file_changed"
+	SessionEventTypeSkillInvoked                       SessionEventType = "skill.invoked"
+	SessionEventTypeSubagentCompleted                  SessionEventType = "subagent.completed"
+	SessionEventTypeSubagentDeselected                 SessionEventType = "subagent.deselected"
+	SessionEventTypeSubagentFailed                     SessionEventType = "subagent.failed"
+	SessionEventTypeSubagentSelected                   SessionEventType = "subagent.selected"
+	SessionEventTypeSubagentStarted                    SessionEventType = "subagent.started"
+	SessionEventTypeSystemMessage                      SessionEventType = "system.message"
+	SessionEventTypeSystemNotification                 SessionEventType = "system.notification"
+	SessionEventTypeToolExecutionComplete              SessionEventType = "tool.execution_complete"
+	SessionEventTypeToolExecutionPartialResult         SessionEventType = "tool.execution_partial_result"
+	SessionEventTypeToolExecutionProgress              SessionEventType = "tool.execution_progress"
+	SessionEventTypeToolExecutionStart                 SessionEventType = "tool.execution_start"
+	SessionEventTypeToolUserRequested                  SessionEventType = "tool.user_requested"
+	SessionEventTypeUserInputCompleted                 SessionEventType = "user_input.completed"
+	SessionEventTypeUserInputRequested                 SessionEventType = "user_input.requested"
+	SessionEventTypeUserMessage                        SessionEventType = "user.message"
 )
 
 // Agent intent description for current activity or plan
@@ -170,8 +177,10 @@ func (*AssistantReasoningData) Type() SessionEventType { return SessionEventType
 // Assistant response containing text content, optional tool requests, and interaction metadata
 type AssistantMessageData struct {
 	// Raw Anthropic content array with advisor blocks (server_tool_use, advisor_tool_result) for verbatim round-tripping
+	// Experimental: AnthropicAdvisorBlocks is part of an experimental API and may change or be removed.
 	AnthropicAdvisorBlocks []any `json:"anthropicAdvisorBlocks,omitempty"`
 	// Anthropic advisor model ID used for this response, for timeline display on replay
+	// Experimental: AnthropicAdvisorModel is part of an experimental API and may change or be removed.
 	AnthropicAdvisorModel *string `json:"anthropicAdvisorModel,omitempty"`
 	// The assistant's text response content
 	Content string `json:"content"`
@@ -196,6 +205,8 @@ type AssistantMessageData struct {
 	ReasoningText *string `json:"reasoningText,omitempty"`
 	// GitHub request tracing ID (x-github-request-id header) for correlating with server-side logs
 	RequestID *string `json:"requestId,omitempty"`
+	// Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
+	ServiceRequestID *string `json:"serviceRequestId,omitempty"`
 	// Tool invocations requested by the assistant in this message
 	ToolRequests []AssistantMessageToolRequest `json:"toolRequests,omitempty"`
 	// Identifier for the agent loop turn that produced this message, matching the corresponding assistant.turn_start event
@@ -233,6 +244,21 @@ func (*AutoModeSwitchRequestedData) Type() SessionEventType {
 	return SessionEventTypeAutoModeSwitchRequested
 }
 
+// Autopilot objective state file operation details indicating what changed
+type SessionAutopilotObjectiveChangedData struct {
+	// Current autopilot objective id, if one exists
+	ID *int64 `json:"id,omitempty"`
+	// The type of operation performed on the autopilot objective state file
+	Operation AutopilotObjectiveChangedOperation `json:"operation"`
+	// Current autopilot objective status, if one exists
+	Status *AutopilotObjectiveChangedStatus `json:"status,omitempty"`
+}
+
+func (*SessionAutopilotObjectiveChangedData) sessionEventData() {}
+func (*SessionAutopilotObjectiveChangedData) Type() SessionEventType {
+	return SessionEventTypeSessionAutopilotObjectiveChanged
+}
+
 // Context window breakdown at the start of LLM-powered conversation compaction
 type SessionCompactionStartData struct {
 	// Token count from non-system messages (user, assistant, tool) at compaction start
@@ -258,6 +284,8 @@ type SessionCompactionCompleteData struct {
 	CompactionTokensUsed *CompactionCompleteCompactionTokensUsed `json:"compactionTokensUsed,omitempty"`
 	// Token count from non-system messages (user, assistant, tool) after compaction
 	ConversationTokens *int64 `json:"conversationTokens,omitempty"`
+	// User-supplied focus instructions provided to a manual `/compact` invocation. Omitted for automatic compaction and for manual compaction with no focus text.
+	CustomInstructions *string `json:"customInstructions,omitempty"`
 	// Error message if compaction failed
 	Error *string `json:"error,omitempty"`
 	// Number of messages removed during compaction
@@ -270,6 +298,8 @@ type SessionCompactionCompleteData struct {
 	PreCompactionTokens *int64 `json:"preCompactionTokens,omitempty"`
 	// GitHub request tracing ID (x-github-request-id header) for the compaction LLM call
 	RequestID *string `json:"requestId,omitempty"`
+	// Copilot service request ID (x-copilot-service-request-id header) for the compaction LLM call
+	ServiceRequestID *string `json:"serviceRequestId,omitempty"`
 	// Whether compaction completed successfully
 	Success bool `json:"success"`
 	// LLM-generated summary of the compacted conversation history
@@ -394,6 +424,15 @@ func (*PendingMessagesModifiedData) Type() SessionEventType {
 	return SessionEventTypePendingMessagesModified
 }
 
+// Ephemeral progress update from a running hook process
+type HookProgressData struct {
+	// Human-readable progress message from the hook process
+	Message string `json:"message"`
+}
+
+func (*HookProgressData) sessionEventData()      {}
+func (*HookProgressData) Type() SessionEventType { return SessionEventTypeHookProgress }
+
 // Error details for timeline display including message and optional diagnostic information
 type SessionErrorData struct {
 	// Only set on `errorType: "rate_limit"`. When `true`, the runtime will follow this error with an `auto_mode_switch.requested` event (or silently switch if `continueOnAutoMode` is enabled). UI clients can use this flag to suppress duplicate rendering of the rate-limit error when they show their own auto-mode-switch prompt.
@@ -406,6 +445,8 @@ type SessionErrorData struct {
 	Message string `json:"message"`
 	// GitHub request tracing ID (x-github-request-id header) for correlating with server-side logs
 	ProviderCallID *string `json:"providerCallId,omitempty"`
+	// Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
+	ServiceRequestID *string `json:"serviceRequestId,omitempty"`
 	// Error stack trace, when available
 	Stack *string `json:"stack,omitempty"`
 	// HTTP status code from the upstream request, if applicable
@@ -444,6 +485,8 @@ type ExternalToolRequestedData struct {
 	Traceparent *string `json:"traceparent,omitempty"`
 	// W3C Trace Context tracestate header for the execute_tool span
 	Tracestate *string `json:"tracestate,omitempty"`
+	// Active session working directory, when known.
+	WorkingDirectory *string `json:"workingDirectory,omitempty"`
 }
 
 func (*ExternalToolRequestedData) sessionEventData() {}
@@ -465,6 +508,8 @@ type ModelCallFailureData struct {
 	Model *string `json:"model,omitempty"`
 	// GitHub request tracing ID (x-github-request-id header) for server-side log correlation
 	ProviderCallID *string `json:"providerCallId,omitempty"`
+	// Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
+	ServiceRequestID *string `json:"serviceRequestId,omitempty"`
 	// Where the failed model call originated
 	Source ModelCallFailureSource `json:"source"`
 	// HTTP status code from the failed request
@@ -530,8 +575,10 @@ type AssistantUsageData struct {
 	// Number of tokens written to prompt cache
 	CacheWriteTokens *int64 `json:"cacheWriteTokens,omitempty"`
 	// Per-request cost and usage data from the CAPI copilot_usage response field
+	// Internal: CopilotUsage is part of the SDK's internal API surface and is not intended for external use.
 	CopilotUsage *AssistantUsageCopilotUsage `json:"copilotUsage,omitempty"`
 	// Model multiplier cost for billing purposes
+	// Experimental: Cost is part of an experimental API and may change or be removed.
 	Cost *float64 `json:"cost,omitempty"`
 	// Duration of the API call in milliseconds
 	Duration *int64 `json:"duration,omitempty"`
@@ -551,17 +598,45 @@ type AssistantUsageData struct {
 	// GitHub request tracing ID (x-github-request-id header) for server-side log correlation
 	ProviderCallID *string `json:"providerCallId,omitempty"`
 	// Per-quota resource usage snapshots, keyed by quota identifier
+	// Internal: QuotaSnapshots is part of the SDK's internal API surface and is not intended for external use.
 	QuotaSnapshots map[string]AssistantUsageQuotaSnapshot `json:"quotaSnapshots,omitempty"`
 	// Reasoning effort level used for model calls, if applicable (e.g. "none", "low", "medium", "high", "xhigh", "max")
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 	// Number of output tokens used for reasoning (e.g., chain-of-thought)
 	ReasoningTokens *int64 `json:"reasoningTokens,omitempty"`
+	// Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
+	ServiceRequestID *string `json:"serviceRequestId,omitempty"`
 	// Time to first token in milliseconds. Only available for streaming requests
 	TimeToFirstTokenMs *int64 `json:"timeToFirstTokenMs,omitempty"`
 }
 
 func (*AssistantUsageData) sessionEventData()      {}
 func (*AssistantUsageData) Type() SessionEventType { return SessionEventTypeAssistantUsage }
+
+// MCP App view called a tool on a connected MCP server (SEP-1865)
+type McpAppToolCallCompleteData struct {
+	// Arguments passed to the tool by the app view, if any
+	Arguments map[string]any `json:"arguments,omitempty"`
+	// Wall-clock duration of the underlying tools/call in milliseconds
+	DurationMs float64 `json:"durationMs"`
+	// Set when the underlying tools/call threw an error before returning a CallToolResult
+	Error *McpAppToolCallCompleteError `json:"error,omitempty"`
+	// Standard MCP CallToolResult returned by the server. Present whether or not the call set isError.
+	Result map[string]any `json:"result,omitempty"`
+	// Name of the MCP server hosting the tool
+	ServerName string `json:"serverName"`
+	// True when the call completed without throwing AND the MCP CallToolResult did not set isError
+	Success bool `json:"success"`
+	// The tool's `_meta.ui` block at the time of the call, so consumers can decide whether to forward the result to the model without re-listing tools.
+	ToolMeta *McpAppToolCallCompleteToolMeta `json:"toolMeta,omitempty"`
+	// MCP tool name that was invoked
+	ToolName string `json:"toolName"`
+}
+
+func (*McpAppToolCallCompleteData) sessionEventData() {}
+func (*McpAppToolCallCompleteData) Type() SessionEventType {
+	return SessionEventTypeMcpAppToolCallComplete
+}
 
 // MCP OAuth request completion notification
 type McpOauthCompletedData struct {
@@ -576,6 +651,8 @@ func (*McpOauthCompletedData) Type() SessionEventType { return SessionEventTypeM
 type SessionModelChangeData struct {
 	// Reason the change happened, when not user-initiated. Currently `"rate_limit_auto_switch"` for changes triggered by the auto-mode-switch rate-limit recovery path. UI clients can use this to render contextual copy.
 	Cause *string `json:"cause,omitempty"`
+	// Context tier after the model change; null explicitly clears a previously selected tier
+	ContextTier *ContextTier `json:"contextTier,omitempty"`
 	// Newly selected model identifier
 	NewModel string `json:"newModel"`
 	// Model that was previously selected, if any
@@ -674,6 +751,19 @@ type PermissionRequestedData struct {
 
 func (*PermissionRequestedData) sessionEventData()      {}
 func (*PermissionRequestedData) Type() SessionEventType { return SessionEventTypePermissionRequested }
+
+// Permissions change details carrying the aggregate allow-all boolean transition.
+type SessionPermissionsChangedData struct {
+	// Aggregate allow-all flag after the change
+	AllowAllPermissions bool `json:"allowAllPermissions"`
+	// Aggregate allow-all flag before the change
+	PreviousAllowAllPermissions bool `json:"previousAllowAllPermissions"`
+}
+
+func (*SessionPermissionsChangedData) sessionEventData() {}
+func (*SessionPermissionsChangedData) Type() SessionEventType {
+	return SessionEventTypeSessionPermissionsChanged
+}
 
 // Plan approval request with plan content and available user actions
 type ExitPlanModeRequestedData struct {
@@ -827,6 +917,44 @@ func (*SessionBackgroundTasksChangedData) Type() SessionEventType {
 	return SessionEventTypeSessionBackgroundTasksChanged
 }
 
+// Schema for the `CanvasOpenedData` type.
+type SessionCanvasOpenedData struct {
+	// Runtime-controlled routing state for the instance. "ready" when the provider connection is live; "stale" when the provider has gone away and the instance is awaiting rebinding.
+	Availability CanvasOpenedAvailability `json:"availability"`
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Owning extension display name, when available
+	ExtensionName *string `json:"extensionName,omitempty"`
+	// Input supplied when the instance was opened
+	Input any `json:"input,omitempty"`
+	// Stable caller-supplied canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Whether this notification represents an idempotent reopen
+	Reopen bool `json:"reopen"`
+	// Provider-supplied status text
+	Status *string `json:"status,omitempty"`
+	// Rendered title
+	Title *string `json:"title,omitempty"`
+	// URL for web-rendered canvases
+	URL *string `json:"url,omitempty"`
+}
+
+func (*SessionCanvasOpenedData) sessionEventData()      {}
+func (*SessionCanvasOpenedData) Type() SessionEventType { return SessionEventTypeSessionCanvasOpened }
+
+// Schema for the `CanvasRegistryChangedData` type.
+type SessionCanvasRegistryChangedData struct {
+	// Canvas declarations currently available
+	Canvases []CanvasRegistryChangedCanvas `json:"canvases"`
+}
+
+func (*SessionCanvasRegistryChangedData) sessionEventData() {}
+func (*SessionCanvasRegistryChangedData) Type() SessionEventType {
+	return SessionEventTypeSessionCanvasRegistryChanged
+}
+
 // Schema for the `CustomAgentsUpdatedData` type.
 type SessionCustomAgentsUpdatedData struct {
 	// Array of loaded custom agent metadata
@@ -842,6 +970,17 @@ func (*SessionCustomAgentsUpdatedData) Type() SessionEventType {
 	return SessionEventTypeSessionCustomAgentsUpdated
 }
 
+// Schema for the `ExtensionsAttachmentsPushedData` type.
+type SessionExtensionsAttachmentsPushedData struct {
+	// Attachments contributed by an extension; the host should surface these as composer pills and forward them via the next session.send call.
+	Attachments []Attachment `json:"attachments"`
+}
+
+func (*SessionExtensionsAttachmentsPushedData) sessionEventData() {}
+func (*SessionExtensionsAttachmentsPushedData) Type() SessionEventType {
+	return SessionEventTypeSessionExtensionsAttachmentsPushed
+}
+
 // Schema for the `ExtensionsLoadedData` type.
 type SessionExtensionsLoadedData struct {
 	// Array of discovered extensions and their status
@@ -855,6 +994,8 @@ func (*SessionExtensionsLoadedData) Type() SessionEventType {
 
 // Schema for the `McpServerStatusChangedData` type.
 type SessionMcpServerStatusChangedData struct {
+	// Error message if the server entered a failed state
+	Error *string `json:"error,omitempty"`
 	// Name of the MCP server whose status changed
 	ServerName string `json:"serverName"`
 	// Connection status: connected, failed, needs-auth, pending, disabled, or not_configured
@@ -900,7 +1041,7 @@ type UserMessageData struct {
 	// The agent mode that was active when this message was sent
 	AgentMode *UserMessageAgentMode `json:"agentMode,omitempty"`
 	// Files, selections, or GitHub references attached to the message
-	Attachments []UserMessageAttachment `json:"attachments,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
 	// The user's message text as displayed in the timeline
 	Content string `json:"content"`
 	// CAPI interaction ID for correlating this user message with its turn
@@ -958,6 +1099,8 @@ type SessionStartData struct {
 	AlreadyInUse *bool `json:"alreadyInUse,omitempty"`
 	// Working directory and git context at session start
 	Context *WorkingDirectoryContext `json:"context,omitempty"`
+	// Context tier selected at session creation time for models with tiered context pricing; null when no tier is selected (e.g., non-tiered model)
+	ContextTier *ContextTier `json:"contextTier,omitempty"`
 	// Version string of the Copilot application
 	CopilotVersion string `json:"copilotVersion"`
 	// When set, identifies a parent session whose context this session continues — e.g., a detached headless rem-agent run launched on the parent's interactive shutdown. Telemetry from this session is reported under the parent's session_id.
@@ -989,6 +1132,8 @@ type SessionResumeData struct {
 	AlreadyInUse *bool `json:"alreadyInUse,omitempty"`
 	// Updated working directory and git context at resume time
 	Context *WorkingDirectoryContext `json:"context,omitempty"`
+	// Context tier currently selected at resume time; null when no tier is active
+	ContextTier *ContextTier `json:"contextTier,omitempty"`
 	// When true, tool calls and permission requests left in flight by the previous session lifetime remain pending after resume and the agentic loop awaits their results. User sends are queued behind the pending work until all such requests reach a terminal state. When false (the default), any such tool calls and permission requests are immediately marked as interrupted on resume.
 	ContinuePendingWork *bool `json:"continuePendingWork,omitempty"`
 	// Total number of persisted events in the session at the time of resume
@@ -1050,9 +1195,11 @@ type SessionShutdownData struct {
 	// Cumulative time spent in API calls during the session, in milliseconds
 	TotalAPIDurationMs int64 `json:"totalApiDurationMs"`
 	// Session-wide accumulated nano-AI units cost
+	// Experimental: TotalNanoAiu is part of an experimental API and may change or be removed.
 	TotalNanoAiu *float64 `json:"totalNanoAiu,omitempty"`
 	// Total number of premium API requests used during the session
-	TotalPremiumRequests float64 `json:"totalPremiumRequests"`
+	// Internal: TotalPremiumRequests is part of the SDK's internal API surface and is not intended for external use.
+	TotalPremiumRequests *float64 `json:"totalPremiumRequests,omitempty"`
 }
 
 func (*SessionShutdownData) sessionEventData()      {}
@@ -1083,6 +1230,10 @@ type SkillInvokedData struct {
 	PluginName *string `json:"pluginName,omitempty"`
 	// Version of the plugin this skill originated from, when applicable
 	PluginVersion *string `json:"pluginVersion,omitempty"`
+	// Source identifier for where the skill was discovered. Known values include: project (workspace skill), inherited (parent-directory skill), personal-copilot (~/.copilot/skills), personal-agents (~/.agents/skills), personal-claude (~/.claude/skills), custom (configured directory), plugin (installed plugin), builtin (bundled runtime skill), and remote (org/enterprise skill)
+	Source *string `json:"source,omitempty"`
+	// What triggered the skill invocation: `user-invoked` (explicit user action, such as via a slash command or UI affordance), `agent-invoked` (agent requested the skill), or `context-load` (loaded as part of another context, such as preloading skills configured on a custom agent or subagent)
+	Trigger *SkillInvokedTrigger `json:"trigger,omitempty"`
 }
 
 func (*SkillInvokedData) sessionEventData()      {}
@@ -1267,10 +1418,14 @@ type ToolExecutionCompleteData struct {
 	ParentToolCallID *string `json:"parentToolCallId,omitempty"`
 	// Tool execution result on success
 	Result *ToolExecutionCompleteResult `json:"result,omitempty"`
+	// Whether this tool execution ran inside a sandbox container
+	Sandboxed *bool `json:"sandboxed,omitempty"`
 	// Whether the tool execution completed successfully
 	Success bool `json:"success"`
 	// Unique identifier for the completed tool call
 	ToolCallID string `json:"toolCallId"`
+	// Tool definition metadata, present for MCP tools with MCP Apps support
+	ToolDescription *ToolExecutionCompleteToolDescription `json:"toolDescription,omitempty"`
 	// Tool-specific telemetry data (e.g., CodeQL check counts, grep match counts)
 	ToolTelemetry map[string]any `json:"toolTelemetry,omitempty"`
 	// Identifier for the agent loop turn this tool was invoked in, matching the corresponding assistant.turn_start event
@@ -1299,6 +1454,8 @@ func (*ToolExecutionProgressData) Type() SessionEventType {
 type ToolExecutionStartData struct {
 	// Arguments passed to the tool
 	Arguments any `json:"arguments,omitempty"`
+	// When true, the tool output should be displayed expanded (verbatim) in the CLI timeline
+	DisplayVerbatim *bool `json:"displayVerbatim,omitempty"`
 	// Name of the MCP server hosting this tool, when the tool is an MCP tool
 	McpServerName *string `json:"mcpServerName,omitempty"`
 	// Original tool name on the MCP server, when the tool is an MCP tool
@@ -1461,6 +1618,7 @@ type AssistantMessageToolRequest struct {
 }
 
 // Per-request cost and usage data from the CAPI copilot_usage response field
+// Internal: AssistantUsageCopilotUsage is an internal SDK API and is not part of the public surface.
 type AssistantUsageCopilotUsage struct {
 	// Itemized token usage breakdown
 	TokenDetails []AssistantUsageCopilotUsageTokenDetail `json:"tokenDetails"`
@@ -1481,29 +1639,70 @@ type AssistantUsageCopilotUsageTokenDetail struct {
 }
 
 // Schema for the `AssistantUsageQuotaSnapshot` type.
+// Internal: AssistantUsageQuotaSnapshot is an internal SDK API and is not part of the public surface.
 type AssistantUsageQuotaSnapshot struct {
 	// Total requests allowed by the entitlement
+	// Internal: EntitlementRequests is part of the SDK's internal API surface and is not intended for external use.
 	EntitlementRequests int64 `json:"entitlementRequests"`
 	// Whether the user has an unlimited usage entitlement
+	// Internal: IsUnlimitedEntitlement is part of the SDK's internal API surface and is not intended for external use.
 	IsUnlimitedEntitlement bool `json:"isUnlimitedEntitlement"`
-	// Number of requests over the entitlement limit
+	// Number of additional usage requests made this period
+	// Internal: Overage is part of the SDK's internal API surface and is not intended for external use.
 	Overage float64 `json:"overage"`
-	// Whether overage is allowed when quota is exhausted
+	// Whether additional usage is allowed when quota is exhausted
+	// Internal: OverageAllowedWithExhaustedQuota is part of the SDK's internal API surface and is not intended for external use.
 	OverageAllowedWithExhaustedQuota bool `json:"overageAllowedWithExhaustedQuota"`
 	// Percentage of quota remaining (0 to 100)
+	// Internal: RemainingPercentage is part of the SDK's internal API surface and is not intended for external use.
 	RemainingPercentage float64 `json:"remainingPercentage"`
 	// Date when the quota resets
+	// Internal: ResetDate is part of the SDK's internal API surface and is not intended for external use.
 	ResetDate *time.Time `json:"resetDate,omitempty"`
 	// Whether usage is still permitted after quota exhaustion
+	// Internal: UsageAllowedWithExhaustedQuota is part of the SDK's internal API surface and is not intended for external use.
 	UsageAllowedWithExhaustedQuota bool `json:"usageAllowedWithExhaustedQuota"`
 	// Number of requests already consumed
+	// Internal: UsedRequests is part of the SDK's internal API surface and is not intended for external use.
 	UsedRequests int64 `json:"usedRequests"`
+}
+
+// Schema for the `CanvasRegistryChangedCanvas` type.
+type CanvasRegistryChangedCanvas struct {
+	// Actions the agent or host may invoke
+	Actions []CanvasRegistryChangedCanvasAction `json:"actions,omitempty"`
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Short, single-sentence description shown to the agent in canvas catalogs.
+	Description string `json:"description"`
+	// Human-readable canvas name
+	DisplayName string `json:"displayName"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Owning extension display name, when available
+	ExtensionName *string `json:"extensionName,omitempty"`
+	// JSON Schema for canvas open input
+	InputSchema map[string]any `json:"inputSchema,omitempty"`
+}
+
+// Schema for the `CanvasRegistryChangedCanvasAction` type.
+type CanvasRegistryChangedCanvasAction struct {
+	// Action description
+	Description *string `json:"description,omitempty"`
+	// JSON Schema for action input
+	InputSchema map[string]any `json:"inputSchema,omitempty"`
+	// Action name
+	Name string `json:"name"`
 }
 
 // UI capability changes
 type CapabilitiesChangedUI struct {
+	// Whether canvas rendering is now supported
+	Canvases *bool `json:"canvases,omitempty"`
 	// Whether elicitation is now supported
 	Elicitation *bool `json:"elicitation,omitempty"`
+	// Whether MCP Apps (SEP-1865) UI passthrough is now supported
+	McpApps *bool `json:"mcpApps,omitempty"`
 }
 
 // Schema for the `CommandsChangedCommand` type.
@@ -1521,6 +1720,7 @@ type CompactionCompleteCompactionTokensUsed struct {
 	// Tokens written to prompt cache in the compaction LLM call
 	CacheWriteTokens *int64 `json:"cacheWriteTokens,omitempty"`
 	// Per-request cost and usage data from the CAPI copilot_usage response field
+	// Internal: CopilotUsage is part of the SDK's internal API surface and is not intended for external use.
 	CopilotUsage *CompactionCompleteCompactionTokensUsedCopilotUsage `json:"copilotUsage,omitempty"`
 	// Duration of the compaction LLM call in milliseconds
 	Duration *int64 `json:"duration,omitempty"`
@@ -1533,6 +1733,7 @@ type CompactionCompleteCompactionTokensUsed struct {
 }
 
 // Per-request cost and usage data from the CAPI copilot_usage response field
+// Internal: CompactionCompleteCompactionTokensUsedCopilotUsage is an internal SDK API and is not part of the public surface.
 type CompactionCompleteCompactionTokensUsedCopilotUsage struct {
 	// Itemized token usage breakdown
 	TokenDetails []CompactionCompleteCompactionTokensUsedCopilotUsageTokenDetail `json:"tokenDetails"`
@@ -1642,6 +1843,26 @@ type HookEndError struct {
 	Stack *string `json:"stack,omitempty"`
 }
 
+// Set when the underlying tools/call threw an error before returning a CallToolResult
+type McpAppToolCallCompleteError struct {
+	// Human-readable error message
+	Message string `json:"message"`
+}
+
+// The tool's `_meta.ui` block at the time of the call, so consumers can decide whether to forward the result to the model without re-listing tools.
+type McpAppToolCallCompleteToolMeta struct {
+	// Schema for the `McpAppToolCallCompleteToolMetaUI` type.
+	UI *McpAppToolCallCompleteToolMetaUI `json:"ui,omitempty"`
+}
+
+// Schema for the `McpAppToolCallCompleteToolMetaUI` type.
+type McpAppToolCallCompleteToolMetaUI struct {
+	// `ui://` URI declared by the tool's `_meta.ui.resourceUri`
+	ResourceURI *string `json:"resourceUri,omitempty"`
+	// Tool visibility per SEP-1865 (typically a subset of `["model","app"]`)
+	Visibility []string `json:"visibility,omitempty"`
+}
+
 // Static OAuth client configuration, if the server specifies one
 type McpOauthRequiredStaticClientConfig struct {
 	// OAuth client ID for the server
@@ -1658,10 +1879,16 @@ type McpServersLoadedServer struct {
 	Error *string `json:"error,omitempty"`
 	// Server name (config key)
 	Name string `json:"name"`
+	// Name of the plugin that supplied the effective MCP server config, only when source is plugin
+	PluginName *string `json:"pluginName,omitempty"`
+	// Version of the plugin that supplied the effective MCP server config, only when source is plugin
+	PluginVersion *string `json:"pluginVersion,omitempty"`
 	// Configuration source: user, workspace, plugin, or builtin
 	Source *McpServerSource `json:"source,omitempty"`
 	// Connection status: connected, failed, needs-auth, pending, disabled, or not_configured
 	Status McpServerStatus `json:"status"`
+	// Transport mechanism: stdio, http, sse (deprecated), or memory (in-process MCP server)
+	Transport *McpServerTransport `json:"transport,omitempty"`
 }
 
 // Derived user-facing permission prompt details for UI consumers
@@ -2225,6 +2452,7 @@ type ShutdownModelMetric struct {
 	// Token count details per type
 	TokenDetails map[string]ShutdownModelMetricTokenDetail `json:"tokenDetails,omitempty"`
 	// Accumulated nano-AI units cost for this model
+	// Experimental: TotalNanoAiu is part of an experimental API and may change or be removed.
 	TotalNanoAiu *float64 `json:"totalNanoAiu,omitempty"`
 	// Token usage breakdown
 	Usage ShutdownModelMetricUsage `json:"usage"`
@@ -2233,9 +2461,11 @@ type ShutdownModelMetric struct {
 // Request count and cost metrics
 type ShutdownModelMetricRequests struct {
 	// Cumulative cost multiplier for requests to this model
-	Cost float64 `json:"cost"`
+	// Experimental: Cost is part of an experimental API and may change or be removed.
+	Cost *float64 `json:"cost,omitempty"`
 	// Total number of API requests made to this model
-	Count int64 `json:"count"`
+	// Experimental: Count is part of an experimental API and may change or be removed.
+	Count *int64 `json:"count,omitempty"`
 }
 
 // Schema for the `ShutdownModelMetricTokenDetail` type.
@@ -2536,133 +2766,98 @@ type ToolExecutionCompleteResult struct {
 	Contents []ToolExecutionCompleteContent `json:"contents,omitempty"`
 	// Full detailed tool result for UI/timeline display, preserving complete content such as diffs. Falls back to content when absent.
 	DetailedContent *string `json:"detailedContent,omitempty"`
+	// MCP Apps UI resource content for rendering in a sandboxed iframe
+	UIResource *ToolExecutionCompleteUIResource `json:"uiResource,omitempty"`
 }
 
-// A user message attachment — a file, directory, code selection, blob, or GitHub reference
-type UserMessageAttachment interface {
-	userMessageAttachment()
-	Type() UserMessageAttachmentType
+// Tool definition metadata, present for MCP tools with MCP Apps support
+type ToolExecutionCompleteToolDescription struct {
+	// Tool description
+	Description *string `json:"description,omitempty"`
+	// MCP Apps metadata for UI resource association
+	Meta *ToolExecutionCompleteToolDescriptionMeta `json:"_meta,omitempty"`
+	// Tool name
+	Name string `json:"name"`
 }
 
-type RawUserMessageAttachment struct {
-	Discriminator UserMessageAttachmentType
-	Raw           json.RawMessage
+// MCP Apps metadata for UI resource association
+type ToolExecutionCompleteToolDescriptionMeta struct {
+	// Schema for the `ToolExecutionCompleteToolDescriptionMetaUI` type.
+	UI *ToolExecutionCompleteToolDescriptionMetaUI `json:"ui,omitempty"`
 }
 
-func (RawUserMessageAttachment) userMessageAttachment() {}
-func (r RawUserMessageAttachment) Type() UserMessageAttachmentType {
-	return r.Discriminator
+// Schema for the `ToolExecutionCompleteToolDescriptionMetaUI` type.
+type ToolExecutionCompleteToolDescriptionMetaUI struct {
+	// URI of the UI resource
+	ResourceURI *string `json:"resourceUri,omitempty"`
+	// Who can access this tool
+	Visibility []ToolExecutionCompleteToolDescriptionMetaUIVisibility `json:"visibility,omitempty"`
 }
 
-// Blob attachment with inline base64-encoded data
-type UserMessageAttachmentBlob struct {
-	// Base64-encoded content
-	Data string `json:"data"`
-	// User-facing display name for the attachment
-	DisplayName *string `json:"displayName,omitempty"`
-	// MIME type of the inline data
+// MCP Apps UI resource content for rendering in a sandboxed iframe
+type ToolExecutionCompleteUIResource struct {
+	// Base64-encoded HTML content
+	Blob *string `json:"blob,omitempty"`
+	// Resource-level UI metadata (CSP, permissions, visual preferences)
+	Meta *ToolExecutionCompleteUIResourceMeta `json:"_meta,omitempty"`
+	// MIME type of the content
 	MIMEType string `json:"mimeType"`
+	// HTML content as a string
+	Text *string `json:"text,omitempty"`
+	// The ui:// URI of the resource
+	URI string `json:"uri"`
 }
 
-func (UserMessageAttachmentBlob) userMessageAttachment() {}
-func (UserMessageAttachmentBlob) Type() UserMessageAttachmentType {
-	return UserMessageAttachmentTypeBlob
+// Resource-level UI metadata (CSP, permissions, visual preferences)
+type ToolExecutionCompleteUIResourceMeta struct {
+	// Schema for the `ToolExecutionCompleteUIResourceMetaUI` type.
+	UI *ToolExecutionCompleteUIResourceMetaUI `json:"ui,omitempty"`
 }
 
-// Directory attachment
-type UserMessageAttachmentDirectory struct {
-	// User-facing display name for the attachment
-	DisplayName string `json:"displayName"`
-	// Absolute directory path
-	Path string `json:"path"`
+// Schema for the `ToolExecutionCompleteUIResourceMetaUI` type.
+type ToolExecutionCompleteUIResourceMetaUI struct {
+	// Schema for the `ToolExecutionCompleteUIResourceMetaUICsp` type.
+	Csp    *ToolExecutionCompleteUIResourceMetaUICsp `json:"csp,omitempty"`
+	Domain *string                                   `json:"domain,omitempty"`
+	// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissions` type.
+	Permissions   *ToolExecutionCompleteUIResourceMetaUIPermissions `json:"permissions,omitempty"`
+	PrefersBorder *bool                                             `json:"prefersBorder,omitempty"`
 }
 
-func (UserMessageAttachmentDirectory) userMessageAttachment() {}
-func (UserMessageAttachmentDirectory) Type() UserMessageAttachmentType {
-	return UserMessageAttachmentTypeDirectory
+// Schema for the `ToolExecutionCompleteUIResourceMetaUICsp` type.
+type ToolExecutionCompleteUIResourceMetaUICsp struct {
+	BaseURIDomains  []string `json:"baseUriDomains,omitempty"`
+	ConnectDomains  []string `json:"connectDomains,omitempty"`
+	FrameDomains    []string `json:"frameDomains,omitempty"`
+	ResourceDomains []string `json:"resourceDomains,omitempty"`
 }
 
-// File attachment
-type UserMessageAttachmentFile struct {
-	// User-facing display name for the attachment
-	DisplayName string `json:"displayName"`
-	// Optional line range to scope the attachment to a specific section of the file
-	LineRange *UserMessageAttachmentFileLineRange `json:"lineRange,omitempty"`
-	// Absolute file path
-	Path string `json:"path"`
+// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissions` type.
+type ToolExecutionCompleteUIResourceMetaUIPermissions struct {
+	// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsCamera` type.
+	Camera *ToolExecutionCompleteUIResourceMetaUIPermissionsCamera `json:"camera,omitempty"`
+	// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsClipboardWrite` type.
+	ClipboardWrite *ToolExecutionCompleteUIResourceMetaUIPermissionsClipboardWrite `json:"clipboardWrite,omitempty"`
+	// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsGeolocation` type.
+	Geolocation *ToolExecutionCompleteUIResourceMetaUIPermissionsGeolocation `json:"geolocation,omitempty"`
+	// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsMicrophone` type.
+	Microphone *ToolExecutionCompleteUIResourceMetaUIPermissionsMicrophone `json:"microphone,omitempty"`
 }
 
-func (UserMessageAttachmentFile) userMessageAttachment() {}
-func (UserMessageAttachmentFile) Type() UserMessageAttachmentType {
-	return UserMessageAttachmentTypeFile
+// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsCamera` type.
+type ToolExecutionCompleteUIResourceMetaUIPermissionsCamera struct {
 }
 
-// GitHub issue, pull request, or discussion reference
-type UserMessageAttachmentGithubReference struct {
-	// Issue, pull request, or discussion number
-	Number int64 `json:"number"`
-	// Type of GitHub reference
-	ReferenceType UserMessageAttachmentGithubReferenceType `json:"referenceType"`
-	// Current state of the referenced item (e.g., open, closed, merged)
-	State string `json:"state"`
-	// Title of the referenced item
-	Title string `json:"title"`
-	// URL to the referenced item on GitHub
-	URL string `json:"url"`
+// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsClipboardWrite` type.
+type ToolExecutionCompleteUIResourceMetaUIPermissionsClipboardWrite struct {
 }
 
-func (UserMessageAttachmentGithubReference) userMessageAttachment() {}
-func (UserMessageAttachmentGithubReference) Type() UserMessageAttachmentType {
-	return UserMessageAttachmentTypeGithubReference
+// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsGeolocation` type.
+type ToolExecutionCompleteUIResourceMetaUIPermissionsGeolocation struct {
 }
 
-// Code selection attachment from an editor
-type UserMessageAttachmentSelection struct {
-	// User-facing display name for the selection
-	DisplayName string `json:"displayName"`
-	// Absolute path to the file containing the selection
-	FilePath string `json:"filePath"`
-	// Position range of the selection within the file
-	Selection UserMessageAttachmentSelectionDetails `json:"selection"`
-	// The selected text content
-	Text string `json:"text"`
-}
-
-func (UserMessageAttachmentSelection) userMessageAttachment() {}
-func (UserMessageAttachmentSelection) Type() UserMessageAttachmentType {
-	return UserMessageAttachmentTypeSelection
-}
-
-// Optional line range to scope the attachment to a specific section of the file
-type UserMessageAttachmentFileLineRange struct {
-	// End line number (1-based, inclusive)
-	End int64 `json:"end"`
-	// Start line number (1-based)
-	Start int64 `json:"start"`
-}
-
-// Position range of the selection within the file
-type UserMessageAttachmentSelectionDetails struct {
-	// End position of the selection
-	End UserMessageAttachmentSelectionDetailsEnd `json:"end"`
-	// Start position of the selection
-	Start UserMessageAttachmentSelectionDetailsStart `json:"start"`
-}
-
-// End position of the selection
-type UserMessageAttachmentSelectionDetailsEnd struct {
-	// End character offset within the line (0-based)
-	Character int64 `json:"character"`
-	// End line number (0-based)
-	Line int64 `json:"line"`
-}
-
-// Start position of the selection
-type UserMessageAttachmentSelectionDetailsStart struct {
-	// Start character offset within the line (0-based)
-	Character int64 `json:"character"`
-	// Start line number (0-based)
-	Line int64 `json:"line"`
+// Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsMicrophone` type.
+type ToolExecutionCompleteUIResourceMetaUIPermissionsMicrophone struct {
 }
 
 // Working directory and git context at session start
@@ -2719,6 +2914,42 @@ const (
 	AutoModeSwitchResponseYes AutoModeSwitchResponse = "yes"
 	// Switch models now and keep using the replacement automatically.
 	AutoModeSwitchResponseYesAlways AutoModeSwitchResponse = "yes_always"
+)
+
+// The type of operation performed on the autopilot objective state file
+type AutopilotObjectiveChangedOperation string
+
+const (
+	// Autopilot objective state file was created for a new objective.
+	AutopilotObjectiveChangedOperationCreate AutopilotObjectiveChangedOperation = "create"
+	// Autopilot objective state file was deleted or cleared.
+	AutopilotObjectiveChangedOperationDelete AutopilotObjectiveChangedOperation = "delete"
+	// Autopilot objective state file was updated for an existing objective.
+	AutopilotObjectiveChangedOperationUpdate AutopilotObjectiveChangedOperation = "update"
+)
+
+// Current autopilot objective status, if one exists
+type AutopilotObjectiveChangedStatus string
+
+const (
+	// Objective is active and can drive autopilot continuations.
+	AutopilotObjectiveChangedStatusActive AutopilotObjectiveChangedStatus = "active"
+	// Legacy objective state indicating the previous continuation cap was reached.
+	AutopilotObjectiveChangedStatusCapReached AutopilotObjectiveChangedStatus = "cap_reached"
+	// Objective was completed by the agent.
+	AutopilotObjectiveChangedStatusCompleted AutopilotObjectiveChangedStatus = "completed"
+	// Objective is paused and will not drive autopilot continuations.
+	AutopilotObjectiveChangedStatusPaused AutopilotObjectiveChangedStatus = "paused"
+)
+
+// Runtime-controlled routing state for the instance. "ready" when the provider connection is live; "stale" when the provider has gone away and the instance is awaiting rebinding.
+type CanvasOpenedAvailability string
+
+const (
+	// Provider connection is live; actions can be invoked.
+	CanvasOpenedAvailabilityReady CanvasOpenedAvailability = "ready"
+	// Provider has gone away; the instance is awaiting rebinding.
+	CanvasOpenedAvailabilityStale CanvasOpenedAvailability = "stale"
 )
 
 // The user action: "accept" (submitted form), "decline" (explicitly refused), or "cancel" (dismissed)
@@ -2803,6 +3034,20 @@ type McpOauthRequiredStaticClientConfigGrantType string
 
 const (
 	McpOauthRequiredStaticClientConfigGrantTypeClientCredentials McpOauthRequiredStaticClientConfigGrantType = "client_credentials"
+)
+
+// Transport mechanism: stdio, http, sse (deprecated), or memory (in-process MCP server)
+type McpServerTransport string
+
+const (
+	// Server communicates over streamable HTTP.
+	McpServerTransportHTTP McpServerTransport = "http"
+	// Server is backed by an in-memory runtime implementation.
+	McpServerTransportMemory McpServerTransport = "memory"
+	// Server communicates over Server-Sent Events (deprecated).
+	McpServerTransportSse McpServerTransport = "sse"
+	// Server communicates over stdio with a local child process.
+	McpServerTransportStdio McpServerTransport = "stdio"
 )
 
 // Where the failed model call originated
@@ -2909,6 +3154,18 @@ const (
 	PlanChangedOperationUpdate PlanChangedOperation = "update"
 )
 
+// What triggered the skill invocation: `user-invoked` (explicit user action, such as via a slash command or UI affordance), `agent-invoked` (agent requested the skill), or `context-load` (loaded as part of another context, such as preloading skills configured on a custom agent or subagent)
+type SkillInvokedTrigger string
+
+const (
+	// Skill invocation requested by the agent.
+	SkillInvokedTriggerAgentInvoked SkillInvokedTrigger = "agent-invoked"
+	// Skill content loaded as part of another context, such as a configured custom agent or subagent.
+	SkillInvokedTriggerContextLoad SkillInvokedTrigger = "context-load"
+	// Skill invocation requested explicitly by the user, such as via a slash command or UI affordance.
+	SkillInvokedTriggerUserInvoked SkillInvokedTrigger = "user-invoked"
+)
+
 // Message role: "system" for system prompts, "developer" for developer-injected instructions
 type SystemMessageRole string
 
@@ -2963,6 +3220,16 @@ const (
 	ToolExecutionCompleteContentTypeText         ToolExecutionCompleteContentType = "text"
 )
 
+// Allowed values for the `ToolExecutionCompleteToolDescriptionMetaUIVisibility` enumeration.
+type ToolExecutionCompleteToolDescriptionMetaUIVisibility string
+
+const (
+	// Tool is callable by the MCP App view (iframe) via session.mcp.apps.callTool
+	ToolExecutionCompleteToolDescriptionMetaUIVisibilityApp ToolExecutionCompleteToolDescriptionMetaUIVisibility = "app"
+	// Tool is callable by the model (LLM tool surface)
+	ToolExecutionCompleteToolDescriptionMetaUIVisibilityModel ToolExecutionCompleteToolDescriptionMetaUIVisibility = "model"
+)
+
 // The agent mode that was active when this message was sent
 type UserMessageAgentMode string
 
@@ -2975,29 +3242,6 @@ const (
 	UserMessageAgentModePlan UserMessageAgentMode = "plan"
 	// The agent is in shell-focused UI mode.
 	UserMessageAgentModeShell UserMessageAgentMode = "shell"
-)
-
-// Type of GitHub reference
-type UserMessageAttachmentGithubReferenceType string
-
-const (
-	// GitHub discussion reference.
-	UserMessageAttachmentGithubReferenceTypeDiscussion UserMessageAttachmentGithubReferenceType = "discussion"
-	// GitHub issue reference.
-	UserMessageAttachmentGithubReferenceTypeIssue UserMessageAttachmentGithubReferenceType = "issue"
-	// GitHub pull request reference.
-	UserMessageAttachmentGithubReferenceTypePr UserMessageAttachmentGithubReferenceType = "pr"
-)
-
-// Type discriminator for UserMessageAttachment.
-type UserMessageAttachmentType string
-
-const (
-	UserMessageAttachmentTypeBlob            UserMessageAttachmentType = "blob"
-	UserMessageAttachmentTypeDirectory       UserMessageAttachmentType = "directory"
-	UserMessageAttachmentTypeFile            UserMessageAttachmentType = "file"
-	UserMessageAttachmentTypeGithubReference UserMessageAttachmentType = "github_reference"
-	UserMessageAttachmentTypeSelection       UserMessageAttachmentType = "selection"
 )
 
 // Hosting platform type of the repository (github or ado)
@@ -3022,17 +3266,6 @@ const (
 
 // Type aliases for convenience.
 type (
-	Attachment               = UserMessageAttachment
-	AttachmentType           = UserMessageAttachmentType
 	PermissionRequestCommand = PermissionRequestShellCommand
 	PossibleURL              = PermissionRequestShellPossibleURL
-)
-
-// Constant aliases for convenience.
-const (
-	AttachmentTypeBlob            = UserMessageAttachmentTypeBlob
-	AttachmentTypeDirectory       = UserMessageAttachmentTypeDirectory
-	AttachmentTypeFile            = UserMessageAttachmentTypeFile
-	AttachmentTypeGithubReference = UserMessageAttachmentTypeGithubReference
-	AttachmentTypeSelection       = UserMessageAttachmentTypeSelection
 )
