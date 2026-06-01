@@ -435,12 +435,17 @@ public class SessionConfigE2ETests(E2ETestFixture fixture, ITestOutputHelper out
             AvailableTools = ["view"],
         });
 
-        await session2.SendAndWaitAsync(new MessageOptions { Prompt = "What is 1+1?" });
-
-        var exchange = Assert.Single(await Ctx.GetExchangesAsync());
-        Assert.Equal(["view"], GetToolNames(exchange));
-
-        await session2.DisposeAsync();
+        try
+        {
+            var exchange = Assert.Single(await SendAndWaitForExchangesAsync(
+                session2,
+                new MessageOptions { Prompt = "What is 1+1?" }));
+            Assert.Equal(["view"], GetToolNames(exchange));
+        }
+        finally
+        {
+            await session2.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -487,7 +492,7 @@ public class SessionConfigE2ETests(E2ETestFixture fixture, ITestOutputHelper out
             Prompt = "What color is this pixel? Reply in one word.",
             Attachments =
             [
-                new UserMessageAttachmentBlob
+                new AttachmentBlob
                 {
                     Data = pngBase64,
                     MimeType = "image/png",
@@ -512,7 +517,7 @@ public class SessionConfigE2ETests(E2ETestFixture fixture, ITestOutputHelper out
             Prompt = "Summarize the attached file",
             Attachments =
             [
-                new UserMessageAttachmentFile
+                new AttachmentFile
                 {
                     Path = attachedPath,
                     DisplayName = "attached.txt",

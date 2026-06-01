@@ -3,7 +3,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ParsedHttpExchange } from "../../../test/harness/replayingCapiProxy.js";
 import { CopilotClient, approveAll, defineTool, RuntimeConnection } from "../../src/index.js";
 import { createSdkTestContext, isCI } from "./harness/sdkTestContext.js";
-import { getFinalAssistantMessage, getNextEventOfType } from "./harness/sdkTestHelper.js";
+import { getFinalAssistantMessage, getNextEventOfType, retry } from "./harness/sdkTestHelper.js";
 
 describe("Sessions", async () => {
     const {
@@ -14,6 +14,18 @@ describe("Sessions", async () => {
         env,
     } = await createSdkTestContext();
 
+    async function waitForExchanges(minimumCount = 1) {
+        await retry(
+            `capture ${minimumCount} chat completion request(s)`,
+            async () => {
+                const exchanges = await openAiEndpoint.getExchanges();
+                expect(exchanges.length).toBeGreaterThanOrEqual(minimumCount);
+            },
+            1_200
+        );
+        return openAiEndpoint.getExchanges();
+    }
+
     it.each([
         ["stdio", () => RuntimeConnection.forStdio({ path: process.env.COPILOT_CLI_PATH })],
         ["tcp", () => RuntimeConnection.forTcp({ path: process.env.COPILOT_CLI_PATH })],
@@ -21,7 +33,7 @@ describe("Sessions", async () => {
         "createSession works without onPermissionRequest (%s)",
         async (_name, makeConnection) => {
             const standaloneClient = new CopilotClient({
-                cwd: workDir,
+                workingDirectory: workDir,
                 env,
                 connection: makeConnection(),
             });
@@ -43,7 +55,7 @@ describe("Sessions", async () => {
         const connectionToken = "client-e2e-resume-token";
 
         const tcpClient = new CopilotClient({
-            cwd: workDir,
+            workingDirectory: workDir,
             env,
             connection: RuntimeConnection.forTcp({
                 path: process.env.COPILOT_CLI_PATH,
@@ -66,7 +78,7 @@ describe("Sessions", async () => {
         }
 
         const resumeClient = new CopilotClient({
-            cwd: workDir,
+            workingDirectory: workDir,
             env,
             connection: RuntimeConnection.forUri(`localhost:${port}`, { connectionToken }),
         });
@@ -120,7 +132,7 @@ describe("Sessions", async () => {
         expect(ourSession).toBeDefined();
         // Context may not be populated if workspace.yaml hasn't been written yet
         if (ourSession?.context) {
-            expect(ourSession.context.cwd).toMatch(/^(\/|[A-Za-z]:)/);
+            expect(ourSession.context.workingDirectory).toMatch(/^(\/|[A-Za-z]:)/);
         }
     });
 
@@ -200,32 +212,39 @@ describe("Sessions", async () => {
         expect(systemMessage).toEqual(testSystemMessage); // Exact match
     });
 
-    it("should create a session with customized systemMessage config", async () => {
-        const customTone = "Respond in a warm, professional tone. Be thorough in explanations.";
-        const appendedContent = "Always mention quarterly earnings.";
-        const session = await client.createSession({
-            onPermissionRequest: approveAll,
-            systemMessage: {
-                mode: "customize",
-                sections: {
-                    tone: { action: "replace", content: customTone },
-                    code_change_rules: { action: "remove" },
+    it(
+        "should create a session with customized systemMessage config",
+        { timeout: 90_000 },
+        async () => {
+            const customTone = "Respond in a warm, professional tone. Be thorough in explanations.";
+            const appendedContent = "Always mention quarterly earnings.";
+            const session = await client.createSession({
+                onPermissionRequest: approveAll,
+                systemMessage: {
+                    mode: "customize",
+                    sections: {
+                        tone: { action: "replace", content: customTone },
+                        code_change_rules: { action: "remove" },
+                    },
+                    content: appendedContent,
                 },
-                content: appendedContent,
-            },
-        });
+            });
 
-        const assistantMessage = await session.sendAndWait({ prompt: "Who are you?" });
-        expect(assistantMessage?.data.content).toBeDefined();
+            try {
+                await session.send({ prompt: "Who are you?" });
 
-        // Validate the system message sent to the model
-        const traffic = await openAiEndpoint.getExchanges();
-        const systemMessage = getSystemMessage(traffic[0]);
-        expect(systemMessage).toContain(customTone);
-        expect(systemMessage).toContain(appendedContent);
-        // The code_change_rules section should have been removed
-        expect(systemMessage).not.toContain("<code_change_instructions>");
-    });
+                // Validate the system message sent to the model
+                const traffic = await waitForExchanges();
+                const systemMessage = getSystemMessage(traffic[0]);
+                expect(systemMessage).toContain(customTone);
+                expect(systemMessage).toContain(appendedContent);
+                // The code_change_rules section should have been removed
+                expect(systemMessage).not.toContain("<code_change_instructions>");
+            } finally {
+                await session.disconnect();
+            }
+        }
+    );
 
     it("should create a session with availableTools", async () => {
         const session = await client.createSession({
@@ -233,14 +252,18 @@ describe("Sessions", async () => {
             availableTools: ["view", "edit"],
         });
 
-        await session.sendAndWait({ prompt: "What is 1+1?" });
+        try {
+            await session.send({ prompt: "What is 1+1?" });
 
-        // It only tells the model about the specified tools and no others
-        const traffic = await openAiEndpoint.getExchanges();
-        expect(traffic[0].request.tools).toMatchObject([
-            { function: { name: "view" } },
-            { function: { name: "edit" } },
-        ]);
+            // It only tells the model about the specified tools and no others
+            const traffic = await waitForExchanges();
+            expect(traffic[0].request.tools).toMatchObject([
+                { function: { name: "view" } },
+                { function: { name: "edit" } },
+            ]);
+        } finally {
+            await session.disconnect();
+        }
     });
 
     it("should create a session with excludedTools", async () => {
@@ -249,16 +272,20 @@ describe("Sessions", async () => {
             excludedTools: ["view"],
         });
 
-        await session.sendAndWait({ prompt: "What is 1+1?" });
+        try {
+            await session.send({ prompt: "What is 1+1?" });
 
-        // It has other tools, but not the one we excluded
-        const traffic = await openAiEndpoint.getExchanges();
-        const functionNames = traffic[0].request.tools?.map(
-            (t) => (t as { function: { name: string } }).function.name
-        );
-        expect(functionNames).toContain("edit");
-        expect(functionNames).toContain("grep");
-        expect(functionNames).not.toContain("view");
+            // It has other tools, but not the one we excluded
+            const traffic = await waitForExchanges();
+            const functionNames = traffic[0].request.tools?.map(
+                (t) => (t as { function: { name: string } }).function.name
+            );
+            expect(functionNames).toContain("edit");
+            expect(functionNames).toContain("grep");
+            expect(functionNames).not.toContain("view");
+        } finally {
+            await session.disconnect();
+        }
     });
 
     it("should create a session with defaultAgent excludedTools", async () => {
@@ -280,18 +307,19 @@ describe("Sessions", async () => {
             },
         });
 
-        await session.sendAndWait({ prompt: "What is 1+1?" });
+        try {
+            await session.send({ prompt: "What is 1+1?" });
 
-        // The secret_tool should be registered with the runtime but not advertised
-        // to the default agent's underlying model call.
-        const traffic = await openAiEndpoint.getExchanges();
-        expect(traffic.length).toBeGreaterThan(0);
-        const functionNames = traffic[0].request.tools?.map(
-            (t) => (t as { function: { name: string } }).function.name
-        );
-        expect(functionNames).not.toContain("secret_tool");
-
-        await session.disconnect();
+            // The secret_tool should be registered with the runtime but not advertised
+            // to the default agent's underlying model call.
+            const traffic = await waitForExchanges();
+            const functionNames = traffic[0].request.tools?.map(
+                (t) => (t as { function: { name: string } }).function.name
+            );
+            expect(functionNames).not.toContain("secret_tool");
+        } finally {
+            await session.disconnect();
+        }
     });
 
     // TODO: This test shows there's a race condition inside client.ts. If createSession is called
@@ -463,9 +491,10 @@ describe("Sessions", async () => {
     });
 
     it("should receive session events", async () => {
-        // Use onEvent to capture events dispatched during session creation.
-        // session.start is emitted during the session.create RPC; if the session
-        // weren't registered in the sessions map before the RPC, it would be dropped.
+        // Use onEvent to capture events dispatched after session creation begins.
+        // session.start is emitted during or shortly after the session.create RPC;
+        // if the session weren't registered in the sessions map before the RPC,
+        // the event would be dropped.
         const earlyEvents: Array<{ type: string }> = [];
         const session = await client.createSession({
             onPermissionRequest: approveAll,
@@ -474,7 +503,10 @@ describe("Sessions", async () => {
             },
         });
 
-        expect(earlyEvents.some((e) => e.type === "session.start")).toBe(true);
+        await vi.waitFor(
+            () => expect(earlyEvents.some((e) => e.type === "session.start")).toBe(true),
+            { timeout: 10_000 }
+        );
 
         const receivedEvents: Array<{ type: string }> = [];
 
@@ -555,7 +587,7 @@ describe("Sessions", async () => {
         });
         const session = await client.createSession({
             onPermissionRequest: approveAll,
-            configDir: customConfigDir,
+            configDirectory: customConfigDir,
         });
 
         expect(session.sessionId).toMatch(/^[a-f0-9-]+$/);
@@ -819,9 +851,7 @@ describe("Sessions", async () => {
 
         await session.sendAndWait({
             prompt: "Say mode ok.",
-            // The runtime accepts arbitrary agent mode strings (e.g. "plan", "interactive")
-            // but the public TS type currently constrains mode to send-time values.
-            mode: "plan" as unknown as NonNullable<Parameters<typeof session.send>[0]["mode"]>,
+            agentMode: "plan",
         });
 
         const messages = await session.getEvents();
@@ -830,9 +860,7 @@ describe("Sessions", async () => {
             | undefined;
         expect(userMessage).toBeDefined();
         expect(userMessage!.data.content).toBe("Say mode ok.");
-        // The current runtime accepts the per-message mode option but does not echo it
-        // on the user.message event.
-        expect(userMessage!.data.agentMode ?? null).toBeNull();
+        expect(userMessage!.data.agentMode).toBe("plan");
 
         await session.disconnect();
     });

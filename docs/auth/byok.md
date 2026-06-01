@@ -170,9 +170,8 @@ Console.WriteLine(response?.Data.Content);
 <summary><strong>Java</strong></summary>
 
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.events.*;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 
 var client = new CopilotClient();
 client.start().get();
@@ -206,15 +205,17 @@ client.stop().get();
 | `baseUrl` / `base_url` | string | **Required.** API endpoint URL |
 | `apiKey` / `api_key` | string | API key (optional for local providers like Ollama) |
 | `bearerToken` / `bearer_token` | string | Bearer token auth (takes precedence over apiKey) |
-| `wireApi` / `wire_api` | `"completions"` \| `"responses"` | API format (default: `"completions"`) |
+| `wireApi` / `wire_api` | `"completions"` \| `"responses"` | Select `"completions"` for broad model compatibility (the Chat Completions API); select `"responses"` for multi-turn state management, tool namespacing, and reasoning support (the Responses API). Anthropic models always use the Messages API regardless of this setting. |
 | `azure.apiVersion` / `azure.api_version` | string | Azure API version (default: `"2024-10-21"`) |
 
 ### Wire API format
 
 The `wireApi` setting determines which OpenAI API format to use:
 
-* **`"completions"`** (default) - Chat Completions API (`/chat/completions`). Use for most models.
-* **`"responses"`** - Responses API. Use for GPT-5 series models that support the newer responses format.
+* **`"completions"`** (default) - Chat Completions API (`/chat/completions`) for broad model compatibility.
+* **`"responses"`** - Responses API for multi-turn state management, tool namespacing, and reasoning support.
+
+Anthropic models always use the Anthropic Messages API regardless of this setting.
 
 ### Type-specific notes
 
@@ -372,8 +373,8 @@ const client = new CopilotClient({
 from copilot import CopilotClient
 from copilot.client import ModelInfo, ModelCapabilities, ModelSupports, ModelLimits
 
-client = CopilotClient({
-    "on_list_models": lambda: [
+client = CopilotClient(
+    on_list_models=lambda: [
         ModelInfo(
             id="my-custom-model",
             name="My Custom Model",
@@ -383,7 +384,7 @@ client = CopilotClient({
             ),
         )
     ],
-})
+)
 ```
 
 </details>
@@ -450,8 +451,8 @@ var client = new CopilotClient(new CopilotClientOptions
 <summary><strong>Java</strong></summary>
 
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
