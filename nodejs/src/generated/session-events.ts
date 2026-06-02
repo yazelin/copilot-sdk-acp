@@ -15,10 +15,12 @@ export type SessionEvent =
   | TitleChangedEvent
   | ScheduleCreatedEvent
   | ScheduleCancelledEvent
+  | AutopilotObjectiveChangedEvent
   | InfoEvent
   | WarningEvent
   | ModelChangeEvent
   | ModeChangedEvent
+  | PermissionsChangedEvent
   | PlanChangedEvent
   | WorkspaceFileChangedEvent
   | HandoffEvent
@@ -57,6 +59,7 @@ export type SessionEvent =
   | SubagentDeselectedEvent
   | HookStartEvent
   | HookEndEvent
+  | HookProgressEvent
   | SystemMessageEvent
   | SystemNotificationEvent
   | PermissionRequestedEvent
@@ -87,7 +90,11 @@ export type SessionEvent =
   | CustomAgentsUpdatedEvent
   | McpServersLoadedEvent
   | McpServerStatusChangedEvent
-  | ExtensionsLoadedEvent;
+  | ExtensionsLoadedEvent
+  | CanvasOpenedEvent
+  | CanvasRegistryChangedEvent
+  | ExtensionsAttachmentsPushedEvent
+  | McpAppToolCallCompleteEvent;
 /**
  * Hosting platform type of the repository (github or ado)
  */
@@ -96,6 +103,14 @@ export type WorkingDirectoryContextHostType =
   | "github"
   /** Repository is hosted on Azure DevOps. */
   | "ado";
+/**
+ * Allowed values for the `ContextTier` enumeration.
+ */
+export type ContextTier =
+  /** Default context tier with standard context window size. */
+  | "default"
+  /** Extended context tier with a larger context window. */
+  | "long_context";
 /**
  * Reasoning summary mode used for model calls, if applicable (e.g. "none", "concise", "detailed")
  */
@@ -106,6 +121,28 @@ export type ReasoningSummary =
   | "concise"
   /** Request a detailed summary of the model's reasoning. */
   | "detailed";
+/**
+ * The type of operation performed on the autopilot objective state file
+ */
+export type AutopilotObjectiveChangedOperation =
+  /** Autopilot objective state file was created for a new objective. */
+  | "create"
+  /** Autopilot objective state file was updated for an existing objective. */
+  | "update"
+  /** Autopilot objective state file was deleted or cleared. */
+  | "delete";
+/**
+ * Current autopilot objective status, if one exists
+ */
+export type AutopilotObjectiveChangedStatus =
+  /** Objective is active and can drive autopilot continuations. */
+  | "active"
+  /** Objective is paused and will not drive autopilot continuations. */
+  | "paused"
+  /** Legacy objective state indicating the previous continuation cap was reached. */
+  | "cap_reached"
+  /** Objective was completed by the agent. */
+  | "completed";
 /**
  * The session mode the agent is operating in
  */
@@ -163,18 +200,19 @@ export type UserMessageAgentMode =
   /** The agent is in shell-focused UI mode. */
   | "shell";
 /**
- * A user message attachment — a file, directory, code selection, blob, or GitHub reference
+ * A user message attachment — a file, directory, code selection, blob, GitHub reference, or extension-supplied context payload
  */
-export type UserMessageAttachment =
-  | UserMessageAttachmentFile
-  | UserMessageAttachmentDirectory
-  | UserMessageAttachmentSelection
-  | UserMessageAttachmentGithubReference
-  | UserMessageAttachmentBlob;
+export type Attachment =
+  | AttachmentFile
+  | AttachmentDirectory
+  | AttachmentSelection
+  | AttachmentGitHubReference
+  | AttachmentBlob
+  | AttachmentExtensionContext;
 /**
  * Type of GitHub reference
  */
-export type UserMessageAttachmentGithubReferenceType =
+export type AttachmentGitHubReferenceType =
   /** GitHub issue reference. */
   | "issue"
   /** GitHub pull request reference. */
@@ -243,6 +281,24 @@ export type ToolExecutionCompleteContentResourceLinkIconTheme =
  * The embedded resource contents, either text or base64-encoded binary
  */
 export type ToolExecutionCompleteContentResourceDetails = EmbeddedTextResourceContents | EmbeddedBlobResourceContents;
+/**
+ * Allowed values for the `ToolExecutionCompleteToolDescriptionMetaUIVisibility` enumeration.
+ */
+export type ToolExecutionCompleteToolDescriptionMetaUIVisibility =
+  /** Tool is callable by the model (LLM tool surface) */
+  | "model"
+  /** Tool is callable by the MCP App view (iframe) via session.mcp.apps.callTool */
+  | "app";
+/**
+ * What triggered the skill invocation: `user-invoked` (explicit user action, such as via a slash command or UI affordance), `agent-invoked` (agent requested the skill), or `context-load` (loaded as part of another context, such as preloading skills configured on a custom agent or subagent)
+ */
+export type SkillInvokedTrigger =
+  /** Skill invocation requested explicitly by the user, such as via a slash command or UI affordance. */
+  | "user-invoked"
+  /** Skill invocation requested by the agent. */
+  | "agent-invoked"
+  /** Skill content loaded as part of another context, such as a configured custom agent or subagent. */
+  | "context-load";
 /**
  * Message role: "system" for system prompts, "developer" for developer-injected instructions
  */
@@ -452,6 +508,18 @@ export type McpServerStatus =
   /** The server is not configured for this session. */
   | "not_configured";
 /**
+ * Transport mechanism: stdio, http, sse (deprecated), or memory (in-process MCP server)
+ */
+export type McpServerTransport =
+  /** Server communicates over stdio with a local child process. */
+  | "stdio"
+  /** Server communicates over streamable HTTP. */
+  | "http"
+  /** Server communicates over Server-Sent Events (deprecated). */
+  | "sse"
+  /** Server is backed by an in-memory runtime implementation. */
+  | "memory";
+/**
  * Discovery source
  */
 export type ExtensionsLoadedExtensionSource =
@@ -471,6 +539,14 @@ export type ExtensionsLoadedExtensionStatus =
   | "failed"
   /** The extension process is starting. */
   | "starting";
+/**
+ * Runtime-controlled routing state for the instance. "ready" when the provider connection is live; "stale" when the provider has gone away and the instance is awaiting rebinding.
+ */
+export type CanvasOpenedAvailability =
+  /** Provider connection is live; actions can be invoked. */
+  | "ready"
+  /** Provider has gone away; the instance is awaiting rebinding. */
+  | "stale";
 
 /**
  * Session event "session.start". Session initialization metadata including context and configuration
@@ -511,6 +587,10 @@ export interface StartData {
    */
   alreadyInUse?: boolean;
   context?: WorkingDirectoryContext;
+  /**
+   * Context tier selected at session creation time for models with tiered context pricing; null when no tier is selected (e.g., non-tiered model)
+   */
+  contextTier?: ContextTier | null;
   /**
    * Version string of the Copilot application
    */
@@ -622,6 +702,10 @@ export interface ResumeData {
    */
   alreadyInUse?: boolean;
   context?: WorkingDirectoryContext;
+  /**
+   * Context tier currently selected at resume time; null when no tier is active
+   */
+  contextTier?: ContextTier | null;
   /**
    * When true, tool calls and permission requests left in flight by the previous session lifetime remain pending after resume and the agentic loop awaits their results. User sends are queued behind the pending work until all such requests reach a terminal state. When false (the default), any such tool calls and permission requests are immediately marked as interrupted on resume.
    */
@@ -745,6 +829,10 @@ export interface ErrorData {
    * GitHub request tracing ID (x-github-request-id header) for correlating with server-side logs
    */
   providerCallId?: string;
+  /**
+   * Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
+   */
+  serviceRequestId?: string;
   /**
    * Error stack trace, when available
    */
@@ -931,6 +1019,47 @@ export interface ScheduleCancelledData {
   id: number;
 }
 /**
+ * Session event "session.autopilot_objective_changed". Autopilot objective state file operation details indicating what changed
+ */
+export interface AutopilotObjectiveChangedEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: AutopilotObjectiveChangedData;
+  /**
+   * When true, the event is transient and not persisted to the session event log on disk
+   */
+  ephemeral?: boolean;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "session.autopilot_objective_changed".
+   */
+  type: "session.autopilot_objective_changed";
+}
+/**
+ * Autopilot objective state file operation details indicating what changed
+ */
+export interface AutopilotObjectiveChangedData {
+  /**
+   * Current autopilot objective id, if one exists
+   */
+  id?: number;
+  operation: AutopilotObjectiveChangedOperation;
+  status?: AutopilotObjectiveChangedStatus;
+}
+/**
  * Session event "session.info". Informational message for timeline display with categorization
  */
 export interface InfoEvent {
@@ -1067,6 +1196,10 @@ export interface ModelChangeData {
    */
   cause?: string;
   /**
+   * Context tier after the model change; null explicitly clears a previously selected tier
+   */
+  contextTier?: ContextTier | null;
+  /**
    * Newly selected model identifier
    */
   newModel: string;
@@ -1121,6 +1254,49 @@ export interface ModeChangedEvent {
 export interface ModeChangedData {
   newMode: SessionMode;
   previousMode: SessionMode;
+}
+/**
+ * Session event "session.permissions_changed". Permissions change details carrying the aggregate allow-all boolean transition.
+ */
+export interface PermissionsChangedEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: PermissionsChangedData;
+  /**
+   * When true, the event is transient and not persisted to the session event log on disk
+   */
+  ephemeral?: boolean;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "session.permissions_changed".
+   */
+  type: "session.permissions_changed";
+}
+/**
+ * Permissions change details carrying the aggregate allow-all boolean transition.
+ */
+export interface PermissionsChangedData {
+  /**
+   * Aggregate allow-all flag after the change
+   */
+  allowAllPermissions: boolean;
+  /**
+   * Aggregate allow-all flag before the change
+   */
+  previousAllowAllPermissions: boolean;
 }
 /**
  * Session event "session.plan_changed". Plan file operation details indicating what changed
@@ -1464,12 +1640,16 @@ export interface ShutdownData {
   totalApiDurationMs: number;
   /**
    * Session-wide accumulated nano-AI units cost
+   *
+   * @experimental
    */
   totalNanoAiu?: number;
   /**
    * Total number of premium API requests used during the session
+   *
+   * @internal
    */
-  totalPremiumRequests: number;
+  totalPremiumRequests?: number;
 }
 /**
  * Aggregate code change metrics for the session
@@ -1501,6 +1681,8 @@ export interface ShutdownModelMetric {
   };
   /**
    * Accumulated nano-AI units cost for this model
+   *
+   * @experimental
    */
   totalNanoAiu?: number;
   usage: ShutdownModelMetricUsage;
@@ -1511,12 +1693,16 @@ export interface ShutdownModelMetric {
 export interface ShutdownModelMetricRequests {
   /**
    * Cumulative cost multiplier for requests to this model
+   *
+   * @experimental
    */
-  cost: number;
+  cost?: number;
   /**
    * Total number of API requests made to this model
+   *
+   * @experimental
    */
-  count: number;
+  count?: number;
 }
 /**
  * Schema for the `ShutdownModelMetricTokenDetail` type.
@@ -1749,6 +1935,10 @@ export interface CompactionCompleteData {
    */
   conversationTokens?: number;
   /**
+   * User-supplied focus instructions provided to a manual `/compact` invocation. Omitted for automatic compaction and for manual compaction with no focus text.
+   */
+  customInstructions?: string;
+  /**
    * Error message if compaction failed
    */
   error?: string;
@@ -1772,6 +1962,10 @@ export interface CompactionCompleteData {
    * GitHub request tracing ID (x-github-request-id header) for the compaction LLM call
    */
   requestId?: string;
+  /**
+   * Copilot service request ID (x-copilot-service-request-id header) for the compaction LLM call
+   */
+  serviceRequestId?: string;
   /**
    * Whether compaction completed successfully
    */
@@ -1805,6 +1999,11 @@ export interface CompactionCompleteCompactionTokensUsed {
    * Tokens written to prompt cache in the compaction LLM call
    */
   cacheWriteTokens?: number;
+  /**
+   * Per-request cost and usage data from the CAPI copilot_usage response field
+   *
+   * @internal
+   */
   copilotUsage?: CompactionCompleteCompactionTokensUsedCopilotUsage;
   /**
    * Duration of the compaction LLM call in milliseconds
@@ -1826,6 +2025,7 @@ export interface CompactionCompleteCompactionTokensUsed {
 /**
  * Per-request cost and usage data from the CAPI copilot_usage response field
  */
+/** @internal */
 export interface CompactionCompleteCompactionTokensUsedCopilotUsage {
   /**
    * Itemized token usage breakdown
@@ -1938,7 +2138,7 @@ export interface UserMessageData {
   /**
    * Files, selections, or GitHub references attached to the message
    */
-  attachments?: UserMessageAttachment[];
+  attachments?: Attachment[];
   /**
    * The user's message text as displayed in the timeline
    */
@@ -1975,12 +2175,12 @@ export interface UserMessageData {
 /**
  * File attachment
  */
-export interface UserMessageAttachmentFile {
+export interface AttachmentFile {
   /**
    * User-facing display name for the attachment
    */
   displayName: string;
-  lineRange?: UserMessageAttachmentFileLineRange;
+  lineRange?: AttachmentFileLineRange;
   /**
    * Absolute file path
    */
@@ -1993,7 +2193,7 @@ export interface UserMessageAttachmentFile {
 /**
  * Optional line range to scope the attachment to a specific section of the file
  */
-export interface UserMessageAttachmentFileLineRange {
+export interface AttachmentFileLineRange {
   /**
    * End line number (1-based, inclusive)
    */
@@ -2006,7 +2206,7 @@ export interface UserMessageAttachmentFileLineRange {
 /**
  * Directory attachment
  */
-export interface UserMessageAttachmentDirectory {
+export interface AttachmentDirectory {
   /**
    * User-facing display name for the attachment
    */
@@ -2023,7 +2223,7 @@ export interface UserMessageAttachmentDirectory {
 /**
  * Code selection attachment from an editor
  */
-export interface UserMessageAttachmentSelection {
+export interface AttachmentSelection {
   /**
    * User-facing display name for the selection
    */
@@ -2032,7 +2232,7 @@ export interface UserMessageAttachmentSelection {
    * Absolute path to the file containing the selection
    */
   filePath: string;
-  selection: UserMessageAttachmentSelectionDetails;
+  selection: AttachmentSelectionDetails;
   /**
    * The selected text content
    */
@@ -2045,14 +2245,14 @@ export interface UserMessageAttachmentSelection {
 /**
  * Position range of the selection within the file
  */
-export interface UserMessageAttachmentSelectionDetails {
-  end: UserMessageAttachmentSelectionDetailsEnd;
-  start: UserMessageAttachmentSelectionDetailsStart;
+export interface AttachmentSelectionDetails {
+  end: AttachmentSelectionDetailsEnd;
+  start: AttachmentSelectionDetailsStart;
 }
 /**
  * End position of the selection
  */
-export interface UserMessageAttachmentSelectionDetailsEnd {
+export interface AttachmentSelectionDetailsEnd {
   /**
    * End character offset within the line (0-based)
    */
@@ -2065,7 +2265,7 @@ export interface UserMessageAttachmentSelectionDetailsEnd {
 /**
  * Start position of the selection
  */
-export interface UserMessageAttachmentSelectionDetailsStart {
+export interface AttachmentSelectionDetailsStart {
   /**
    * Start character offset within the line (0-based)
    */
@@ -2078,12 +2278,12 @@ export interface UserMessageAttachmentSelectionDetailsStart {
 /**
  * GitHub issue, pull request, or discussion reference
  */
-export interface UserMessageAttachmentGithubReference {
+export interface AttachmentGitHubReference {
   /**
    * Issue, pull request, or discussion number
    */
   number: number;
-  referenceType: UserMessageAttachmentGithubReferenceType;
+  referenceType: AttachmentGitHubReferenceType;
   /**
    * Current state of the referenced item (e.g., open, closed, merged)
    */
@@ -2104,7 +2304,7 @@ export interface UserMessageAttachmentGithubReference {
 /**
  * Blob attachment with inline base64-encoded data
  */
-export interface UserMessageAttachmentBlob {
+export interface AttachmentBlob {
   /**
    * Base64-encoded content
    */
@@ -2121,6 +2321,41 @@ export interface UserMessageAttachmentBlob {
    * Attachment type discriminator
    */
   type: "blob";
+}
+/**
+ * Structured context contributed by an extension. Composer pills displayed in the host are forwarded back through session.send.attachments, then rendered into the model prompt as an <extension_context> XML block.
+ */
+export interface AttachmentExtensionContext {
+  /**
+   * Provider-local canvas identifier when the push was bound to a canvas instance
+   */
+  canvasId?: string;
+  /**
+   * ISO 8601 timestamp captured by the runtime when the push was accepted
+   */
+  capturedAt: string;
+  /**
+   * Owning extension identifier. Runtime-derived from the caller's connection when produced via session.extensions.sendAttachmentsToMessage; preserved verbatim on subsequent transports.
+   */
+  extensionId: string;
+  /**
+   * Open canvas instance identifier when the push was bound to a canvas instance
+   */
+  instanceId?: string;
+  /**
+   * Caller-supplied JSON payload
+   */
+  payload?: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Human-readable composer pill label
+   */
+  title: string;
+  /**
+   * Attachment type discriminator
+   */
+  type: "extension_context";
 }
 /**
  * Session event "pending_messages.modified". Empty payload; the event signals that the pending message queue has changed
@@ -2399,10 +2634,14 @@ export interface AssistantMessageEvent {
 export interface AssistantMessageData {
   /**
    * Raw Anthropic content array with advisor blocks (server_tool_use, advisor_tool_result) for verbatim round-tripping
+   *
+   * @experimental
    */
   anthropicAdvisorBlocks?: unknown[];
   /**
    * Anthropic advisor model ID used for this response, for timeline display on replay
+   *
+   * @experimental
    */
   anthropicAdvisorModel?: string;
   /**
@@ -2450,6 +2689,10 @@ export interface AssistantMessageData {
    * GitHub request tracing ID (x-github-request-id header) for correlating with server-side logs
    */
   requestId?: string;
+  /**
+   * Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
+   */
+  serviceRequestId?: string;
   /**
    * Tool invocations requested by the assistant in this message
    */
@@ -2672,9 +2915,16 @@ export interface AssistantUsageData {
    * Number of tokens written to prompt cache
    */
   cacheWriteTokens?: number;
+  /**
+   * Per-request cost and usage data from the CAPI copilot_usage response field
+   *
+   * @internal
+   */
   copilotUsage?: AssistantUsageCopilotUsage;
   /**
    * Model multiplier cost for billing purposes
+   *
+   * @experimental
    */
   cost?: number;
   /**
@@ -2712,6 +2962,8 @@ export interface AssistantUsageData {
   providerCallId?: string;
   /**
    * Per-quota resource usage snapshots, keyed by quota identifier
+   *
+   * @internal
    */
   quotaSnapshots?: {
     [k: string]: AssistantUsageQuotaSnapshot | undefined;
@@ -2725,6 +2977,10 @@ export interface AssistantUsageData {
    */
   reasoningTokens?: number;
   /**
+   * Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
+   */
+  serviceRequestId?: string;
+  /**
    * Time to first token in milliseconds. Only available for streaming requests
    */
   timeToFirstTokenMs?: number;
@@ -2732,6 +2988,7 @@ export interface AssistantUsageData {
 /**
  * Per-request cost and usage data from the CAPI copilot_usage response field
  */
+/** @internal */
 export interface AssistantUsageCopilotUsage {
   /**
    * Itemized token usage breakdown
@@ -2766,37 +3023,54 @@ export interface AssistantUsageCopilotUsageTokenDetail {
 /**
  * Schema for the `AssistantUsageQuotaSnapshot` type.
  */
+/** @internal */
 export interface AssistantUsageQuotaSnapshot {
   /**
    * Total requests allowed by the entitlement
+   *
+   * @internal
    */
   entitlementRequests: number;
   /**
    * Whether the user has an unlimited usage entitlement
+   *
+   * @internal
    */
   isUnlimitedEntitlement: boolean;
   /**
-   * Number of requests over the entitlement limit
+   * Number of additional usage requests made this period
+   *
+   * @internal
    */
   overage: number;
   /**
-   * Whether overage is allowed when quota is exhausted
+   * Whether additional usage is allowed when quota is exhausted
+   *
+   * @internal
    */
   overageAllowedWithExhaustedQuota: boolean;
   /**
    * Percentage of quota remaining (0 to 100)
+   *
+   * @internal
    */
   remainingPercentage: number;
   /**
    * Date when the quota resets
+   *
+   * @internal
    */
   resetDate?: string;
   /**
    * Whether usage is still permitted after quota exhaustion
+   *
+   * @internal
    */
   usageAllowedWithExhaustedQuota: boolean;
   /**
    * Number of requests already consumed
+   *
+   * @internal
    */
   usedRequests: number;
 }
@@ -2858,6 +3132,10 @@ export interface ModelCallFailureData {
    * GitHub request tracing ID (x-github-request-id header) for server-side log correlation
    */
   providerCallId?: string;
+  /**
+   * Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
+   */
+  serviceRequestId?: string;
   source: ModelCallFailureSource;
   /**
    * HTTP status code from the failed request
@@ -2990,6 +3268,10 @@ export interface ToolExecutionStartData {
     [k: string]: unknown | undefined;
   };
   /**
+   * When true, the tool output should be displayed expanded (verbatim) in the CLI timeline
+   */
+  displayVerbatim?: boolean;
+  /**
    * Name of the MCP server hosting this tool, when the tool is an MCP tool
    */
   mcpServerName?: string;
@@ -2997,6 +3279,10 @@ export interface ToolExecutionStartData {
    * Original tool name on the MCP server, when the tool is an MCP tool
    */
   mcpToolName?: string;
+  /**
+   * Model identifier that generated this tool call
+   */
+  model?: string;
   /**
    * @deprecated
    * Tool call ID of the parent tool invocation when this event originates from a sub-agent
@@ -3155,6 +3441,10 @@ export interface ToolExecutionCompleteData {
   parentToolCallId?: string;
   result?: ToolExecutionCompleteResult;
   /**
+   * Whether this tool execution ran inside a sandbox container
+   */
+  sandboxed?: boolean;
+  /**
    * Whether the tool execution completed successfully
    */
   success: boolean;
@@ -3162,6 +3452,7 @@ export interface ToolExecutionCompleteData {
    * Unique identifier for the completed tool call
    */
   toolCallId: string;
+  toolDescription?: ToolExecutionCompleteToolDescription;
   /**
    * Tool-specific telemetry data (e.g., CodeQL check counts, grep match counts)
    */
@@ -3202,6 +3493,7 @@ export interface ToolExecutionCompleteResult {
    * Full detailed tool result for UI/timeline display, preserving complete content such as diffs. Falls back to content when absent.
    */
   detailedContent?: string;
+  uiResource?: ToolExecutionCompleteUIResource;
 }
 /**
  * Plain text content block
@@ -3371,6 +3663,118 @@ export interface EmbeddedBlobResourceContents {
   uri: string;
 }
 /**
+ * MCP Apps UI resource content for rendering in a sandboxed iframe
+ */
+export interface ToolExecutionCompleteUIResource {
+  _meta?: ToolExecutionCompleteUIResourceMeta;
+  /**
+   * Base64-encoded HTML content
+   */
+  blob?: string;
+  /**
+   * MIME type of the content
+   */
+  mimeType: string;
+  /**
+   * HTML content as a string
+   */
+  text?: string;
+  /**
+   * The ui:// URI of the resource
+   */
+  uri: string;
+}
+/**
+ * Resource-level UI metadata (CSP, permissions, visual preferences)
+ */
+export interface ToolExecutionCompleteUIResourceMeta {
+  ui?: ToolExecutionCompleteUIResourceMetaUI;
+}
+/**
+ * Schema for the `ToolExecutionCompleteUIResourceMetaUI` type.
+ */
+export interface ToolExecutionCompleteUIResourceMetaUI {
+  csp?: ToolExecutionCompleteUIResourceMetaUICsp;
+  domain?: string;
+  permissions?: ToolExecutionCompleteUIResourceMetaUIPermissions;
+  prefersBorder?: boolean;
+}
+/**
+ * Schema for the `ToolExecutionCompleteUIResourceMetaUICsp` type.
+ */
+export interface ToolExecutionCompleteUIResourceMetaUICsp {
+  baseUriDomains?: string[];
+  connectDomains?: string[];
+  frameDomains?: string[];
+  resourceDomains?: string[];
+}
+/**
+ * Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissions` type.
+ */
+export interface ToolExecutionCompleteUIResourceMetaUIPermissions {
+  camera?: ToolExecutionCompleteUIResourceMetaUIPermissionsCamera;
+  clipboardWrite?: ToolExecutionCompleteUIResourceMetaUIPermissionsClipboardWrite;
+  geolocation?: ToolExecutionCompleteUIResourceMetaUIPermissionsGeolocation;
+  microphone?: ToolExecutionCompleteUIResourceMetaUIPermissionsMicrophone;
+}
+/**
+ * Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsCamera` type.
+ */
+export interface ToolExecutionCompleteUIResourceMetaUIPermissionsCamera {
+  [k: string]: unknown | undefined;
+}
+/**
+ * Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsClipboardWrite` type.
+ */
+export interface ToolExecutionCompleteUIResourceMetaUIPermissionsClipboardWrite {
+  [k: string]: unknown | undefined;
+}
+/**
+ * Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsGeolocation` type.
+ */
+export interface ToolExecutionCompleteUIResourceMetaUIPermissionsGeolocation {
+  [k: string]: unknown | undefined;
+}
+/**
+ * Schema for the `ToolExecutionCompleteUIResourceMetaUIPermissionsMicrophone` type.
+ */
+export interface ToolExecutionCompleteUIResourceMetaUIPermissionsMicrophone {
+  [k: string]: unknown | undefined;
+}
+/**
+ * Tool definition metadata, present for MCP tools with MCP Apps support
+ */
+export interface ToolExecutionCompleteToolDescription {
+  _meta?: ToolExecutionCompleteToolDescriptionMeta;
+  /**
+   * Tool description
+   */
+  description?: string;
+  /**
+   * Tool name
+   */
+  name: string;
+}
+/**
+ * MCP Apps metadata for UI resource association
+ */
+export interface ToolExecutionCompleteToolDescriptionMeta {
+  ui?: ToolExecutionCompleteToolDescriptionMetaUI;
+}
+/**
+ * Schema for the `ToolExecutionCompleteToolDescriptionMetaUI` type.
+ */
+export interface ToolExecutionCompleteToolDescriptionMetaUI {
+  /**
+   * URI of the UI resource
+   */
+  resourceUri?: string;
+  /**
+   * Who can access this tool
+   */
+  visibility?: ToolExecutionCompleteToolDescriptionMetaUIVisibility[];
+}
+/**
  * Session event "skill.invoked". Skill invocation details including content, allowed tools, and plugin metadata
  */
 export interface SkillInvokedEvent {
@@ -3432,6 +3836,11 @@ export interface SkillInvokedData {
    * Version of the plugin this skill originated from, when applicable
    */
   pluginVersion?: string;
+  /**
+   * Source identifier for where the skill was discovered. Known values include: project (workspace skill), inherited (parent-directory skill), personal-copilot (~/.copilot/skills), personal-agents (~/.agents/skills), personal-claude (~/.claude/skills), custom (configured directory), plugin (installed plugin), builtin (bundled runtime skill), and remote (org/enterprise skill)
+   */
+  source?: string;
+  trigger?: SkillInvokedTrigger;
 }
 /**
  * Session event "subagent.started". Sub-agent startup details including parent tool call and agent information
@@ -3814,6 +4223,45 @@ export interface HookEndError {
    * Error stack trace, when available
    */
   stack?: string;
+}
+/**
+ * Session event "hook.progress". Ephemeral progress update from a running hook process
+ */
+export interface HookProgressEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: HookProgressData;
+  /**
+   * Always true for events that are transient and not persisted to the session event log on disk.
+   */
+  ephemeral: true;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "hook.progress".
+   */
+  type: "hook.progress";
+}
+/**
+ * Ephemeral progress update from a running hook process
+ */
+export interface HookProgressData {
+  /**
+   * Human-readable progress message from the hook process
+   */
+  message: string;
 }
 /**
  * Session event "system.message". System/developer instruction content with role and optional template metadata
@@ -5485,6 +5933,10 @@ export interface ExternalToolRequestedData {
    * W3C Trace Context tracestate header for the execute_tool span
    */
   tracestate?: string;
+  /**
+   * Active session working directory, when known.
+   */
+  workingDirectory?: string;
 }
 /**
  * Session event "external_tool.completed". External tool completion notification signaling UI dismissal
@@ -5838,9 +6290,17 @@ export interface CapabilitiesChangedData {
  */
 export interface CapabilitiesChangedUI {
   /**
+   * Whether canvas rendering is now supported
+   */
+  canvases?: boolean;
+  /**
    * Whether elicitation is now supported
    */
   elicitation?: boolean;
+  /**
+   * Whether MCP Apps (SEP-1865) UI passthrough is now supported
+   */
+  mcpApps?: boolean;
 }
 /**
  * Session event "exit_plan_mode.requested". Plan approval request with plan content and available user actions
@@ -6219,8 +6679,17 @@ export interface McpServersLoadedServer {
    * Server name (config key)
    */
   name: string;
+  /**
+   * Name of the plugin that supplied the effective MCP server config, only when source is plugin
+   */
+  pluginName?: string;
+  /**
+   * Version of the plugin that supplied the effective MCP server config, only when source is plugin
+   */
+  pluginVersion?: string;
   source?: McpServerSource;
   status: McpServerStatus;
+  transport?: McpServerTransport;
 }
 /**
  * Session event "session.mcp_server_status_changed".
@@ -6256,6 +6725,10 @@ export interface McpServerStatusChangedEvent {
  * Schema for the `McpServerStatusChangedData` type.
  */
 export interface McpServerStatusChangedData {
+  /**
+   * Error message if the server entered a failed state
+   */
+  error?: string;
   /**
    * Name of the MCP server whose status changed
    */
@@ -6315,4 +6788,305 @@ export interface ExtensionsLoadedExtension {
   name: string;
   source: ExtensionsLoadedExtensionSource;
   status: ExtensionsLoadedExtensionStatus;
+}
+/**
+ * Session event "session.canvas.opened".
+ */
+export interface CanvasOpenedEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: CanvasOpenedData;
+  /**
+   * Always true for events that are transient and not persisted to the session event log on disk.
+   */
+  ephemeral: true;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "session.canvas.opened".
+   */
+  type: "session.canvas.opened";
+}
+/**
+ * Schema for the `CanvasOpenedData` type.
+ */
+export interface CanvasOpenedData {
+  availability: CanvasOpenedAvailability;
+  /**
+   * Provider-local canvas identifier
+   */
+  canvasId: string;
+  /**
+   * Owning provider identifier
+   */
+  extensionId: string;
+  /**
+   * Owning extension display name, when available
+   */
+  extensionName?: string;
+  /**
+   * Input supplied when the instance was opened
+   */
+  input?: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Stable caller-supplied canvas instance identifier
+   */
+  instanceId: string;
+  /**
+   * Whether this notification represents an idempotent reopen
+   */
+  reopen: boolean;
+  /**
+   * Provider-supplied status text
+   */
+  status?: string;
+  /**
+   * Rendered title
+   */
+  title?: string;
+  /**
+   * URL for web-rendered canvases
+   */
+  url?: string;
+}
+/**
+ * Session event "session.canvas.registry_changed".
+ */
+export interface CanvasRegistryChangedEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: CanvasRegistryChangedData;
+  /**
+   * Always true for events that are transient and not persisted to the session event log on disk.
+   */
+  ephemeral: true;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "session.canvas.registry_changed".
+   */
+  type: "session.canvas.registry_changed";
+}
+/**
+ * Schema for the `CanvasRegistryChangedData` type.
+ */
+export interface CanvasRegistryChangedData {
+  /**
+   * Canvas declarations currently available
+   */
+  canvases: CanvasRegistryChangedCanvas[];
+}
+/**
+ * Schema for the `CanvasRegistryChangedCanvas` type.
+ */
+export interface CanvasRegistryChangedCanvas {
+  /**
+   * Actions the agent or host may invoke
+   */
+  actions?: CanvasRegistryChangedCanvasAction[];
+  /**
+   * Provider-local canvas identifier
+   */
+  canvasId: string;
+  /**
+   * Short, single-sentence description shown to the agent in canvas catalogs.
+   */
+  description: string;
+  /**
+   * Human-readable canvas name
+   */
+  displayName: string;
+  /**
+   * Owning provider identifier
+   */
+  extensionId: string;
+  /**
+   * Owning extension display name, when available
+   */
+  extensionName?: string;
+  /**
+   * JSON Schema for canvas open input
+   */
+  inputSchema?: {
+    [k: string]: unknown | undefined;
+  };
+}
+/**
+ * Schema for the `CanvasRegistryChangedCanvasAction` type.
+ */
+export interface CanvasRegistryChangedCanvasAction {
+  /**
+   * Action description
+   */
+  description?: string;
+  /**
+   * JSON Schema for action input
+   */
+  inputSchema?: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Action name
+   */
+  name: string;
+}
+/**
+ * Session event "session.extensions.attachments_pushed".
+ */
+export interface ExtensionsAttachmentsPushedEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: ExtensionsAttachmentsPushedData;
+  /**
+   * Always true for events that are transient and not persisted to the session event log on disk.
+   */
+  ephemeral: true;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "session.extensions.attachments_pushed".
+   */
+  type: "session.extensions.attachments_pushed";
+}
+/**
+ * Schema for the `ExtensionsAttachmentsPushedData` type.
+ */
+export interface ExtensionsAttachmentsPushedData {
+  /**
+   * Attachments contributed by an extension; the host should surface these as composer pills and forward them via the next session.send call.
+   */
+  attachments: Attachment[];
+}
+/**
+ * Session event "mcp_app.tool_call_complete". MCP App view called a tool on a connected MCP server (SEP-1865)
+ */
+export interface McpAppToolCallCompleteEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: McpAppToolCallCompleteData;
+  /**
+   * Always true for events that are transient and not persisted to the session event log on disk.
+   */
+  ephemeral: true;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "mcp_app.tool_call_complete".
+   */
+  type: "mcp_app.tool_call_complete";
+}
+/**
+ * MCP App view called a tool on a connected MCP server (SEP-1865)
+ */
+export interface McpAppToolCallCompleteData {
+  /**
+   * Arguments passed to the tool by the app view, if any
+   */
+  arguments?: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Wall-clock duration of the underlying tools/call in milliseconds
+   */
+  durationMs: number;
+  error?: McpAppToolCallCompleteError;
+  /**
+   * Standard MCP CallToolResult returned by the server. Present whether or not the call set isError.
+   */
+  result?: {
+    [k: string]: unknown | undefined;
+  };
+  /**
+   * Name of the MCP server hosting the tool
+   */
+  serverName: string;
+  /**
+   * True when the call completed without throwing AND the MCP CallToolResult did not set isError
+   */
+  success: boolean;
+  toolMeta?: McpAppToolCallCompleteToolMeta;
+  /**
+   * MCP tool name that was invoked
+   */
+  toolName: string;
+}
+/**
+ * Set when the underlying tools/call threw an error before returning a CallToolResult
+ */
+export interface McpAppToolCallCompleteError {
+  /**
+   * Human-readable error message
+   */
+  message: string;
+}
+/**
+ * The tool's `_meta.ui` block at the time of the call, so consumers can decide whether to forward the result to the model without re-listing tools.
+ */
+export interface McpAppToolCallCompleteToolMeta {
+  ui?: McpAppToolCallCompleteToolMetaUI;
+  [k: string]: unknown | undefined;
+}
+/**
+ * Schema for the `McpAppToolCallCompleteToolMetaUI` type.
+ */
+export interface McpAppToolCallCompleteToolMetaUI {
+  /**
+   * `ui://` URI declared by the tool's `_meta.ui.resourceUri`
+   */
+  resourceUri?: string;
+  /**
+   * Tool visibility per SEP-1865 (typically a subset of `["model","app"]`)
+   */
+  visibility?: string[];
+  [k: string]: unknown | undefined;
 }

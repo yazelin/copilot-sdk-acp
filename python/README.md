@@ -2,14 +2,16 @@
 
 Python SDK for programmatic control of GitHub Copilot CLI via JSON-RPC.
 
-> **Note:** This SDK is in public preview and may change in breaking ways.
-
 ## Installation
 
 ```bash
-pip install -e ".[telemetry,dev]"
-# or
-uv pip install -e ".[telemetry,dev]"
+pip install github-copilot-sdk
+```
+
+To include OpenTelemetry support:
+
+```bash
+pip install "github-copilot-sdk[telemetry]"
 ```
 
 ## Run the Sample
@@ -27,7 +29,7 @@ python chat.py
 import asyncio
 
 from copilot import CopilotClient
-from copilot.generated.session_events import AssistantMessageData, SessionIdleData
+from copilot.session_events import AssistantMessageData, SessionIdleData
 from copilot.session import PermissionHandler
 
 async def main():
@@ -65,7 +67,7 @@ If you need more control over the lifecycle, you can call `start()`, `stop()`, a
 import asyncio
 
 from copilot import CopilotClient
-from copilot.generated.session_events import AssistantMessageData, SessionIdleData
+from copilot.session_events import AssistantMessageData, SessionIdleData
 from copilot.session import PermissionHandler
 
 async def main():
@@ -103,7 +105,7 @@ asyncio.run(main())
 - ✅ Full JSON-RPC protocol support
 - ✅ stdio and TCP transports
 - ✅ Real-time streaming events
-- ✅ Session history with `get_messages()`
+- ✅ Session history with `get_events()`
 - ✅ Type hints throughout
 - ✅ Async/await native
 - ✅ Async context manager support for automatic resource cleanup
@@ -113,7 +115,7 @@ asyncio.run(main())
 ### CopilotClient
 
 ```python
-from copilot import CopilotClient, SubprocessConfig
+from copilot import CopilotClient
 from copilot.session import PermissionHandler
 
 async with CopilotClient() as client:
@@ -133,40 +135,42 @@ async with CopilotClient() as client:
 > **Note:** For manual lifecycle management, see [Manual Resource Management](#manual-resource-management) above.
 
 ```python
-from copilot import CopilotClient, ExternalServerConfig
+from copilot import CopilotClient, RuntimeConnection
 
 # Connect to an existing CLI server
-client = CopilotClient(ExternalServerConfig(url="localhost:3000"))
+client = CopilotClient(connection=RuntimeConnection.for_uri("localhost:3000"))
 ```
 
 **CopilotClient Constructor:**
 
 ```python
-CopilotClient(
-    config=None,        # SubprocessConfig | ExternalServerConfig | None
-    *,
-    auto_start=True,    # auto-start server on first use
-    on_list_models=None, # custom handler for list_models()
-)
+CopilotClient()                                                   # spawn the bundled runtime with defaults
+CopilotClient(connection=..., log_level="debug", github_token=..., ...)
 ```
 
-**SubprocessConfig** — spawn a local CLI process:
+All options are kw-only parameters:
 
-- `cli_path` (str | None): Path to CLI executable (default: `COPILOT_CLI_PATH` env var, or bundled binary)
-- `cli_args` (list[str]): Extra arguments for the CLI executable
-- `cwd` (str | None): Working directory for CLI process (default: current dir)
-- `use_stdio` (bool): Use stdio transport instead of TCP (default: True)
-- `port` (int): Server port for TCP mode (default: 0 for random)
-- `log_level` (str): Log level (default: "info")
-- `env` (dict | None): Environment variables for the CLI process
+- `connection` (RuntimeConnection | None): How to reach the runtime. Use
+  `RuntimeConnection.for_stdio(...)`, `RuntimeConnection.for_tcp(...)`, or
+  `RuntimeConnection.for_uri(...)`. Defaults to a stdio connection with the bundled binary.
+- `working_directory` (str | None): Working directory for the CLI process (default: current dir).
+- `log_level` (str): Log level (default: "info").
+- `env` (dict | None): Environment variables for the CLI process.
 - `github_token` (str | None): GitHub token for authentication. When provided, takes priority over other auth methods.
-- `copilot_home` (str | None): Base directory for Copilot data (session state, config, etc.). Sets `COPILOT_HOME` on the spawned CLI process. When `None`, the CLI defaults to `~/.copilot`. Useful in restricted environments where only specific directories are writable. Ignored when using `ExternalServerConfig`.
+- `base_directory` (str | None): Base directory for Copilot data (session state, config, etc.). Sets `COPILOT_HOME` on the spawned CLI process. When `None`, the CLI defaults to `~/.copilot`. Useful in restricted environments where only specific directories are writable. Ignored when using a `UriRuntimeConnection`.
 - `use_logged_in_user` (bool | None): Whether to use logged-in user for authentication (default: True, but False when `github_token` is provided).
 - `telemetry` (dict | None): OpenTelemetry configuration for the CLI process. Providing this enables telemetry — no separate flag needed. See [Telemetry](#telemetry) below.
+- `session_fs` (dict | None): Connection-level session filesystem provider configuration.
+- `session_idle_timeout_seconds` (int | None): Server-wide session idle timeout in seconds. Set to `None` or `0` to disable.
+- `enable_remote_sessions` (bool): Enable remote/cloud session support (default: False).
+- `on_list_models` (callable | None): Custom handler for `list_models()`. When provided, the handler is called instead of querying the runtime.
+- `mode` (str): Client mode (default: `"copilot-cli"`).
 
-**ExternalServerConfig** — connect to an existing CLI server:
+**RuntimeConnection variants:**
 
-- `url` (str): Server URL (e.g., `"localhost:8080"`, `"http://127.0.0.1:9000"`, or just `"8080"`).
+- `RuntimeConnection.for_stdio(path=None, args=None)` — spawn a local CLI process and talk over stdio.
+- `RuntimeConnection.for_tcp(port=0, connection_token=None, path=None, args=None)` — spawn a local CLI in TCP mode.
+- `RuntimeConnection.for_uri(url, connection_token=None)` — connect to an existing CLI server (e.g. `"localhost:8080"`).
 
 **`CopilotClient.create_session()`:**
 
@@ -195,12 +199,12 @@ await client.set_foreground_session_id("session-123")
 
 # Subscribe to all lifecycle events
 def on_lifecycle(event):
-    print(f"{event.type}: {event.sessionId}")
+    print(f"{event.type}: {event.session_id}")
 
-unsubscribe = client.on(on_lifecycle)
+unsubscribe = client.on_lifecycle(on_lifecycle)
 
 # Subscribe to specific event type
-unsubscribe = client.on("session.foreground", lambda e: print(f"Foreground: {e.sessionId}"))
+unsubscribe = client.on_lifecycle("session.foreground", lambda e: print(f"Foreground: {e.session_id}"))
 
 # Later, to stop receiving events:
 unsubscribe()
@@ -358,7 +362,7 @@ Enable streaming to receive assistant response chunks as they're generated:
 import asyncio
 
 from copilot import CopilotClient
-from copilot.generated.session_events import (
+from copilot.session_events import (
     AssistantMessageData,
     AssistantMessageDeltaData,
     AssistantReasoningData,
@@ -531,13 +535,13 @@ async with await client.create_session(
 The SDK supports OpenTelemetry for distributed tracing. Provide a `telemetry` config to enable trace export and automatic W3C Trace Context propagation.
 
 ```python
-from copilot import CopilotClient, SubprocessConfig
+from copilot import CopilotClient
 
-client = CopilotClient(SubprocessConfig(
+client = CopilotClient(
     telemetry={
         "otlp_endpoint": "http://localhost:4318",
     },
-))
+)
 ```
 
 **TelemetryConfig options:**
@@ -550,7 +554,7 @@ client = CopilotClient(SubprocessConfig(
 
 Trace context (`traceparent`/`tracestate`) is automatically propagated between the SDK and CLI on `create_session`, `resume_session`, and `send` calls, and inbound when the CLI invokes tool handlers.
 
-Install with telemetry extras: `pip install copilot-sdk[telemetry]` (provides `opentelemetry-api`)
+Install with telemetry extras: `pip install "github-copilot-sdk[telemetry]"` (provides `opentelemetry-api`)
 
 ## Permission Handling
 
@@ -575,31 +579,26 @@ session = await client.create_session(
 Provide your own function to inspect each request and apply custom logic (sync or async):
 
 ```python
-from copilot.session import PermissionRequestResult
-from copilot.generated.session_events import PermissionRequest
+from copilot import PermissionRequest, PermissionRequestResult
+from copilot.rpc import (
+    PermissionDecisionApproveOnce,
+    PermissionDecisionReject,
+)
+from copilot.session_events import PermissionRequestShell
+
 
 def on_permission_request(
     request: PermissionRequest, invocation: dict
 ) -> PermissionRequestResult:
-    # request.kind — what type of operation is being requested:
-    #   "shell"       — executing a shell command
-    #   "write"       — writing or editing a file
-    #   "read"        — reading a file
-    #   "mcp"         — calling an MCP tool
-    #   "custom-tool" — calling one of your registered tools
-    #   "url"         — fetching a URL
-    #   "memory"      — accessing or updating session/workspace memory
-    #   "hook"        — invoking a registered hook
-    # request.tool_call_id  — the tool call that triggered this request
-    # request.tool_name     — name of the tool (for custom-tool / mcp)
-    # request.file_name     — file being written (for write)
-    # request.full_command_text — full shell command (for shell)
+    # ``PermissionRequest`` is a discriminated union — pattern-match on
+    # the variant class to access the per-kind fields.
+    match request:
+        case PermissionRequestShell(full_command_text=cmd):
+            # Deny shell commands
+            return PermissionDecisionReject(feedback=f"Shell denied: {cmd}")
+        case _:
+            return PermissionDecisionApproveOnce()
 
-    if request.kind.value == "shell":
-        # Deny shell commands
-        return PermissionRequestResult(kind="reject")
-
-    return PermissionRequestResult(kind="approve-once")
 
 session = await client.create_session(
     on_permission_request=on_permission_request,
@@ -615,19 +614,29 @@ async def on_permission_request(
 ) -> PermissionRequestResult:
     # Simulate an async approval check (e.g., prompting a user over a network)
     await asyncio.sleep(0)
-    return PermissionRequestResult(kind="approve-once")
+    return PermissionDecisionApproveOnce()
 ```
 
 ### Permission Result Kinds
 
-The handler must return a `PermissionRequestResult` with one of the kinds declared by the `PermissionRequestResultKind` type. Approval decisions are present-tense — they describe the decision to apply, not the past-tense outcome reported back on `permission.completed` session events.
+The handler returns a ``PermissionRequestResult``, which is an alias for
+``PermissionDecision | PermissionNoResult`` (the generated wire-level
+union of every decision variant, plus a small sentinel for v1 servers).
+Approval decisions are present-tense — they describe the decision to
+apply, not the past-tense outcome reported back on `permission.completed`
+session events.
 
-| `kind` value           | Meaning                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------- |
-| `"approve-once"`       | Allow this single request                                                                   |
-| `"reject"`             | Deny the request                                                                            |
-| `"user-not-available"` | Deny the request because no user is available to confirm it (the default)                   |
-| `"no-result"`          | Leave the request unanswered (only valid with protocol v1; rejected by protocol v2 servers) |
+| Variant                                       | Meaning                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `PermissionDecisionApproveOnce()`             | Allow this single request                                                                   |
+| `PermissionDecisionReject(feedback="…")`      | Deny the request (optional feedback string forwarded to the LLM)                            |
+| `PermissionDecisionUserNotAvailable()`        | Deny the request because no user is available to confirm it (the default)                   |
+| `PermissionNoResult()`                        | Leave the request unanswered (only valid with protocol v1; rejected by protocol v2 servers) |
+
+Several richer variants (``PermissionDecisionApproveForSession``,
+``PermissionDecisionApproveForLocation``, ``PermissionDecisionApprovePermanently``,
+…) are available for granting longer-lived approvals; see the generated
+``copilot.rpc`` module for the full list.
 
 ### Resuming Sessions
 
@@ -692,6 +701,15 @@ async def on_post_tool_use(input, invocation):
         "additionalContext": "Post-execution notes",
     }
 
+async def on_post_tool_use_failure(input, invocation):
+    # Fires when a tool's result was a failure. `on_post_tool_use` only fires
+    # on success, so register this handler to observe failed tool calls. The
+    # CLI extracts the failure message and passes it as the `error` field.
+    print(f"Tool {input['toolName']} failed: {input['error']}")
+    return {
+        "additionalContext": f"Retry guidance for {input['toolName']}",
+    }
+
 async def on_user_prompt_submitted(input, invocation):
     print(f"User prompt: {input['prompt']}")
     return {
@@ -719,6 +737,7 @@ async with await client.create_session(
     hooks={
         "on_pre_tool_use": on_pre_tool_use,
         "on_post_tool_use": on_post_tool_use,
+        "on_post_tool_use_failure": on_post_tool_use_failure,
         "on_user_prompt_submitted": on_user_prompt_submitted,
         "on_session_start": on_session_start,
         "on_session_end": on_session_end,
@@ -731,7 +750,8 @@ async with await client.create_session(
 **Available hooks:**
 
 - `on_pre_tool_use` - Intercept tool calls before execution. Can allow/deny or modify arguments.
-- `on_post_tool_use` - Process tool results after execution. Can modify results or add context.
+- `on_post_tool_use` - Process tool results after successful execution. Can modify results or add context.
+- `on_post_tool_use_failure` - Observe failed tool executions and inject extra context to guide the model's next step.
 - `on_user_prompt_submitted` - Intercept user prompts. Can modify the prompt before processing.
 - `on_session_start` - Run logic when a session starts or resumes.
 - `on_session_end` - Cleanup or logging when session ends.

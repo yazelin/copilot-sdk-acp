@@ -1,14 +1,19 @@
 package copilot
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/github/copilot-sdk/go/internal/jsonrpc2"
 	"github.com/github/copilot-sdk/go/rpc"
 )
 
@@ -28,22 +33,138 @@ func newTestEvent() SessionEvent {
 	return SessionEvent{Data: &SessionIdleData{}}
 }
 
-func TestRPCPermissionDecisionFromKindPreservesUnknownKind(t *testing.T) {
-	kind := rpc.PermissionDecisionKind("future-decision")
-	decision := rpcPermissionDecisionFromKind(kind)
+func ptr[T any](value T) *T {
+	return &value
+}
 
-	data, err := json.Marshal(decision)
-	if err != nil {
-		t.Fatalf("marshal permission decision: %v", err)
+func TestSession_SetModelForwardsContextTier(t *testing.T) {
+	tier := ContextTierLongContext
+	params := captureSetModelRequest(t, &SetModelOptions{ContextTier: &tier})
+
+	if params["sessionId"] != "session-1" {
+		t.Fatalf("expected sessionId session-1, got %v", params["sessionId"])
+	}
+	if params["modelId"] != "gpt-4.1" {
+		t.Fatalf("expected modelId gpt-4.1, got %v", params["modelId"])
+	}
+	if params["contextTier"] != "long_context" {
+		t.Fatalf("expected contextTier long_context, got %v", params["contextTier"])
+	}
+}
+
+func TestSession_SetModelOmitsContextTierWhenUnset(t *testing.T) {
+	params := captureSetModelRequest(t, nil)
+
+	if _, ok := params["contextTier"]; ok {
+		t.Fatalf("expected contextTier to be omitted, got %v", params["contextTier"])
+	}
+}
+
+func captureSetModelRequest(t *testing.T, opts *SetModelOptions) map[string]any {
+	t.Helper()
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	defer stdinR.Close()
+	defer stdinW.Close()
+	defer stdoutR.Close()
+	defer stdoutW.Close()
+
+	client := jsonrpc2.NewClient(stdinW, stdoutR)
+	client.Start()
+	defer client.Stop()
+
+	paramsCh := make(chan map[string]any, 1)
+	errCh := make(chan error, 1)
+
+	go func() {
+		frame, err := readTestJSONRPCFrame(stdinR)
+		if err != nil {
+			errCh <- err
+			return
+		}
+
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params map[string]any  `json:"params"`
+		}
+		if err := json.Unmarshal(frame, &request); err != nil {
+			errCh <- err
+			return
+		}
+		if request.Method != "session.model.switchTo" {
+			errCh <- fmt.Errorf("expected session.model.switchTo, got %s", request.Method)
+			return
+		}
+
+		paramsCh <- request.Params
+
+		response := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(request.ID),
+			"result":  map[string]any{},
+		}
+		data, err := json.Marshal(response)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if _, err := fmt.Fprintf(stdoutW, "Content-Length: %d\r\n\r\n%s", len(data), data); err != nil {
+			errCh <- err
+			return
+		}
+	}()
+
+	session := &Session{
+		SessionID: "session-1",
+		client:    client,
+		RPC:       rpc.NewSessionRPC(client, "session-1"),
+	}
+	if err := session.SetModel(context.Background(), "gpt-4.1", opts); err != nil {
+		t.Fatalf("SetModel failed: %v", err)
 	}
 
-	var serialized map[string]any
-	if err := json.Unmarshal(data, &serialized); err != nil {
-		t.Fatalf("unmarshal serialized permission decision: %v", err)
+	select {
+	case params := <-paramsCh:
+		return params
+	case err := <-errCh:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for session.model.switchTo request")
 	}
-	if serialized["kind"] != string(kind) {
-		t.Fatalf("expected kind %q to round-trip, got %v in %s", kind, serialized["kind"], data)
+	return nil
+}
+
+func readTestJSONRPCFrame(r io.Reader) ([]byte, error) {
+	reader := bufio.NewReader(r)
+	var contentLength int
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			break
+		}
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			return nil, fmt.Errorf("invalid header line %q", line)
+		}
+		if name == "Content-Length" {
+			contentLength, err = strconv.Atoi(strings.TrimSpace(value))
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
+	if contentLength == 0 {
+		return nil, fmt.Errorf("missing Content-Length header")
+	}
+	data := make([]byte, contentLength)
+	_, err := io.ReadFull(reader, data)
+	return data, err
 }
 
 func TestSession_On(t *testing.T) {
@@ -455,6 +576,89 @@ func TestSession_Capabilities(t *testing.T) {
 			t.Error("Expected UI.Elicitation to be false after second capabilities.changed event")
 		}
 	})
+
+	t.Run("session.canvas.opened event updates open canvas snapshots", func(t *testing.T) {
+		session, cleanup := newTestSession()
+		defer cleanup()
+
+		session.dispatchEvent(SessionEvent{
+			Data: &SessionCanvasOpenedData{
+				InstanceID:   "missing-canvas-id",
+				ExtensionID:  "project:counter",
+				Availability: CanvasOpenedAvailabilityReady,
+			},
+		})
+		session.dispatchEvent(SessionEvent{
+			Data: &SessionCanvasOpenedData{
+				ExtensionID:   "project:counter",
+				ExtensionName: ptr("Counter Provider"),
+				CanvasID:      "counter",
+				InstanceID:    "counter-1",
+				Title:         ptr("Counter"),
+				Status:        ptr("ready"),
+				URL:           ptr("https://example.test/counter"),
+				Input:         map[string]any{"seed": float64(1)},
+				Reopen:        false,
+				Availability:  CanvasOpenedAvailabilityReady,
+			},
+		})
+		session.dispatchEvent(SessionEvent{
+			Data: &SessionCanvasOpenedData{
+				ExtensionID:  "project:logs",
+				CanvasID:     "logs",
+				InstanceID:   "logs-1",
+				Title:        ptr("Logs"),
+				Reopen:       false,
+				Availability: CanvasOpenedAvailabilityStale,
+			},
+		})
+
+		open := session.OpenCanvases()
+		if len(open) != 2 {
+			t.Fatalf("expected 2 open canvases, got %d", len(open))
+		}
+		if open[0].InstanceID != "counter-1" || open[1].InstanceID != "logs-1" {
+			t.Fatalf("unexpected open canvas order: %+v", open)
+		}
+
+		session.dispatchEvent(SessionEvent{
+			Data: &SessionCanvasOpenedData{
+				ExtensionID:   "project:counter",
+				ExtensionName: ptr("Counter Provider"),
+				CanvasID:      "counter",
+				InstanceID:    "counter-1",
+				Title:         ptr("Counter Updated"),
+				Status:        ptr("reconnected"),
+				URL:           ptr("https://example.test/counter-updated"),
+				Input:         map[string]any{"seed": float64(2)},
+				Reopen:        true,
+				Availability:  CanvasOpenedAvailabilityStale,
+			},
+		})
+
+		open = session.OpenCanvases()
+		if len(open) != 2 {
+			t.Fatalf("expected 2 open canvases after upsert, got %d", len(open))
+		}
+		if open[0].InstanceID != "counter-1" || open[1].InstanceID != "logs-1" {
+			t.Fatalf("upsert should preserve order, got %+v", open)
+		}
+		if open[0].Title == nil || *open[0].Title != "Counter Updated" {
+			t.Fatalf("expected updated title, got %+v", open[0].Title)
+		}
+		if open[0].Status == nil || *open[0].Status != "reconnected" {
+			t.Fatalf("expected updated status, got %+v", open[0].Status)
+		}
+		if open[0].URL == nil || *open[0].URL != "https://example.test/counter-updated" {
+			t.Fatalf("expected updated URL, got %+v", open[0].URL)
+		}
+		if !open[0].Reopen {
+			t.Fatal("expected reopen to be true")
+		}
+		if string(open[0].Availability) != string(CanvasOpenedAvailabilityStale) {
+			t.Fatalf("expected stale availability, got %q", open[0].Availability)
+		}
+	})
 }
 
 // waitForCapability polls Session.Capabilities() until predicate matches or timeout.
@@ -573,6 +777,72 @@ func TestSession_ElicitationHandler(t *testing.T) {
 	})
 }
 
+func TestSession_PostToolUseFailureHook(t *testing.T) {
+	t.Run("dispatches with parsed input and returns additional context", func(t *testing.T) {
+		session, cleanup := newTestSession()
+		defer cleanup()
+
+		var captured PostToolUseFailureHookInput
+		session.registerHooks(&SessionHooks{
+			OnPostToolUseFailure: func(input PostToolUseFailureHookInput, _ HookInvocation) (*PostToolUseFailureHookOutput, error) {
+				captured = input
+				return &PostToolUseFailureHookOutput{
+					AdditionalContext: "extra-context: " + input.Error,
+				}, nil
+			},
+		})
+
+		raw := json.RawMessage(`{
+			"sessionId": "sess-1",
+			"timestamp": 1700000000,
+			"cwd": "/work",
+			"toolName": "tool-x",
+			"toolArgs": {"foo": "bar"},
+			"error": "boom"
+		}`)
+		output, err := session.handleHooksInvoke("postToolUseFailure", raw)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if captured.SessionID != "sess-1" {
+			t.Errorf("expected sessionId 'sess-1', got %q", captured.SessionID)
+		}
+		if captured.ToolName != "tool-x" {
+			t.Errorf("expected toolName 'tool-x', got %q", captured.ToolName)
+		}
+		if captured.Error != "boom" {
+			t.Errorf("expected error 'boom', got %q", captured.Error)
+		}
+		if !captured.Timestamp.Equal(time.UnixMilli(1700000000)) {
+			t.Errorf("expected timestamp %v, got %v", time.UnixMilli(1700000000), captured.Timestamp)
+		}
+		if captured.WorkingDirectory != "/work" {
+			t.Errorf("expected WorkingDirectory '/work', got %q", captured.WorkingDirectory)
+		}
+		out, ok := output.(*PostToolUseFailureHookOutput)
+		if !ok {
+			t.Fatalf("expected *PostToolUseFailureHookOutput, got %T", output)
+		}
+		if out.AdditionalContext != "extra-context: boom" {
+			t.Errorf("unexpected AdditionalContext: %q", out.AdditionalContext)
+		}
+	})
+
+	t.Run("no handler registered returns nil without error", func(t *testing.T) {
+		session, cleanup := newTestSession()
+		defer cleanup()
+		session.registerHooks(&SessionHooks{})
+
+		output, err := session.handleHooksInvoke("postToolUseFailure", json.RawMessage(`{"sessionId":"sess-1","timestamp":0,"cwd":"","toolName":"t","toolArgs":null,"error":"e"}`))
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if output != nil {
+			t.Errorf("expected nil output, got %v", output)
+		}
+	})
+}
+
 func TestSession_HookForwardCompatibility(t *testing.T) {
 	t.Run("unknown hook type returns nil without error when known hooks are registered", func(t *testing.T) {
 		session, cleanup := newTestSession()
@@ -587,9 +857,9 @@ func TestSession_HookForwardCompatibility(t *testing.T) {
 			},
 		})
 
-		// "postToolUseFailure" is an example of a hook type introduced by a newer
-		// CLI version that the SDK does not yet know about.
-		output, err := session.handleHooksInvoke("postToolUseFailure", json.RawMessage(`{}`))
+		// "futureUnknownHookType" stands in for a hook type introduced by a
+		// newer CLI version that the SDK does not yet know about.
+		output, err := session.handleHooksInvoke("futureUnknownHookType", json.RawMessage(`{}`))
 		if err != nil {
 			t.Errorf("Expected no error for unknown hook type, got: %v", err)
 		}
