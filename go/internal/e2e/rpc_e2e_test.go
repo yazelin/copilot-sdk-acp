@@ -9,7 +9,7 @@ import (
 	"github.com/github/copilot-sdk/go/rpc"
 )
 
-func TestRpcE2E(t *testing.T) {
+func TestRPCE2E(t *testing.T) {
 	cliPath := testharness.CLIPath()
 	if cliPath == "" {
 		t.Fatal("CLI not found. Run 'npm install' in the nodejs directory first.")
@@ -17,8 +17,7 @@ func TestRpcE2E(t *testing.T) {
 
 	t.Run("should call RPC.Ping with typed params and result", func(t *testing.T) {
 		client := copilot.NewClient(&copilot.ClientOptions{
-			CLIPath:  cliPath,
-			UseStdio: copilot.Bool(true),
+			Connection: copilot.StdioConnection{Path: cliPath},
 		})
 		t.Cleanup(func() { client.ForceStop() })
 
@@ -46,8 +45,7 @@ func TestRpcE2E(t *testing.T) {
 
 	t.Run("should call RPC.Models.List with typed result", func(t *testing.T) {
 		client := copilot.NewClient(&copilot.ClientOptions{
-			CLIPath:  cliPath,
-			UseStdio: copilot.Bool(true),
+			Connection: copilot.StdioConnection{Path: cliPath},
 		})
 		t.Cleanup(func() { client.ForceStop() })
 
@@ -83,8 +81,7 @@ func TestRpcE2E(t *testing.T) {
 		t.Skip("account.getQuota not yet implemented in CLI")
 
 		client := copilot.NewClient(&copilot.ClientOptions{
-			CLIPath:  cliPath,
-			UseStdio: copilot.Bool(true),
+			Connection: copilot.StdioConnection{Path: cliPath},
 		})
 		t.Cleanup(func() { client.ForceStop() })
 
@@ -116,7 +113,7 @@ func TestRpcE2E(t *testing.T) {
 	})
 }
 
-func TestSessionRpcE2E(t *testing.T) {
+func TestSessionRPCE2E(t *testing.T) {
 	ctx := testharness.NewTestContext(t)
 	client := ctx.NewClient()
 	t.Cleanup(func() { client.ForceStop() })

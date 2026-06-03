@@ -1,4 +1,4 @@
-use github_copilot_sdk::generated::session_events::SessionEventType;
+use github_copilot_sdk::session_events::SessionEventType;
 
 use super::support::{
     assistant_message_content, collect_until_idle, event_types, wait_for_condition,
@@ -120,7 +120,7 @@ async fn should_return_events_via_getmessages_after_conversation() {
                     .await
                     .expect("send");
 
-                let messages = session.get_messages().await.expect("get messages");
+                let messages = session.get_events().await.expect("get messages");
                 let types = event_types(&messages);
                 assert!(types.contains(&"session.start"));
                 assert!(types.contains(&"user.message"));

@@ -15,17 +15,17 @@ import { promisify } from "util";
 import wordwrap from "wordwrap";
 import {
     cloneSchemaForCodegen,
-    collectExternalSchemaRefNames,
     collectDefinitionCollections,
     collectExperimentalOnlyRpcReferencedDefinitionNames,
+    collectExternalSchemaRefNames,
     collectReachableDefinitionNames,
     collectRpcMethodReferencedDefinitionNames,
     filterNodeByVisibility,
-    fixNullableRequiredRefsInApiSchema,
     findSharedSchemaDefinitions,
+    fixNullableRequiredRefsInApiSchema,
     getApiSchemaPath,
-    getNullableInner,
     getEnumValueDescriptions,
+    getNullableInner,
     getRpcSchemaTypeName,
     getSessionEventsSchemaPath,
     getSessionEventVariantSchemas,
@@ -34,13 +34,18 @@ import {
     isIntegerSchemaBoundedToInt32,
     isNodeFullyDeprecated,
     isNodeFullyExperimental,
+    isOpaqueJson,
     isRpcMethod,
     isSchemaDeprecated,
     isSchemaExperimental,
+    isSchemaInternal,
     isVoidSchema,
+    loadSchemaJson,
     parseExternalSchemaRef,
     postProcessSchema,
+    propagateInternalVisibility,
     refTypeName,
+    REPO_ROOT,
     resolveObjectSchema,
     resolveRef,
     resolveSchema,
@@ -69,15 +74,29 @@ const EXTERNAL_SCHEMA_GO_IMPORT: Record<string, GoExternalSchemaImport> = {
 // ── Utilities ───────────────────────────────────────────────────────────────
 
 // Go initialisms that should be all-caps
-const goInitialisms = new Set(["id", "ui", "uri", "url", "api", "http", "https", "json", "xml", "html", "css", "sql", "ssh", "tcp", "udp", "ip", "rpc", "mime"]);
+const goInitialisms = new Set(["id", "ui", "uri", "url", "api", "http", "https", "json", "xml", "html", "css", "sql", "ssh", "tcp", "udp", "ip", "rpc", "mime", "mcp", "sse", "ado", "cli", "hmac", "fs", "utc", "sdk"]);
+const goIdentifierCasingOverrides = new Map<string, string>([
+    ["urls", "URLs"],
+    ["uris", "URIs"],
+    ["ids", "IDs"],
+    ["github", "GitHub"],
+]);
 const goCommentTextWrapLength = 90;
 const wrapGoCommentText = wordwrap(goCommentTextWrapLength);
+
+function goIdentifierWord(word: string, normalizeRest = false): string {
+    const lower = word.toLowerCase();
+    const override = goIdentifierCasingOverrides.get(lower);
+    if (override) return override;
+    if (goInitialisms.has(lower)) return word.toUpperCase();
+    return word.charAt(0).toUpperCase() + (normalizeRest ? word.slice(1).toLowerCase() : word.slice(1));
+}
 
 function toPascalCase(s: string): string {
     return s
         .split(/[^A-Za-z0-9]+/)
         .filter((word) => word.length > 0)
-        .map((w) => goInitialisms.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))
+        .map((w) => goIdentifierWord(w))
         .join("");
 }
 
@@ -92,8 +111,22 @@ function toGoSchemaTypeName(s: string): string {
 function toGoFieldName(jsonName: string): string {
     // Handle camelCase field names like "modelId" -> "ModelID"
     return splitGoIdentifierWords(jsonName)
-        .map((w) => goInitialisms.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .map((w) => goIdentifierWord(w, true))
         .join("");
+}
+
+function toGoUnexportedIdentifier(name: string): string {
+    const leadingSpecialCases = [
+        ...Array.from(goIdentifierCasingOverrides.values()),
+        ...Array.from(goInitialisms, (initialism) => initialism.toUpperCase()),
+    ].sort((left, right) => right.length - left.length);
+
+    const leadingSpecialCase = leadingSpecialCases.find((specialCase) => name.startsWith(specialCase));
+    if (leadingSpecialCase) {
+        return leadingSpecialCase.toLowerCase() + name.slice(leadingSpecialCase.length);
+    }
+
+    return name.charAt(0).toLowerCase() + name.slice(1);
 }
 
 function goRefTypeName(ref: string, definitions?: DefinitionCollections, currentPackage?: string): string {
@@ -158,6 +191,33 @@ function pushGoExperimentalTypeComment(lines: string[], typeName: string, ctx: G
     pushGoCommentForContext(lines, goExperimentalTypeComment(typeName), ctx);
 }
 
+function hasGoCommentLinesInLeadingDocBlock(source: string, typeDeclOffset: number, commentLines: string[]): boolean {
+    const precedingLines = source.slice(0, typeDeclOffset).split(/\r?\n/);
+    if (precedingLines[precedingLines.length - 1] === "") {
+        precedingLines.pop();
+    }
+
+    const docBlockLines: string[] = [];
+    for (let i = precedingLines.length - 1; i >= 0; i--) {
+        const line = precedingLines[i];
+        if (line.trim() === "") {
+            break;
+        }
+        if (!line.startsWith("//")) {
+            break;
+        }
+        docBlockLines.unshift(line);
+    }
+
+    for (let i = 0; i <= docBlockLines.length - commentLines.length; i++) {
+        if (commentLines.every((commentLine, offset) => docBlockLines[i + offset] === commentLine)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function pushGoExperimentalEventComment(lines: string[], constName: string, indent = ""): void {
     pushGoComment(lines, `Experimental: ${constName} identifies an experimental event that may change or be removed.`, indent);
 }
@@ -172,6 +232,31 @@ function pushGoExperimentalSubApiComment(lines: string[], name: string, indent =
 
 function pushGoExperimentalMethodComment(lines: string[], methodName: string, indent = ""): void {
     pushGoComment(lines, `Experimental: ${methodName} is an experimental API and may change or be removed in future versions.`, indent);
+}
+
+function pushGoInternalPropertyComment(lines: string[], goName: string, ctx: GoCodegenCtx, indent = "\t"): void {
+    pushGoCommentForContext(lines, `Internal: ${goName} is part of the SDK's internal API surface and is not intended for external use.`, ctx, indent);
+}
+
+function pushGoExperimentalPropertyComment(lines: string[], goName: string, ctx: GoCodegenCtx, indent = "\t"): void {
+    pushGoCommentForContext(lines, `Experimental: ${goName} is part of an experimental API and may change or be removed.`, ctx, indent);
+}
+
+/**
+ * Emit `Deprecated:` / `Experimental:` / `Internal:` doc comments above a Go
+ * struct field. Centralises the per-field marker logic shared between the
+ * regular struct emitter and the discriminated-union variant emitters.
+ */
+function pushGoFieldMarkers(lines: string[], prop: JSONSchema7, goName: string, ctx: GoCodegenCtx, indent = "\t"): void {
+    if (isSchemaDeprecated(prop)) {
+        pushGoCommentForContext(lines, `Deprecated: ${goName} is deprecated.`, ctx, indent);
+    }
+    if (isSchemaExperimental(prop)) {
+        pushGoExperimentalPropertyComment(lines, goName, ctx, indent);
+    }
+    if (isSchemaInternal(prop)) {
+        pushGoInternalPropertyComment(lines, goName, ctx, indent);
+    }
 }
 
 function lowerFirst(value: string): string {
@@ -299,6 +384,15 @@ function goOptionalFieldNeedsDereference(goType: string | undefined): boolean {
 
 function goTypeWithOptionalPointer(goType: string, ctx?: GoCodegenCtx): string {
     return goTypeIsNilable(goType, ctx) ? goType : `*${goType}`;
+}
+
+function goJSONOmitSuffix(required: boolean, goType: string): string {
+    if (required) return "";
+    return goTypeIsSlice(goType) || goTypeIsMap(goType) ? ",omitzero" : ",omitempty";
+}
+
+function goJSONTag(jsonName: string, required: boolean, goType: string): string {
+    return `json:"${jsonName}${goJSONOmitSuffix(required, goType)}"`;
 }
 
 async function formatGoFile(filePath: string): Promise<void> {
@@ -495,7 +589,6 @@ function getGoSharedEventEnvelopeProperties(schema: JSONSchema7, ctx: GoCodegenC
         .map((property) => {
             const { name, schema, required } = property;
             const typeName = resolveGoPropertyType(schema, "SessionEvent", name, required && !getNullableInner(schema), ctx);
-            const omit = required ? "" : ",omitempty";
 
             return {
                 name,
@@ -503,7 +596,7 @@ function getGoSharedEventEnvelopeProperties(schema: JSONSchema7, ctx: GoCodegenC
                 required,
                 fieldName: toGoFieldName(name),
                 typeName,
-                jsonTag: `json:"${name}${omit}"`,
+                jsonTag: goJSONTag(name, required, typeName),
                 description: schema.description,
             };
         });
@@ -682,11 +775,7 @@ function getOrCreateGoEnum(
 
 function goEnumConstSuffix(value: string): string {
     const suffix = splitGoIdentifierWords(value)
-        .map((word) =>
-            goInitialisms.has(word.toLowerCase())
-                ? word.toUpperCase()
-                : word.charAt(0).toUpperCase() + word.slice(1)
-        )
+        .map((word) => goIdentifierWord(word))
         .join("");
     return suffix || "Value";
 }
@@ -978,6 +1067,57 @@ function pushGoEncodingBlock(blockLines: string[], ctx: GoCodegenCtx): void {
     ctx.encoding.push(block);
 }
 
+function registerGoExternalUnionUnmarshalers(
+    schema: JSONSchema7,
+    ctx: GoCodegenCtx,
+    externalSchemas?: Record<string, JSONSchema7>
+): void {
+    if (!externalSchemas) return;
+
+    const externalRefs = collectExternalSchemaRefNames(schema);
+    for (const [schemaFile, refNames] of externalRefs) {
+        const externalSchema = externalSchemas[schemaFile];
+        const externalImport = EXTERNAL_SCHEMA_GO_IMPORT[schemaFile];
+        if (!externalSchema || !externalImport || externalImport.packageName !== ctx.packageName) continue;
+
+        const externalDefinitions = collectDefinitionCollections(externalSchema as Record<string, unknown>);
+        const definitions: Record<string, JSONSchema7> = {
+            ...Object.fromEntries(
+                Object.entries(externalDefinitions.$defs ?? {}).filter(([, value]) => typeof value === "object" && value !== null)
+            ) as Record<string, JSONSchema7>,
+            ...Object.fromEntries(
+                Object.entries(externalDefinitions.definitions ?? {}).filter(([, value]) => typeof value === "object" && value !== null)
+            ) as Record<string, JSONSchema7>,
+        };
+        const planningCtx: GoCodegenCtx = {
+            structs: [],
+            encoding: [],
+            enums: [],
+            enumsByName: new Map(),
+            discriminatedUnions: new Map(),
+            generatedNames: new Set(),
+            definitions: externalDefinitions,
+            wrapComments: ctx.wrapComments,
+            discriminatedUnionRawVariantSuffix: ctx.discriminatedUnionRawVariantSuffix,
+            packageName: ctx.packageName,
+        };
+
+        for (const refName of refNames) {
+            const definition = definitions[refName];
+            if (!definition) continue;
+
+            const typeName = goDefinitionName(refName);
+            const plan = planGoUnion(typeName, definition, planningCtx, true);
+            if (!plan || plan.kind === "flattenedObject" || plan.kind === "wrapper") continue;
+
+            ctx.discriminatedUnions.set(typeName, {
+                typeName,
+                unmarshalFuncName: goUnexportedFunctionName("unmarshal", typeName),
+            });
+        }
+    }
+}
+
 function pushGoStructUnmarshalJSON(lines: string[], typeName: string, fields: GoStructField[], ctx: GoCodegenCtx): void {
     const unionFields = fields
         .map((field) => ({ field, unionField: goDiscriminatedUnionField(field.goType, ctx) }))
@@ -1079,15 +1219,12 @@ function emitGoStruct(
         const isReq = required.has(propName);
         const goName = toGoFieldName(propName);
         const goType = resolveGoPropertyType(prop, typeName, propName, isReq, ctx);
-        const omit = isReq ? "" : ",omitempty";
 
         if (prop.description) {
             pushGoCommentForContext(lines, prop.description, ctx, "\t");
         }
-        if (isSchemaDeprecated(prop)) {
-            pushGoCommentForContext(lines, `Deprecated: ${goName} is deprecated.`, ctx, "\t");
-        }
-        const jsonTag = `json:"${propName}${omit}"`;
+        pushGoFieldMarkers(lines, prop, goName, ctx);
+        const jsonTag = goJSONTag(propName, isReq, goType);
         lines.push(`\t${goName} ${goType} \`${jsonTag}\``);
         fields.push({ propName, goName, goType, jsonTag });
     }
@@ -1631,7 +1768,7 @@ function emitGoFlatDiscriminatedUnion(
     const unmarshalFuncName = goUnexportedFunctionName("unmarshal", typeName);
     const rawDataName = `Raw${typeName}${ctx.discriminatedUnionRawVariantSuffix ?? "Data"}`;
     const hasRawVariant = discriminator.valueKind === "string";
-    const markerName = `${typeName.charAt(0).toLowerCase()}${typeName.slice(1)}`;
+    const markerName = toGoUnexportedIdentifier(typeName);
     ctx.discriminatedUnions.set(typeName, { typeName, unmarshalFuncName });
 
     const lines: string[] = [];
@@ -1771,14 +1908,11 @@ function emitGoFlatDiscriminatedUnion(
                 }
                 const goName = toGoFieldName(propName);
                 const goType = resolveGoPropertyType(prop, variantTypeName, propName, required.has(propName), ctx);
-                const omit = required.has(propName) ? "" : ",omitempty";
                 if (prop.description) {
                     pushGoCommentForContext(lines, prop.description, ctx, "\t");
                 }
-                if (isSchemaDeprecated(prop)) {
-                    pushGoCommentForContext(lines, `Deprecated: ${goName} is deprecated.`, ctx, "\t");
-                }
-                const jsonTag = `json:"${propName}${omit}"`;
+                pushGoFieldMarkers(lines, prop, goName, ctx);
+                const jsonTag = goJSONTag(propName, required.has(propName), goType);
                 lines.push(`\t${goName} ${goType} \`${jsonTag}\``);
                 fields.push({ propName, goName, goType, jsonTag });
             }
@@ -1832,7 +1966,7 @@ function emitGoRequiredFieldDiscriminatedUnion(
     const unionVariants = [...discriminator.variants].sort((left, right) => compareGoTypeNames(left.typeName, right.typeName));
     const unmarshalFuncName = goUnexportedFunctionName("unmarshal", typeName);
     const rawDataName = `Raw${typeName}${ctx.discriminatedUnionRawVariantSuffix ?? "Data"}`;
-    const markerName = `${typeName.charAt(0).toLowerCase()}${typeName.slice(1)}`;
+    const markerName = toGoUnexportedIdentifier(typeName);
     ctx.discriminatedUnions.set(typeName, { typeName, unmarshalFuncName });
 
     const lines: string[] = [];
@@ -1900,14 +2034,11 @@ function emitGoRequiredFieldDiscriminatedUnion(
                 const prop = propSchema as JSONSchema7;
                 const goName = toGoFieldName(propName);
                 const goType = resolveGoPropertyType(prop, variantTypeName, propName, required.has(propName), ctx);
-                const omit = required.has(propName) ? "" : ",omitempty";
                 if (prop.description) {
                     pushGoCommentForContext(lines, prop.description, ctx, "\t");
                 }
-                if (isSchemaDeprecated(prop)) {
-                    pushGoCommentForContext(lines, `Deprecated: ${goName} is deprecated.`, ctx, "\t");
-                }
-                const jsonTag = `json:"${propName}${omit}"`;
+                pushGoFieldMarkers(lines, prop, goName, ctx);
+                const jsonTag = goJSONTag(propName, required.has(propName), goType);
                 lines.push(`\t${goName} ${goType} \`${jsonTag}\``);
                 fields.push({ propName, goName, goType, jsonTag });
             }
@@ -2215,7 +2346,6 @@ function emitGoFlattenedObjectUnion(
         const mergedSchema = mergeGoFlattenedPropertySchema(typeName, propName, info.schemas, ctx);
         const requiredInAll = info.requiredInAll && info.presentCount === objectVariants.length;
         const goType = resolveGoPropertyType(mergedSchema, typeName, propName, requiredInAll, ctx);
-        const omit = requiredInAll ? "" : ",omitempty";
         const description = info.schemas.find((schema) => schema.description)?.description;
         if (description) {
             pushGoCommentForContext(lines, description, ctx, "\t");
@@ -2223,7 +2353,7 @@ function emitGoFlattenedObjectUnion(
         if (info.schemas.some((schema) => isSchemaDeprecated(schema))) {
             pushGoCommentForContext(lines, `Deprecated: ${goName} is deprecated.`, ctx, "\t");
         }
-        const jsonTag = `json:"${propName}${omit}"`;
+        const jsonTag = goJSONTag(propName, requiredInAll, goType);
         lines.push(`\t${goName} ${goType} \`${jsonTag}\``);
         fields.push({ propName, goName, goType, jsonTag });
     }
@@ -2399,7 +2529,7 @@ function emitGoPrimitiveUnionInterface(typeName: string, schema: JSONSchema7, ct
 
     ctx.generatedNames.add(typeName);
     const unmarshalFuncName = goUnexportedFunctionName("unmarshal", typeName);
-    const markerName = `${typeName.charAt(0).toLowerCase()}${typeName.slice(1)}`;
+    const markerName = toGoUnexportedIdentifier(typeName);
     ctx.discriminatedUnions.set(typeName, { typeName, unmarshalFuncName });
 
     const lines: string[] = [];
@@ -2555,7 +2685,7 @@ function emitGoUntaggedUnionInterface(typeName: string, schema: JSONSchema7, ctx
 
     ctx.generatedNames.add(typeName);
     const unmarshalFuncName = goUnexportedFunctionName("unmarshal", typeName);
-    const markerName = `${typeName.charAt(0).toLowerCase()}${typeName.slice(1)}`;
+    const markerName = toGoUnexportedIdentifier(typeName);
     ctx.discriminatedUnions.set(typeName, { typeName, unmarshalFuncName });
 
     const lines: string[] = [];
@@ -2942,7 +3072,11 @@ function goDeclaredTypeName(code: string): string {
 /**
  * Generate the complete Go session-events file content.
  */
-export function generateGoSessionEventsCode(schema: JSONSchema7, packageName: string): GoGeneratedTypeCode {
+export function generateGoSessionEventsCode(
+    schema: JSONSchema7,
+    packageName: string,
+    externalSchemas?: Record<string, JSONSchema7>
+): GoGeneratedTypeCode {
     const variants = extractGoEventVariants(schema);
     const ctx: GoCodegenCtx = {
         structs: [],
@@ -2956,6 +3090,7 @@ export function generateGoSessionEventsCode(schema: JSONSchema7, packageName: st
         discriminatedUnionRawVariantSuffix: "",
         packageName,
     };
+    registerGoExternalUnionUnmarshalers(schema, ctx, externalSchemas);
     const envelopeProperties = getGoSharedEventEnvelopeProperties(schema, ctx);
     const sessionEventStructFields = [
         ...envelopeProperties.map((property) => ({
@@ -3011,15 +3146,12 @@ export function generateGoSessionEventsCode(schema: JSONSchema7, packageName: st
             const isReq = required.has(propName);
             const goName = toGoFieldName(propName);
             const goType = resolveGoPropertyType(prop, variant.dataClassName, propName, isReq, ctx);
-            const omit = isReq ? "" : ",omitempty";
 
             if (prop.description) {
                 pushGoCommentForContext(lines, prop.description, ctx, "\t");
             }
-            if (isSchemaDeprecated(prop)) {
-                pushGoCommentForContext(lines, `Deprecated: ${goName} is deprecated.`, ctx, "\t");
-            }
-            const jsonTag = `json:"${propName}${omit}"`;
+            pushGoFieldMarkers(lines, prop, goName, ctx);
+            const jsonTag = goJSONTag(propName, isReq, goType);
             lines.push(`\t${goName} ${goType} \`${jsonTag}\``);
             fields.push({ propName, goName, goType, jsonTag });
         }
@@ -3029,11 +3161,7 @@ export function generateGoSessionEventsCode(schema: JSONSchema7, packageName: st
         lines.push(``);
         const constName = "SessionEventType" + variant.typeName
             .split(/[._]/)
-            .map((w) =>
-                goInitialisms.has(w.toLowerCase())
-                    ? w.toUpperCase()
-                    : w.charAt(0).toUpperCase() + w.slice(1)
-            )
+            .map((w) => goIdentifierWord(w))
             .join("");
         lines.push(`func (*${variant.dataClassName}) sessionEventData() {}`);
         lines.push(`func (*${variant.dataClassName}) Type() SessionEventType { return ${constName} }`);
@@ -3051,11 +3179,7 @@ export function generateGoSessionEventsCode(schema: JSONSchema7, packageName: st
         .map((variant) => ({
             constName: "SessionEventType" + variant.typeName
                 .split(/[._]/)
-                .map((w) =>
-                    goInitialisms.has(w.toLowerCase())
-                        ? w.toUpperCase()
-                        : w.charAt(0).toUpperCase() + w.slice(1)
-                )
+                .map((w) => goIdentifierWord(w))
                 .join(""),
             typeName: variant.typeName,
         }))
@@ -3122,11 +3246,7 @@ export function generateGoSessionEventsCode(schema: JSONSchema7, packageName: st
         .map((variant) => ({
             constName: "SessionEventType" + variant.typeName
                 .split(/[._]/)
-                .map((w) =>
-                    goInitialisms.has(w.toLowerCase())
-                        ? w.toUpperCase()
-                        : w.charAt(0).toUpperCase() + w.slice(1)
-                )
+                .map((w) => goIdentifierWord(w))
                 .join(""),
             dataClassName: variant.dataClassName,
         }))
@@ -3238,30 +3358,35 @@ export function generateGoSessionEventsCode(schema: JSONSchema7, packageName: st
     const TYPE_ALIASES: Record<string, string> = {
         PermissionRequestCommand: "PermissionRequestShellCommand",
         PossibleURL: "PermissionRequestShellPossibleURL",
-        Attachment: "UserMessageAttachment",
-        AttachmentType: "UserMessageAttachmentType",
     };
-    const CONST_ALIASES: Record<string, string> = {
-        AttachmentTypeFile: "UserMessageAttachmentTypeFile",
-        AttachmentTypeDirectory: "UserMessageAttachmentTypeDirectory",
-        AttachmentTypeSelection: "UserMessageAttachmentTypeSelection",
-        AttachmentTypeGithubReference: "UserMessageAttachmentTypeGithubReference",
-        AttachmentTypeBlob: "UserMessageAttachmentTypeBlob",
-    };
-    out.push(`// Type aliases for convenience.`);
-    out.push(`type (`);
-    for (const [alias, target] of Object.entries(TYPE_ALIASES).sort(([left], [right]) => left.localeCompare(right))) {
-        out.push(`\t${alias} = ${target}`);
+    const CONST_ALIASES: Record<string, string> = {};
+    const generatedTypeNames = new Set(collectGoTopLevelNames(joinGoCode(out), "type"));
+    const generatedConstNames = new Set(collectGoTopLevelNames(joinGoCode(out), "const"));
+    const typeAliases = Object.entries(TYPE_ALIASES)
+        .filter(([alias, target]) => generatedTypeNames.has(target) && !generatedTypeNames.has(alias))
+        .sort(([left], [right]) => left.localeCompare(right));
+    const constAliases = Object.entries(CONST_ALIASES)
+        .filter(([alias, target]) => generatedConstNames.has(target) && !generatedConstNames.has(alias))
+        .sort(([left], [right]) => left.localeCompare(right));
+    if (typeAliases.length > 0) {
+        out.push(`// Type aliases for convenience.`);
+        out.push(`type (`);
+        for (const [alias, target] of typeAliases) {
+            out.push(`\t${alias} = ${target}`);
+        }
+        out.push(`)`);
+        out.push(``);
     }
-    out.push(`)`);
-    out.push(``);
-    out.push(`// Constant aliases for convenience.`);
-    out.push(`const (`);
-    for (const [alias, target] of Object.entries(CONST_ALIASES).sort(([left], [right]) => left.localeCompare(right))) {
-        out.push(`\t${alias} = ${target}`);
+
+    if (constAliases.length > 0) {
+        out.push(`// Constant aliases for convenience.`);
+        out.push(`const (`);
+        for (const [alias, target] of constAliases) {
+            out.push(`\t${alias} = ${target}`);
+        }
+        out.push(`)`);
+        out.push(``);
     }
-    out.push(`)`);
-    out.push(``);
 
     const encodingOut: string[] = [...sessionEncoding];
     if (encodingOut.length > 0) encodingOut.push("");
@@ -3310,11 +3435,15 @@ function collectGoTopLevelNames(code: string, keyword: "type" | "const"): string
 function generateGoSessionEventAliasFile(
     generatedSessionTypeCode: string,
     additionalTypeNames: Iterable<string> = [],
-    additionalConstNames: Iterable<string> = []
+    additionalConstNames: Iterable<string> = [],
+    excludeTypeNames: Iterable<string> = []
 ): string {
+    const excluded = new Set(excludeTypeNames);
     const typeNames = [...new Set([...collectGoTopLevelNames(generatedSessionTypeCode, "type"), ...additionalTypeNames])]
+        .filter((name) => !excluded.has(name))
         .sort(compareGoTypeNames);
     const constNames = [...new Set([...collectGoTopLevelNames(generatedSessionTypeCode, "const"), ...additionalConstNames])]
+        .filter((name) => !excluded.has(name))
         .sort(compareGoTypeNames);
     const lines: string[] = [];
 
@@ -3373,12 +3502,127 @@ function collectGoSharedSessionEventAliasNames(
         for (const value of values ?? []) {
             constNames.add(`${typeName}${goEnumConstSuffix(value)}`);
         }
+
+        // Detect anyOf unions with a string-const discriminator property. The
+        // api/rpc generator synthesizes an enum (named `<TypeName><DiscProp>`)
+        // and per-variant consts for these (e.g. `Attachment` → `AttachmentType`
+        // + `AttachmentTypeFile`, ...). They aren't top-level $defs, so we have
+        // to surface them explicitly here so the public `copilot` alias file
+        // re-exports them alongside the union and its variant structs.
+        const synthesized = collectGoSharedAnyOfDiscriminatorAliasNames(typeName, schema, definitions);
+        if (synthesized) {
+            typeNames.add(synthesized.enumName);
+            for (const constName of synthesized.constNames) {
+                constNames.add(constName);
+            }
+        }
     }
 
     return {
         typeNames: [...typeNames].sort(compareGoTypeNames),
         constNames: [...constNames].sort(compareGoTypeNames),
     };
+}
+
+/**
+ * For a shared definition that is an `anyOf` discriminated union with a
+ * string-const discriminator property (e.g. `Attachment` with `type: "file" |
+ * "directory" | ...`), return the synthesized Go discriminator enum name and
+ * per-variant const names that the api/rpc generator emits via
+ * `emitGoFlatDiscriminatedUnion`. Returns `undefined` when the definition does
+ * not match the const-discriminator pattern.
+ */
+function collectGoSharedAnyOfDiscriminatorAliasNames(
+    unionTypeName: string,
+    schema: JSONSchema7,
+    definitions: Record<string, unknown>
+): { enumName: string; constNames: string[] } | undefined {
+    const variants = Array.isArray(schema.anyOf) ? schema.anyOf : undefined;
+    if (!variants || variants.length === 0) return undefined;
+
+    const resolvedVariants: JSONSchema7[] = [];
+    for (const variant of variants) {
+        const resolved = resolveSharedAnyOfVariant(variant, definitions);
+        if (!resolved || !resolved.properties) return undefined;
+        resolvedVariants.push(resolved);
+    }
+
+    const firstVariant = resolvedVariants[0];
+    for (const [propName, propSchemaRaw] of Object.entries(firstVariant.properties!)) {
+        if (typeof propSchemaRaw !== "object" || propSchemaRaw === null) continue;
+        const firstPropSchema = propSchemaRaw as JSONSchema7;
+        if (typeof firstPropSchema.const !== "string") continue;
+
+        const collectedValues: string[] = [];
+        let valid = true;
+        for (const variant of resolvedVariants) {
+            if (!(variant.required || []).includes(propName)) { valid = false; break; }
+            const variantProp = variant.properties?.[propName];
+            if (typeof variantProp !== "object" || variantProp === null) { valid = false; break; }
+            const variantConst = (variantProp as JSONSchema7).const;
+            if (typeof variantConst !== "string") { valid = false; break; }
+            collectedValues.push(variantConst);
+        }
+        if (!valid || collectedValues.length === 0) continue;
+
+        const enumName = `${unionTypeName}${toGoFieldName(propName)}`;
+        const constNames = [...new Set(collectedValues)].map(
+            (value) => `${enumName}${goEnumConstSuffix(value)}`
+        );
+        return { enumName, constNames };
+    }
+    return undefined;
+}
+
+function resolveSharedAnyOfVariant(
+    variant: JSONSchema7 | boolean,
+    definitions: Record<string, unknown>
+): JSONSchema7 | undefined {
+    if (typeof variant !== "object" || variant === null) return undefined;
+    if (typeof variant.$ref === "string") {
+        // Local $ref like "#/$defs/AttachmentFile" or "#/definitions/AttachmentFile".
+        const localMatch = /^#\/(?:\$defs|definitions)\/(.+)$/.exec(variant.$ref);
+        if (!localMatch) return undefined;
+        const target = definitions[decodeURIComponent(localMatch[1])];
+        if (!target || typeof target !== "object" || Array.isArray(target)) return undefined;
+        return target as JSONSchema7;
+    }
+    return variant;
+}
+
+/**
+ * Scan hand-written `.go` files under `go/` and return every top-level exported
+ * type or const name they declare. We use this to exclude those names from the
+ * session-events alias file: when a schema-shared definition (e.g. `ContextTier`)
+ * collides with a hand-written declaration of the same name in the public
+ * `copilot` package, the hand-written declaration must win — emitting an alias
+ * would produce a duplicate package-scope identifier and fail `go build`.
+ *
+ * Generated files use the `z*.go` naming convention; we skip them so that this
+ * scanner never reads (or depends on the output of) its own emit. Test files
+ * are scanned too because they share the package namespace, so a hand-written
+ * test-only declaration would also collide with an alias of the same name.
+ */
+async function collectHandWrittenGoPublicNames(): Promise<Set<string>> {
+    const goDir = path.join(REPO_ROOT, "go");
+    const names = new Set<string>();
+    let entries: string[];
+    try {
+        entries = await fs.readdir(goDir);
+    } catch {
+        return names;
+    }
+    for (const entry of entries) {
+        if (!entry.endsWith(".go")) continue;
+        if (entry.startsWith("z")) continue;
+        const filePath = path.join(goDir, entry);
+        const stat = await fs.stat(filePath);
+        if (!stat.isFile()) continue;
+        const content = await fs.readFile(filePath, "utf-8");
+        for (const name of collectGoTopLevelNames(content, "type")) names.add(name);
+        for (const name of collectGoTopLevelNames(content, "const")) names.add(name);
+    }
+    return names;
 }
 
 function assertNoGoRpcSessionEventConflicts(rpcGeneratedTypeCode: string): void {
@@ -3400,20 +3644,46 @@ async function generateSessionEvents(schemaPath?: string, apiSchema?: ApiSchema)
     console.log("Go: generating session-events...");
 
     const resolvedPath = schemaPath ?? (await getSessionEventsSchemaPath());
-    const schema = cloneSchemaForCodegen(JSON.parse(await fs.readFile(resolvedPath, "utf-8")) as JSONSchema7);
-    const processed = postProcessSchema(schema);
-    const sharedDefinitions = apiSchema
+    const schema = cloneSchemaForCodegen((await loadSchemaJson(resolvedPath)) as JSONSchema7);
+    const processed = propagateInternalVisibility(postProcessSchema(schema));
+    const processedApiSchema = apiSchema
+        ? propagateInternalVisibility(postProcessSchema(cloneSchemaForCodegen(apiSchema as JSONSchema7)) as JSONSchema7)
+        : undefined;
+    const sharedDefinitions = processedApiSchema
         ? findSharedSchemaDefinitions(
             processed as unknown as Record<string, unknown>,
-            postProcessSchema(cloneSchemaForCodegen(apiSchema as JSONSchema7)) as unknown as Record<string, unknown>
+            processedApiSchema as unknown as Record<string, unknown>
         )
         : new Set<string>();
     const reachableDefinitions = collectReachableDefinitionNames(processed as unknown as Record<string, unknown>);
     const sharedSessionEventDefinitions = new Set([...sharedDefinitions].filter((name) => reachableDefinitions.has(name)));
     const sessionSchema = rewriteSharedDefinitionReferences(processed, sharedDefinitions, "api.schema.json", true);
 
-    const generatedSessionCode = generateGoSessionEventsCode(sessionSchema, "rpc");
-    const generatedTypeCode = stripTrailingGoWhitespace(generatedSessionCode.typeCode);
+    const generatedSessionCode = generateGoSessionEventsCode(
+        sessionSchema,
+        "rpc",
+        processedApiSchema ? { "api.schema.json": processedApiSchema } : undefined
+    );
+    let generatedTypeCode = stripTrailingGoWhitespace(generatedSessionCode.typeCode);
+    // Annotate internal session-event types (driven by the JSON Schema definition's
+    // `visibility: "internal"` flag). Matches what the RPC generator does below;
+    // the session-events emit path doesn't pass through that code so we apply it here.
+    {
+        const sessionDefs = collectDefinitionCollections(sessionSchema as Record<string, unknown>);
+        const allSessionDefs = { ...sessionDefs.$defs, ...sessionDefs.definitions };
+        const internalSessionTypeNames = new Set<string>();
+        for (const [name, def] of Object.entries(allSessionDefs)) {
+            if (def && typeof def === "object" && (def as Record<string, unknown>).visibility === "internal") {
+                internalSessionTypeNames.add(name);
+            }
+        }
+        for (const typeName of internalSessionTypeNames) {
+            generatedTypeCode = generatedTypeCode.replace(
+                new RegExp(`^(type ${typeName} struct)`, "m"),
+                `// Internal: ${typeName} is an internal SDK API and is not part of the public surface.\n$1`
+            );
+        }
+    }
     const generatedEncodingCode = stripTrailingGoWhitespace(generatedSessionCode.encodingCode);
     rpcSessionEventTopLevelNames = {
         types: new Set(collectGoTopLevelNames(generatedTypeCode, "type")),
@@ -3433,9 +3703,34 @@ async function generateSessionEvents(schemaPath?: string, apiSchema?: ApiSchema)
     const sharedAliasNames = apiSchema
         ? collectGoSharedSessionEventAliasNames(sharedSessionEventDefinitions, apiSchema)
         : { typeNames: [], constNames: [] };
+    // Exclude internal types from the public `copilot` package re-exports. They
+    // remain accessible in the lower-level `rpc` package (where they're tagged
+    // with `// Internal:` doc comments), but consumers using only the canonical
+    // `copilot.*` namespace never see them. This is the strongest practical
+    // signal Go offers without requiring runtime refactoring to enable full
+    // lowercase/unexported types.
+    const internalTypesInSession = new Set<string>();
+    {
+        const { definitions, $defs } = collectDefinitionCollections(sessionSchema as Record<string, unknown>);
+        for (const [name, def] of Object.entries({ ...definitions, ...$defs })) {
+            if (def && typeof def === "object" && (def as Record<string, unknown>).visibility === "internal") {
+                internalTypesInSession.add(name);
+            }
+        }
+    }
+    // Names of public type/const declarations that already exist in hand-written
+    // Go files under `go/`. We must not re-export schema-generated names that
+    // collide with these, because Go disallows two top-level identifiers with
+    // the same name in a single package (`copilot`). The hand-written
+    // declaration always wins. Without this filter, schema-shared definitions
+    // like `ContextTier` (defined as a shared schema definition and emitted in
+    // the rpc package) would generate `copilot.ContextTier = rpc.ContextTier`
+    // aliases that clash with the existing hand-written `copilot.ContextTier`.
+    const handWrittenPublicNames = await collectHandWrittenGoPublicNames();
+    const aliasExcludes = new Set<string>([...internalTypesInSession, ...handWrittenPublicNames]);
     const aliasOutPath = await writeGeneratedFile(
         "go/zsession_events.go",
-        generateGoSessionEventAliasFile(generatedTypeCode, sharedAliasNames.typeNames, sharedAliasNames.constNames)
+        generateGoSessionEventAliasFile(generatedTypeCode, sharedAliasNames.typeNames, sharedAliasNames.constNames, aliasExcludes)
     );
     console.log(`  ✓ ${aliasOutPath}`);
 
@@ -3449,7 +3744,7 @@ async function generateRpc(schemaPath?: string): Promise<void> {
     console.log("Go: generating RPC types...");
 
     const resolvedPath = schemaPath ?? (await getApiSchemaPath());
-    const schema = fixNullableRequiredRefsInApiSchema(cloneSchemaForCodegen(JSON.parse(await fs.readFile(resolvedPath, "utf-8")) as ApiSchema));
+    const schema = propagateInternalVisibility(fixNullableRequiredRefsInApiSchema(cloneSchemaForCodegen((await loadSchemaJson(resolvedPath)) as ApiSchema)) as JSONSchema7) as unknown as ApiSchema;
 
     const allMethods = [
         ...collectRpcMethods(schema.server || {}),
@@ -3475,6 +3770,8 @@ async function generateRpc(schemaPath?: string): Promise<void> {
         if (nullableInner) {
             // Nullable results (e.g., *SessionFSError) don't need a wrapper type;
             // the inner type is already in definitions via shared hoisting.
+        } else if (isOpaqueJson(resultSchema)) {
+            // Opaque JSON results map to `any` — no named struct needed.
         } else if (isVoidSchema(resultSchema)) {
             // Emit an empty struct for void results (forward-compatible with adding fields later)
             allDefinitions[goResultTypeName(method)] = {
@@ -3559,9 +3856,16 @@ async function generateRpc(schemaPath?: string): Promise<void> {
     }
     for (const typeName of experimentalTypeNames) {
         const emittedTypeName = resolveType(typeName);
+        const experimentalCommentLines = goCommentLines(goExperimentalTypeComment(emittedTypeName));
+        const experimentalComment = experimentalCommentLines.join("\n");
         generatedTypeCode = generatedTypeCode.replace(
-            new RegExp(`^(type ${escapeRegExp(emittedTypeName)}\\b)`, "m"),
-            `// ${goExperimentalTypeComment(emittedTypeName)}\n$1`
+            new RegExp(`^type ${escapeRegExp(emittedTypeName)}\\b`, "m"),
+            (typeDeclaration: string, offset: number, source: string) => {
+                if (hasGoCommentLinesInLeadingDocBlock(source, offset, experimentalCommentLines)) {
+                    return typeDeclaration;
+                }
+                return `${experimentalComment}\n${typeDeclaration}`;
+            }
         );
     }
 
@@ -3690,15 +3994,15 @@ function emitApiGroup(
     }
 
     for (const [subGroupName, subGroupNode] of subGroups) {
-        const subApiName = apiName.replace(/Api$/, "") + toPascalCase(subGroupName) + "Api";
+        const subApiName = apiName.replace(/API$/, "") + toGoFieldName(subGroupName) + "API";
         const subGroupExperimental = isNodeFullyExperimental(subGroupNode as Record<string, unknown>);
         const subGroupDeprecated = isNodeFullyDeprecated(subGroupNode as Record<string, unknown>);
         emitApiGroup(lines, subApiName, subGroupNode as Record<string, unknown>, isSession, serviceName, resolveType, fields, unionInfos, subGroupExperimental, subGroupDeprecated);
 
         if (subGroupExperimental) {
-            pushGoExperimentalSubApiComment(lines, toPascalCase(subGroupName));
+            pushGoExperimentalSubApiComment(lines, toGoFieldName(subGroupName));
         }
-        lines.push(`func (s *${apiName}) ${toPascalCase(subGroupName)}() *${subApiName} {`);
+        lines.push(`func (s *${apiName}) ${toGoFieldName(subGroupName)}() *${subApiName} {`);
         lines.push(`\treturn (*${subApiName})(s)`);
         lines.push(`}`);
         lines.push(``);
@@ -3709,13 +4013,13 @@ function emitRpcWrapper(lines: string[], node: Record<string, unknown>, isSessio
     const groups = sortByPascalName(Object.entries(node).filter(([, v]) => typeof v === "object" && v !== null && !isRpcMethod(v)));
     const topLevelMethods = sortByPascalName(Object.entries(node).filter(([, v]) => isRpcMethod(v)));
 
-    const wrapperName = classPrefix + (isSession ? "SessionRpc" : "ServerRpc");
-    const apiSuffix = "Api";
+    const wrapperName = classPrefix + (isSession ? "SessionRPC" : "ServerRPC");
+    const apiSuffix = "API";
     // Lowercase the prefix so the unexported service struct stays unexported in Go.
     const prefixLower = classPrefix ? classPrefix.charAt(0).toLowerCase() + classPrefix.slice(1) : "";
     const serviceName = prefixLower
-        ? prefixLower + (isSession ? "SessionApi" : "ServerApi")
-        : (isSession ? "sessionApi" : "serverApi");
+        ? prefixLower + (isSession ? "SessionAPI" : "ServerAPI")
+        : (isSession ? "sessionAPI" : "serverAPI");
 
     // Emit the common service struct (unexported, shared by all API groups via type cast)
     lines.push(`type ${serviceName} struct {`);
@@ -3727,14 +4031,14 @@ function emitRpcWrapper(lines: string[], node: Record<string, unknown>, isSessio
     // Emit API types for groups
     for (const [groupName, groupNode] of groups) {
         const prefix = classPrefix + (isSession ? "" : "Server");
-        const apiName = prefix + toPascalCase(groupName) + apiSuffix;
+        const apiName = prefix + toGoFieldName(groupName) + apiSuffix;
         const groupExperimental = isNodeFullyExperimental(groupNode as Record<string, unknown>);
         const groupDeprecated = isNodeFullyDeprecated(groupNode as Record<string, unknown>);
         emitApiGroup(lines, apiName, groupNode as Record<string, unknown>, isSession, serviceName, resolveType, fields, unionInfos, groupExperimental, groupDeprecated);
     }
 
     // Compute field name lengths for gofmt-compatible column alignment
-    const groupPascalNames = groups.map(([g]) => toPascalCase(g));
+    const groupPascalNames = groups.map(([g]) => toGoFieldName(g));
     const allFieldNames = ["common", ...groupPascalNames];
     const maxFieldLen = Math.max(...allFieldNames.map((n) => n.length));
     const pad = (name: string) => name.padEnd(maxFieldLen);
@@ -3752,7 +4056,7 @@ function emitRpcWrapper(lines: string[], node: Record<string, unknown>, isSessio
     lines.push(``);
     for (const [groupName] of groups) {
         const prefix = classPrefix + (isSession ? "" : "Server");
-        lines.push(`\t${pad(toPascalCase(groupName))} *${prefix}${toPascalCase(groupName)}${apiSuffix}`);
+        lines.push(`\t${pad(toGoFieldName(groupName))} *${prefix}${toGoFieldName(groupName)}${apiSuffix}`);
     }
     lines.push(`}`);
     lines.push(``);
@@ -3774,7 +4078,7 @@ function emitRpcWrapper(lines: string[], node: Record<string, unknown>, isSessio
     }
     for (const [groupName] of groups) {
         const prefix = classPrefix + (isSession ? "" : "Server");
-        lines.push(`\tr.${toPascalCase(groupName)} = (*${prefix}${toPascalCase(groupName)}${apiSuffix})(&r.common)`);
+        lines.push(`\tr.${toGoFieldName(groupName)} = (*${prefix}${toGoFieldName(groupName)}${apiSuffix})(&r.common)`);
     }
     lines.push(`\treturn r`);
     lines.push(`}`);
@@ -3904,7 +4208,7 @@ function collectClientGroups(node: Record<string, unknown>): ClientGroup[] {
 }
 
 function clientHandlerInterfaceName(groupName: string): string {
-    return `${toPascalCase(groupName)}Handler`;
+    return `${toGoFieldName(groupName)}Handler`;
 }
 
 function clientHandlerMethodName(rpcMethod: string): string {
@@ -3944,20 +4248,25 @@ function emitClientSessionApiRegistration(lines: string[], clientSchema: Record<
             }
             const paramsType = resolveType(goParamsTypeName(method));
             const nullableInner = resultSchema ? getNullableInner(resultSchema) : undefined;
-            const resultType = nullableInner
-                ? resolveType(goNullableResultTypeName(method, nullableInner))
-                : resolveType(goResultTypeName(method));
-            const returnType = unionInfos.has(resultType) ? resultType : `*${resultType}`;
+            let returnType: string;
+            if (isOpaqueJson(resultSchema)) {
+                returnType = "any";
+            } else {
+                const resultType = nullableInner
+                    ? resolveType(goNullableResultTypeName(method, nullableInner))
+                    : resolveType(goResultTypeName(method));
+                returnType = unionInfos.has(resultType) ? resultType : `*${resultType}`;
+            }
             lines.push(`\t${clientHandlerMethodName(method.rpcMethod)}(request *${paramsType}) (${returnType}, error)`);
         }
         lines.push(`}`);
         lines.push(``);
     }
 
-    lines.push(`// ClientSessionApiHandlers provides all client session API handler groups for a session.`);
-    lines.push(`type ClientSessionApiHandlers struct {`);
+    lines.push(`// ClientSessionAPIHandlers provides all client session API handler groups for a session.`);
+    lines.push(`type ClientSessionAPIHandlers struct {`);
     for (const { groupName } of groups) {
-        lines.push(`\t${toPascalCase(groupName)} ${clientHandlerInterfaceName(groupName)}`);
+        lines.push(`\t${toGoFieldName(groupName)} ${clientHandlerInterfaceName(groupName)}`);
     }
     lines.push(`}`);
     lines.push(``);
@@ -3974,10 +4283,10 @@ function emitClientSessionApiRegistration(lines: string[], clientSchema: Record<
     lines.push(`}`);
     lines.push(``);
 
-    lines.push(`// RegisterClientSessionApiHandlers registers handlers for server-to-client session API calls.`);
-    lines.push(`func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(sessionID string) *ClientSessionApiHandlers) {`);
+    lines.push(`// RegisterClientSessionAPIHandlers registers handlers for server-to-client session API calls.`);
+    lines.push(`func RegisterClientSessionAPIHandlers(client *jsonrpc2.Client, getHandlers func(sessionID string) *ClientSessionAPIHandlers) {`);
     for (const { groupName, methods } of groups) {
-        const handlerField = toPascalCase(groupName);
+        const handlerField = toGoFieldName(groupName);
         for (const method of methods) {
             const paramsType = resolveType(goParamsTypeName(method));
             lines.push(`\tclient.SetRequestHandler("${method.rpcMethod}", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {`);
@@ -4011,7 +4320,7 @@ async function generate(sessionSchemaPath?: string, apiSchemaPath?: string): Pro
     let apiSchemaForSharing: ApiSchema | undefined;
     try {
         const resolvedApiPath = apiSchemaPath ?? (await getApiSchemaPath());
-        apiSchemaForSharing = fixNullableRequiredRefsInApiSchema(cloneSchemaForCodegen(JSON.parse(await fs.readFile(resolvedApiPath, "utf-8")) as ApiSchema));
+        apiSchemaForSharing = fixNullableRequiredRefsInApiSchema(cloneSchemaForCodegen((await loadSchemaJson(resolvedApiPath)) as ApiSchema));
     } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT" || apiSchemaPath) {
             throw err;

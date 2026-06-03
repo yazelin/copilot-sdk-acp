@@ -12,14 +12,21 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from copilot import CopilotClient, SessionFsConfig, define_tool
-from copilot.client import ExternalServerConfig, SubprocessConfig
-from copilot.generated.rpc import (
+from copilot import (
+    CopilotClient,
+    RuntimeConnection,
+    SessionFsConfig,
+    define_tool,
+)
+from copilot.rpc import (
     SessionFSReaddirWithTypesEntry,
     SessionFSReaddirWithTypesEntryType,
 )
-from copilot.generated.session_events import SessionCompactionCompleteData, SessionEvent
 from copilot.session import PermissionHandler
+from copilot.session_events import (
+    SessionCompactionCompleteData,
+    SessionEvent,
+)
 from copilot.session_fs_provider import SessionFsFileInfo, SessionFsProvider
 
 from .testharness import DEFAULT_GITHUB_TOKEN, E2ETestContext
@@ -36,7 +43,7 @@ SESSION_STATE_PATH = (
 )
 
 SESSION_FS_CONFIG: SessionFsConfig = {
-    "initial_cwd": "/",
+    "initial_working_directory": "/",
     "session_state_path": SESSION_STATE_PATH,
     "conventions": "posix",
 }
@@ -45,13 +52,11 @@ SESSION_FS_CONFIG: SessionFsConfig = {
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def session_fs_client(ctx: E2ETestContext):
     client = CopilotClient(
-        SubprocessConfig(
-            cli_path=ctx.cli_path,
-            cwd=ctx.work_dir,
-            env=ctx.get_env(),
-            github_token=DEFAULT_GITHUB_TOKEN,
-            session_fs=SESSION_FS_CONFIG,
-        )
+        connection=RuntimeConnection.for_stdio(path=ctx.cli_path),
+        working_directory=ctx.work_dir,
+        env=ctx.get_env(),
+        github_token=DEFAULT_GITHUB_TOKEN,
+        session_fs=SESSION_FS_CONFIG,
     )
     yield client
     try:
@@ -117,13 +122,10 @@ class TestSessionFs:
 
     async def test_should_reject_setprovider_when_sessions_already_exist(self, ctx: E2ETestContext):
         client1 = CopilotClient(
-            SubprocessConfig(
-                cli_path=ctx.cli_path,
-                cwd=ctx.work_dir,
-                env=ctx.get_env(),
-                use_stdio=False,
-                github_token=DEFAULT_GITHUB_TOKEN,
-            )
+            connection=RuntimeConnection.for_tcp(path=ctx.cli_path),
+            working_directory=ctx.work_dir,
+            env=ctx.get_env(),
+            github_token=DEFAULT_GITHUB_TOKEN,
         )
         session = None
         client2 = None
@@ -132,14 +134,12 @@ class TestSessionFs:
             session = await client1.create_session(
                 on_permission_request=PermissionHandler.approve_all,
             )
-            actual_port = client1.actual_port
+            actual_port = client1.runtime_port
             assert actual_port is not None
 
             client2 = CopilotClient(
-                ExternalServerConfig(
-                    url=f"localhost:{actual_port}",
-                    session_fs=SESSION_FS_CONFIG,
-                )
+                connection=RuntimeConnection.for_uri(f"localhost:{actual_port}"),
+                session_fs=SESSION_FS_CONFIG,
             )
 
             with pytest.raises(Exception):
@@ -171,7 +171,7 @@ class TestSessionFs:
             "Call the get_big_string tool and reply with the word DONE only."
         )
 
-        messages = await session.get_messages()
+        messages = await session.get_events()
         tool_result = find_tool_call_result(messages, "get_big_string")
         assert tool_result is not None
         assert f"{SESSION_STATE_PATH}/temp/" in tool_result
@@ -250,7 +250,7 @@ class TestSessionFs:
     async def test_should_persist_plan_md_via_sessionfs(
         self, ctx: E2ETestContext, session_fs_client: CopilotClient
     ):
-        from copilot.generated.rpc import PlanUpdateRequest
+        from copilot.rpc import PlanUpdateRequest
 
         provider_root = Path(ctx.work_dir) / "provider"
         session = await session_fs_client.create_session(
@@ -272,7 +272,7 @@ class TestSessionFs:
         await session.disconnect()
 
     async def test_should_map_all_sessionfs_handler_operations(self, ctx: E2ETestContext):
-        from copilot.generated.rpc import (
+        from copilot.rpc import (
             SessionFSAppendFileRequest,
             SessionFSExistsRequest,
             SessionFSMkdirRequest,
@@ -391,7 +391,7 @@ class TestSessionFs:
                 SessionFSStatRequest(session_id=session_id, path="/workspace/nested/missing.txt")
             )
             assert missing.error is not None
-            from copilot.generated.rpc import SessionFSErrorCode
+            from copilot.rpc import SessionFSErrorCode
 
             assert missing.error.code == SessionFSErrorCode.ENOENT
 
@@ -420,7 +420,7 @@ class TestSessionFs:
                 pass
 
     async def test_sessionfsprovider_converts_exceptions_to_rpc_errors(self):
-        from copilot.generated.rpc import (
+        from copilot.rpc import (
             SessionFSAppendFileRequest,
             SessionFSErrorCode,
             SessionFSExistsRequest,

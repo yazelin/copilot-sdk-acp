@@ -68,14 +68,13 @@ await session.send({
 <summary><strong>Python</strong></summary>
 
 ```python
-from copilot import CopilotClient
-from copilot.session import PermissionRequestResult
+from copilot import CopilotClient, PermissionDecisionApproveOnce
 
 client = CopilotClient()
 await client.start()
 
 session = await client.create_session(
-    on_permission_request=lambda req, inv: PermissionRequestResult(kind="approve-once"),
+    on_permission_request=lambda req, inv: PermissionDecisionApproveOnce(),
     model="gpt-4.1",
 )
 
@@ -102,6 +101,7 @@ package main
 import (
 	"context"
 	copilot "github.com/github/copilot-sdk/go"
+	"github.com/github/copilot-sdk/go/rpc"
 )
 
 func main() {
@@ -111,8 +111,8 @@ func main() {
 
 	session, _ := client.CreateSession(ctx, &copilot.SessionConfig{
 		Model: "gpt-4.1",
-		OnPermissionRequest: func(req copilot.PermissionRequest, inv copilot.PermissionInvocation) (copilot.PermissionRequestResult, error) {
-			return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindApproved}, nil
+		OnPermissionRequest: func(req copilot.PermissionRequest, inv copilot.PermissionInvocation) (rpc.PermissionDecision, error) {
+			return &rpc.PermissionDecisionApproveOnce{}, nil
 		},
 	})
 
@@ -120,7 +120,7 @@ func main() {
 	session.Send(ctx, copilot.MessageOptions{
 		Prompt: "Describe what you see in this image",
 		Attachments: []copilot.Attachment{
-            &copilot.UserMessageAttachmentFile{
+            &copilot.AttachmentFile{
                 DisplayName: "screenshot.png",
                 Path:        path,
 			},
@@ -137,8 +137,8 @@ client.Start(ctx)
 
 session, _ := client.CreateSession(ctx, &copilot.SessionConfig{
     Model: "gpt-4.1",
-    OnPermissionRequest: func(req copilot.PermissionRequest, inv copilot.PermissionInvocation) (copilot.PermissionRequestResult, error) {
-        return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindApproved}, nil
+    OnPermissionRequest: func(req copilot.PermissionRequest, inv copilot.PermissionInvocation) (rpc.PermissionDecision, error) {
+        return &rpc.PermissionDecisionApproveOnce{}, nil
     },
 })
 
@@ -146,7 +146,7 @@ path := "/absolute/path/to/screenshot.png"
 session.Send(ctx, copilot.MessageOptions{
     Prompt: "Describe what you see in this image",
     Attachments: []copilot.Attachment{
-        &copilot.UserMessageAttachmentFile{
+        &copilot.AttachmentFile{
             DisplayName: "screenshot.png",
             Path:        path,
         },
@@ -162,6 +162,7 @@ session.Send(ctx, copilot.MessageOptions{
 <!-- docs-validate: hidden -->
 ```csharp
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 
 public static class ImageInputExample
 {
@@ -172,15 +173,15 @@ public static class ImageInputExample
         {
             Model = "gpt-4.1",
             OnPermissionRequest = (req, inv) =>
-                Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
+                Task.FromResult(PermissionDecision.ApproveOnce()),
         });
 
         await session.SendAsync(new MessageOptions
         {
             Prompt = "Describe what you see in this image",
-            Attachments = new List<UserMessageAttachment>
+            Attachments = new List<Attachment>
             {
-                new UserMessageAttachmentFile
+                new AttachmentFile
                 {
                     Path = "/absolute/path/to/screenshot.png",
                     DisplayName = "screenshot.png",
@@ -194,21 +195,22 @@ public static class ImageInputExample
 
 ```csharp
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 
 await using var client = new CopilotClient();
 await using var session = await client.CreateSessionAsync(new SessionConfig
 {
     Model = "gpt-4.1",
     OnPermissionRequest = (req, inv) =>
-        Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
+        Task.FromResult(PermissionDecision.ApproveOnce()),
 });
 
 await session.SendAsync(new MessageOptions
 {
     Prompt = "Describe what you see in this image",
-    Attachments = new List<UserMessageAttachment>
+    Attachments = new List<Attachment>
     {
-        new UserMessageAttachmentFile
+        new AttachmentFile
         {
             Path = "/absolute/path/to/screenshot.png",
             DisplayName = "screenshot.png",
@@ -223,9 +225,8 @@ await session.SendAsync(new MessageOptions
 <summary><strong>Java</strong></summary>
 
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.events.*;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 import java.util.List;
 
 try (var client = new CopilotClient()) {
@@ -286,14 +287,13 @@ await session.send({
 <summary><strong>Python</strong></summary>
 
 ```python
-from copilot import CopilotClient
-from copilot.session import PermissionRequestResult
+from copilot import CopilotClient, PermissionDecisionApproveOnce
 
 client = CopilotClient()
 await client.start()
 
 session = await client.create_session(
-    on_permission_request=lambda req, inv: PermissionRequestResult(kind="approve-once"),
+    on_permission_request=lambda req, inv: PermissionDecisionApproveOnce(),
     model="gpt-4.1",
 )
 
@@ -323,6 +323,7 @@ package main
 import (
 	"context"
 	copilot "github.com/github/copilot-sdk/go"
+	"github.com/github/copilot-sdk/go/rpc"
 )
 
 func main() {
@@ -332,8 +333,8 @@ func main() {
 
 	session, _ := client.CreateSession(ctx, &copilot.SessionConfig{
 		Model: "gpt-4.1",
-		OnPermissionRequest: func(req copilot.PermissionRequest, inv copilot.PermissionInvocation) (copilot.PermissionRequestResult, error) {
-			return copilot.PermissionRequestResult{Kind: copilot.PermissionRequestResultKindApproved}, nil
+		OnPermissionRequest: func(req copilot.PermissionRequest, inv copilot.PermissionInvocation) (rpc.PermissionDecision, error) {
+			return &rpc.PermissionDecisionApproveOnce{}, nil
 		},
 	})
 
@@ -343,7 +344,7 @@ func main() {
 	session.Send(ctx, copilot.MessageOptions{
 		Prompt: "Describe what you see in this image",
 		Attachments: []copilot.Attachment{
-            &copilot.UserMessageAttachmentBlob{
+            &copilot.AttachmentBlob{
                 Data:        base64ImageData,
                 MIMEType:    mimeType,
 				DisplayName: &displayName,
@@ -360,7 +361,7 @@ displayName := "screenshot.png"
 session.Send(ctx, copilot.MessageOptions{
     Prompt: "Describe what you see in this image",
     Attachments: []copilot.Attachment{
-        &copilot.UserMessageAttachmentBlob{
+        &copilot.AttachmentBlob{
             Data:        base64ImageData, // base64-encoded string
             MIMEType:    mimeType,
             DisplayName: &displayName,
@@ -377,6 +378,7 @@ session.Send(ctx, copilot.MessageOptions{
 <!-- docs-validate: hidden -->
 ```csharp
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 
 public static class BlobAttachmentExample
 {
@@ -387,16 +389,16 @@ public static class BlobAttachmentExample
         {
             Model = "gpt-4.1",
             OnPermissionRequest = (req, inv) =>
-                Task.FromResult(new PermissionRequestResult { Kind = PermissionRequestResultKind.Approved }),
+                Task.FromResult(PermissionDecision.ApproveOnce()),
         });
 
         var base64ImageData = "...";
         await session.SendAsync(new MessageOptions
         {
             Prompt = "Describe what you see in this image",
-            Attachments = new List<UserMessageAttachment>
+            Attachments = new List<Attachment>
             {
-                new UserMessageAttachmentBlob
+                new AttachmentBlob
                 {
                     Data = base64ImageData,
                     MimeType = "image/png",
@@ -413,9 +415,9 @@ public static class BlobAttachmentExample
 await session.SendAsync(new MessageOptions
 {
     Prompt = "Describe what you see in this image",
-    Attachments = new List<UserMessageAttachment>
+    Attachments = new List<Attachment>
     {
-        new UserMessageAttachmentBlob
+        new AttachmentBlob
         {
             Data = base64ImageData,
             MimeType = "image/png",
@@ -431,9 +433,8 @@ await session.SendAsync(new MessageOptions
 <summary><strong>Java</strong></summary>
 
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.events.*;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 import java.util.List;
 
 try (var client = new CopilotClient()) {
