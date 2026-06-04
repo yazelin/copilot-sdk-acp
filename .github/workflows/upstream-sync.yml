@@ -217,11 +217,19 @@ jobs:
           )
 
           # Use REST API instead of GraphQL to avoid shallow clone issues
-          gh api repos/${{ github.repository }}/pulls \
+          PR_NUMBER=$(gh api repos/${{ github.repository }}/pulls \
             -f base=main \
             -f head="${{ steps.merge.outputs.branch }}" \
             -f title="chore: sync upstream (${{ steps.check.outputs.commit_count }} commits)" \
-            -f body="$BODY"
+            -f body="$BODY" \
+            --jq '.number')
+
+          echo "Created PR #$PR_NUMBER"
+
+          # Label clean merges so auto-merge-sync.yml can pick them up.
+          # (The "needs manual review" path intentionally gets no label.)
+          gh api repos/${{ github.repository }}/issues/"$PR_NUMBER"/labels \
+            -f "labels[]=auto-merge"
 
       - name: Create PR (needs manual review)
         if: steps.check.outputs.already_up_to_date != 'true' && steps.merge.outputs.needs_manual_review == 'true' && github.event.inputs.dry_run != 'true'

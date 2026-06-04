@@ -1,0 +1,91 @@
+name: Auto-merge Upstream Sync
+
+# Merges clean "upstream-sync" PRs once their checks have settled.
+# Scope is limited to PRs that the upstream-sync workflow labelled `auto-merge`
+# (clean merges only — the "needs manual review" path gets no label and is
+# never touched here).
+#
+# Gating policy (see PR that introduced this file):
+#   - Wait while any check is still running.
+#   - Block on any FAILED check EXCEPT CodeQL. CodeQL scans upstream's own code,
+#     is flaky on this fork, and can't be fixed here, so it must not stall syncs.
+#   - Merge with a merge commit (NOT squash): the sync workflow detects new
+#     commits via `git merge-base HEAD upstream/main`, which needs upstream's
+#     SHAs preserved on main.
+
+on:
+  check_suite:
+    types: [completed]
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-merge-sync
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge ready upstream-sync PRs
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+
+          # Open PRs labelled auto-merge whose branch is an upstream sync.
+          mapfile -t PRS < <(gh pr list --repo "$REPO" --state open --label auto-merge \
+            --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("upstream-sync/")) | .number')
+
+          if [ ${#PRS[@]} -eq 0 ]; then
+            echo "No auto-merge sync PRs open."
+            exit 0
+          fi
+
+          for PR in "${PRS[@]}"; do
+            echo "::group::Evaluating PR #$PR"
+            ROLLUP=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup --jq '.statusCheckRollup')
+
+            # Still running? Re-evaluated on the next check_suite completion.
+            PENDING=$(echo "$ROLLUP" | jq '[.[] | select(
+                (.__typename=="CheckRun" and .status!="COMPLETED") or
+                (.__typename=="StatusContext" and (.state=="PENDING" or .state=="EXPECTED"))
+              )] | length')
+            if [ "$PENDING" -gt 0 ]; then
+              echo "PR #$PR: $PENDING check(s) still pending; skipping for now."
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Blocking failures, excluding anything named "codeql".
+            FAILS=$(echo "$ROLLUP" | jq -r '[.[]
+              | (.name // .context) as $n
+              | select(($n | ascii_downcase | test("codeql")) | not)
+              | select(
+                  (.__typename=="CheckRun" and ((.conclusion // "")
+                    | IN("FAILURE","CANCELLED","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE"))) or
+                  (.__typename=="StatusContext" and (.state | IN("FAILURE","ERROR")))
+                )
+              | $n] | unique | join(", ")')
+
+            if [ -n "$FAILS" ]; then
+              echo "PR #$PR: non-CodeQL failures present ($FAILS); leaving for manual review."
+              echo "::endgroup::"
+              continue
+            fi
+
+            echo "PR #$PR: checks settled, no blocking failures — merging."
+            if gh pr merge "$PR" --repo "$REPO" --merge --delete-branch; then
+              echo "PR #$PR merged."
+            else
+              echo "PR #$PR merge failed (conflict or race); leaving open."
+            fi
+            echo "::endgroup::"
+          done
