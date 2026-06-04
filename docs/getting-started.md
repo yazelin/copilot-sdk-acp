@@ -18,7 +18,7 @@ Copilot: In Tokyo it's 75°F and sunny. Great day to be outside!
 
 Before you begin, make sure you have:
 
-* **GitHub Copilot CLI** installed and authenticated ([Installation guide](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli))
+* **GitHub Copilot CLI** installed and authenticated (the Node.js, Python, and .NET SDKs bundle the CLI automatically—see [Bundled CLI](./setup/bundled-cli.md). Required for Go, Java, and Rust unless using their application-level CLI bundling features.)
 * Your preferred language runtime:
   * **Node.js** 20+ or **Python** 3.11+ or **Go** 1.24+ or **Rust** 1.94+ or **Java** 17+ or **.NET** 8.0+
 
@@ -264,7 +264,7 @@ use github_copilot_sdk::{Client, ClientOptions, MessageOptions, SessionConfig};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::start(ClientOptions::default()).await?;
     let session = client
-        .create_session(SessionConfig::default().with_handler(Arc::new(ApproveAllHandler)))
+        .create_session(SessionConfig::default().with_permission_handler(Arc::new(ApproveAllHandler)))
         .await?;
 
     let response = session
@@ -325,10 +325,10 @@ dotnet run
 
 Create `HelloCopilot.java`:
 
+<!-- docs-validate: skip -->
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.events.*;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 
 public class HelloCopilot {
     public static void main(String[] args) throws Exception {
@@ -413,7 +413,7 @@ import asyncio
 import sys
 from copilot import CopilotClient
 from copilot.session import PermissionHandler
-from copilot.generated.session_events import SessionEventType
+from copilot.session_events import SessionEventType
 
 async def main():
     client = CopilotClient()
@@ -467,7 +467,7 @@ func main() {
 
 	session, err := client.CreateSession(ctx, &copilot.SessionConfig{
 		Model:     "gpt-4.1",
-		Streaming: true,
+		Streaming: copilot.Bool(true),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -514,7 +514,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = SessionConfig::default();
     config.streaming = Some(true);
     let session = client
-        .create_session(config.with_handler(Arc::new(ApproveAllHandler)))
+        .create_session(config.with_permission_handler(Arc::new(ApproveAllHandler)))
         .await?;
 
     // Listen for response chunks
@@ -590,10 +590,10 @@ await session.SendAndWaitAsync(new MessageOptions { Prompt = "Tell me a short jo
 
 Update `HelloCopilot.java`:
 
+<!-- docs-validate: skip -->
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.events.*;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 
 public class HelloCopilot {
     public static void main(String[] args) throws Exception {
@@ -665,13 +665,12 @@ unsubscribeIdle();
 
 <!-- docs-validate: hidden -->
 ```python
-from copilot import CopilotClient
-from copilot.generated.session_events import SessionEvent, SessionEventType
-from copilot.session import PermissionRequestResult
+from copilot import CopilotClient, PermissionDecisionApproveOnce
+from copilot.session_events import SessionEvent, SessionEventType
 
 client = CopilotClient()
 
-session = await client.create_session(on_permission_request=lambda req, inv: PermissionRequestResult(kind="approve-once"))
+session = await client.create_session(on_permission_request=lambda req, inv: PermissionDecisionApproveOnce())
 
 # Subscribe to all events
 unsubscribe = session.on(lambda event: print(f"Event: {event.type}"))
@@ -857,6 +856,7 @@ unsubscribe.Dispose();
 <details>
 <summary><strong>Java</strong></summary>
 
+<!-- docs-validate: skip -->
 ```java
 // Subscribe to all events
 var unsubscribe = session.on(event -> {
@@ -947,7 +947,7 @@ import sys
 from copilot import CopilotClient
 from copilot.session import PermissionHandler
 from copilot.tools import define_tool
-from copilot.generated.session_events import SessionEventType
+from copilot.session_events import SessionEventType
 from pydantic import BaseModel, Field
 
 # Define the parameters for the tool using Pydantic
@@ -1046,7 +1046,7 @@ func main() {
 
 	session, err := client.CreateSession(ctx, &copilot.SessionConfig{
 		Model:     "gpt-4.1",
-		Streaming: true,
+		Streaming: copilot.Bool(true),
 		Tools:     []copilot.Tool{getWeather},
 	})
 	if err != nil {
@@ -1086,7 +1086,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use github_copilot_sdk::handler::ApproveAllHandler;
-use github_copilot_sdk::tool::{JsonSchema, ToolHandlerRouter, define_tool};
+use github_copilot_sdk::tool::{define_tool, JsonSchema};
 use github_copilot_sdk::{Client, ClientOptions, MessageOptions, SessionConfig, ToolResult};
 use serde::Deserialize;
 
@@ -1098,27 +1098,28 @@ struct GetWeatherParams {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Define a tool that Copilot can call
-    let router = ToolHandlerRouter::new(
-        vec![define_tool(
-            "get_weather",
-            "Get the current weather for a city",
-            |_inv, params: GetWeatherParams| async move {
-                Ok(ToolResult::Text(format!(
-                    "{}: 62°F and sunny",
-                    params.city
-                )))
-            },
-        )],
-        Arc::new(ApproveAllHandler),
-    );
-    let tools = router.tools();
+    let tools = vec![define_tool(
+        "get_weather",
+        "Get the current weather for a city",
+        |_inv, params: GetWeatherParams| async move {
+            Ok(ToolResult::Text(format!(
+                "{}: 62°F and sunny",
+                params.city
+            )))
+        },
+    )];
 
     let client = Client::start(ClientOptions::default()).await?;
 
     let mut config = SessionConfig::default();
     config.streaming = Some(true);
-    config.tools = Some(tools);
-    let session = client.create_session(config.with_handler(Arc::new(router))).await?;
+    let session = client
+        .create_session(
+            config
+                .with_tools(tools)
+                .with_permission_handler(Arc::new(ApproveAllHandler)),
+        )
+        .await?;
 
     let mut events = session.subscribe();
     tokio::spawn(async move {
@@ -1215,10 +1216,10 @@ await session.SendAndWaitAsync(new MessageOptions
 
 Update `HelloCopilot.java`:
 
+<!-- docs-validate: skip -->
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.events.*;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 
 import java.util.List;
 import java.util.Map;
@@ -1370,7 +1371,7 @@ import sys
 from copilot import CopilotClient
 from copilot.session import PermissionHandler
 from copilot.tools import define_tool
-from copilot.generated.session_events import SessionEventType
+from copilot.session_events import SessionEventType
 from pydantic import BaseModel, Field
 
 class GetWeatherParams(BaseModel):
@@ -1482,7 +1483,7 @@ func main() {
 
 	session, err := client.CreateSession(ctx, &copilot.SessionConfig{
 		Model:     "gpt-4.1",
-		Streaming: true,
+		Streaming: copilot.Bool(true),
 		Tools:     []copilot.Tool{getWeather},
 	})
 	if err != nil {
@@ -1546,7 +1547,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use github_copilot_sdk::handler::ApproveAllHandler;
-use github_copilot_sdk::tool::{JsonSchema, ToolHandlerRouter, define_tool};
+use github_copilot_sdk::tool::{define_tool, JsonSchema};
 use github_copilot_sdk::{Client, ClientOptions, MessageOptions, SessionConfig, ToolResult};
 use serde::Deserialize;
 
@@ -1567,27 +1568,28 @@ fn read_line() -> Option<String> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let router = ToolHandlerRouter::new(
-        vec![define_tool(
-            "get_weather",
-            "Get the current weather for a city",
-            |_inv, params: GetWeatherParams| async move {
-                Ok(ToolResult::Text(format!(
-                    "{}: 62°F and sunny",
-                    params.city
-                )))
-            },
-        )],
-        Arc::new(ApproveAllHandler),
-    );
-    let tools = router.tools();
+    let tools = vec![define_tool(
+        "get_weather",
+        "Get the current weather for a city",
+        |_inv, params: GetWeatherParams| async move {
+            Ok(ToolResult::Text(format!(
+                "{}: 62°F and sunny",
+                params.city
+            )))
+        },
+    )];
 
     let client = Client::start(ClientOptions::default()).await?;
 
     let mut config = SessionConfig::default();
     config.streaming = Some(true);
-    config.tools = Some(tools);
-    let session = client.create_session(config.with_handler(Arc::new(router))).await?;
+    let session = client
+        .create_session(
+            config
+                .with_tools(tools)
+                .with_permission_handler(Arc::new(ApproveAllHandler)),
+        )
+        .await?;
 
     let mut events = session.subscribe();
     tokio::spawn(async move {
@@ -1720,10 +1722,10 @@ dotnet run
 
 Create `WeatherAssistant.java`:
 
+<!-- docs-validate: skip -->
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.events.*;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 
 import java.util.List;
 import java.util.Map;
@@ -1909,7 +1911,7 @@ const session = await client.createSession({
 });
 ```
 
-Available section IDs: `identity`, `tone`, `tool_efficiency`, `environment_context`, `code_change_rules`, `guidelines`, `safety`, `tool_instructions`, `custom_instructions`, `last_instructions`.
+Available section IDs: `identity`, `tone`, `tool_efficiency`, `environment_context`, `code_change_rules`, `guidelines`, `safety`, `tool_instructions`, `custom_instructions`, `runtime_instructions`, `last_instructions`.
 
 Each override supports four actions: `replace`, `remove`, `append`, and `prepend`. Unknown section IDs are handled gracefully—content is appended to additional instructions and a warning is emitted; `remove` on unknown sections is silently ignored.
 
@@ -1968,12 +1970,10 @@ const session = await client.createSession({ onPermissionRequest: approveAll });
 <summary><strong>Python</strong></summary>
 
 ```python
-from copilot import CopilotClient
+from copilot import CopilotClient, RuntimeConnection
 from copilot.session import PermissionHandler
 
-client = CopilotClient({
-    "cli_url": "localhost:4321"
-})
+client = CopilotClient(connection=RuntimeConnection.for_uri("localhost:4321"))
 await client.start()
 
 # Use the client normally
@@ -2000,9 +2000,9 @@ import (
 func main() {
 	ctx := context.Background()
 
-	client := copilot.NewClient(&copilot.ClientOptions{
-		CLIUrl: "localhost:4321",
-	})
+    client := copilot.NewClient(&copilot.ClientOptions{
+        Connection: copilot.URIConnection{URL: "localhost:4321"},
+    })
 
 	if err := client.Start(ctx); err != nil {
 		log.Fatal(err)
@@ -2021,7 +2021,7 @@ func main() {
 import copilot "github.com/github/copilot-sdk/go"
 
 client := copilot.NewClient(&copilot.ClientOptions{
-    CLIUrl: "localhost:4321",
+    Connection: copilot.URIConnection{URL: "localhost:4321"},
 })
 
 if err := client.Start(ctx); err != nil {
@@ -2056,7 +2056,7 @@ let client = Client::start(options).await?;
 
 // Use the client normally
 let session = client
-    .create_session(SessionConfig::default().with_handler(Arc::new(ApproveAllHandler)))
+    .create_session(SessionConfig::default().with_permission_handler(Arc::new(ApproveAllHandler)))
     .await?;
 // ...
 ```
@@ -2088,8 +2088,8 @@ await using var session = await client.CreateSessionAsync(new()
 <summary><strong>Java</strong></summary>
 
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 
 var client = new CopilotClient(
     new CopilotClientOptions().setCliUrl("localhost:4321")
@@ -2105,7 +2105,7 @@ var session = client.createSession(
 
 </details>
 
-**Note:** When `cli_url` / `cliUrl` / `CLIUrl` is provided, or Rust uses `Transport::External`, the SDK will not spawn or manage a CLI process - it will only connect to the existing server at the specified URL.
+**Note:** When `cli_url` / `cliUrl` / Go's `URIConnection` is provided, or Rust uses `Transport::External`, the SDK will not spawn or manage a CLI process - it will only connect to the existing server at the specified URL.
 
 ## Telemetry and observability
 
@@ -2138,9 +2138,9 @@ Optional peer dependency: `@opentelemetry/api`
 
 <!-- docs-validate: skip -->
 ```python
-from copilot import CopilotClient, SubprocessConfig
+from copilot import CopilotClient, CopilotClientOptions
 
-client = CopilotClient(SubprocessConfig(
+client = CopilotClient(CopilotClientOptions(
     telemetry={
         "otlp_endpoint": "http://localhost:4318",
     },
@@ -2210,8 +2210,8 @@ No extra dependencies—uses built-in `System.Diagnostics.Activity`.
 
 <!-- docs-validate: skip -->
 ```java
-import com.github.copilot.sdk.CopilotClient;
-import com.github.copilot.sdk.json.*;
+import com.github.copilot.CopilotClient;
+import com.github.copilot.rpc.*;
 
 var client = new CopilotClient(new CopilotClientOptions()
     .setTelemetry(new TelemetryConfig()

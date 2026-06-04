@@ -78,7 +78,6 @@ impl E2eContext {
         Ok(ctx)
     }
 
-    #[expect(dead_code, reason = "used by follow-on E2E ports")]
     pub fn repo_root(&self) -> &Path {
         &self.repo_root
     }
@@ -120,17 +119,17 @@ impl E2eContext {
 
     #[expect(dead_code, reason = "used by follow-on E2E ports")]
     pub async fn start_tcp_client(&self, port: u16, token: &str) -> Client {
-        Client::start(
-            self.client_options_with_transport(Transport::Tcp { port })
-                .with_tcp_connection_token(token),
-        )
+        Client::start(self.client_options_with_transport(Transport::Tcp {
+            port,
+            connection_token: Some(token.to_string()),
+        }))
         .await
         .expect("start TCP E2E client")
     }
 
     pub fn approve_all_session_config(&self) -> SessionConfig {
         SessionConfig::default()
-            .with_handler(std::sync::Arc::new(ApproveAllHandler))
+            .with_permission_handler(std::sync::Arc::new(ApproveAllHandler))
             .with_github_token(DEFAULT_TEST_TOKEN)
     }
 
@@ -289,11 +288,11 @@ where
             });
             let is_allowed_rate_limit = allow_rate_limit_error
                 && event.parsed_type()
-                    == github_copilot_sdk::generated::session_events::SessionEventType::SessionError
+                    == github_copilot_sdk::session_events::SessionEventType::SessionError
                 && event.data.get("errorType").and_then(|value| value.as_str())
                     == Some("rate_limit");
             if event.parsed_type()
-                == github_copilot_sdk::generated::session_events::SessionEventType::SessionError
+                == github_copilot_sdk::session_events::SessionEventType::SessionError
                 && !is_allowed_rate_limit
             {
                 panic!(
@@ -369,9 +368,9 @@ pub async fn collect_until_idle(mut events: EventSubscription) -> Vec<SessionEve
                 .await
                 .unwrap_or_else(|err| panic!("event stream closed while collecting events: {err}"));
             let is_idle = event.parsed_type()
-                == github_copilot_sdk::generated::session_events::SessionEventType::SessionIdle;
+                == github_copilot_sdk::session_events::SessionEventType::SessionIdle;
             if event.parsed_type()
-                == github_copilot_sdk::generated::session_events::SessionEventType::SessionError
+                == github_copilot_sdk::session_events::SessionEventType::SessionError
             {
                 panic!("session.error while collecting events: {}", event.data);
             }
@@ -396,8 +395,7 @@ pub fn event_types(events: &[SessionEvent]) -> Vec<&str> {
 #[allow(dead_code, reason = "used by follow-on E2E ports")]
 pub async fn wait_for_idle(session: &Session) -> SessionEvent {
     wait_for_event(session.subscribe(), "session.idle event", |event| {
-        event.parsed_type()
-            == github_copilot_sdk::generated::session_events::SessionEventType::SessionIdle
+        event.parsed_type() == github_copilot_sdk::session_events::SessionEventType::SessionIdle
     })
     .await
 }
@@ -411,21 +409,21 @@ pub async fn wait_for_final_assistant_message(session: &Session) -> SessionEvent
 #[allow(dead_code, reason = "used by follow-on E2E ports")]
 pub async fn last_assistant_message(session: &Session) -> SessionEvent {
     session
-        .get_messages()
+        .get_events()
         .await
         .expect("get session messages")
         .into_iter()
         .rev()
         .find(|event| {
             event.parsed_type()
-                == github_copilot_sdk::generated::session_events::SessionEventType::AssistantMessage
+                == github_copilot_sdk::session_events::SessionEventType::AssistantMessage
         })
         .expect("assistant.message event")
 }
 
 pub fn assistant_message_content(event: &SessionEvent) -> String {
     event
-        .typed_data::<github_copilot_sdk::generated::session_events::AssistantMessageData>()
+        .typed_data::<github_copilot_sdk::session_events::AssistantMessageData>()
         .expect("assistant.message data")
         .content
 }

@@ -64,7 +64,8 @@ The Copilot SDK communicates with the CLI via JSON-RPC protocol. Features must b
 | Remote HTTP/SSE | `mcpServers` config | Connect to services |
 | **Hooks** | | |
 | Pre-tool use | `onPreToolUse` | Permission, modify args |
-| Post-tool use | `onPostToolUse` | Modify results |
+| Post-tool use (success) | `onPostToolUse` | Modify results |
+| Post-tool use (failure) | `onPostToolUseFailure` | Observe failed tool calls, inject retry guidance |
 | User prompt | `onUserPromptSubmitted` | Modify prompts |
 | Session start/end | `onSessionStart`, `onSessionEnd` | Lifecycle with source/reason |
 | Error handling | `onErrorOccurred` | Custom handling |
@@ -85,7 +86,7 @@ The Copilot SDK communicates with the CLI via JSON-RPC protocol. Features must b
 | Working directory | `workingDirectory` config | Set session cwd |
 | **Experimental** | | |
 | Agent management | `session.rpc.agent.*` | List, select, deselect, get current agent |
-| Fleet mode | `session.rpc.fleet.start()` | Parallel sub-agent execution |
+| Fleet mode | `session.rpc.fleet.start()` | Parallel sub-agent execution; see [Fleet mode](../features/fleet-mode.md) |
 | Manual compaction | `session.rpc.history.compact()` | Trigger compaction on demand |
 | History truncation | `session.rpc.history.truncate()` | Remove events from a point onward |
 | Session forking | `server.rpc.sessions.fork()` | Fork a session at a point in history |
@@ -168,6 +169,10 @@ The Copilot SDK communicates with the CLI via JSON-RPC protocol. Features must b
 | Agent selection | `--agent <agent>` | CLI flag |
 
 ## Workarounds
+
+### Fleet mode
+
+Fleet mode is available through `session.rpc.fleet.start()` for SDK applications that want the runtime to dispatch parallel sub-agents for a larger objective. Use it when independent subtasks can run concurrently and then be summarized by the main session. For a full guide, see [Fleet mode](../features/fleet-mode.md).
 
 ### Session export
 
