@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from copilot.generated.rpc import (
+from copilot.rpc import (
     CommandsApi,
     CommandsInvokeRequest,
-    SlashCommandInvocationResultKind,
+    SlashCommandTextResult,
 )
 
 
@@ -19,6 +19,6 @@ async def test_commands_invoke_deserializes_slash_command_result():
 
     result = await api.invoke(CommandsInvokeRequest(name="help"))
 
-    assert result.kind is SlashCommandInvocationResultKind.TEXT
+    assert isinstance(result, SlashCommandTextResult)
     assert result.text == "hello"
     assert result.markdown is True

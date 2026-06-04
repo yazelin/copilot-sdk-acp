@@ -46,9 +46,9 @@ type AccountQuotaSnapshot struct {
 	EntitlementRequests int64 `json:"entitlementRequests"`
 	// Whether the user has an unlimited usage entitlement
 	IsUnlimitedEntitlement bool `json:"isUnlimitedEntitlement"`
-	// Number of overage requests made this period
+	// Number of additional usage requests made this period
 	Overage float64 `json:"overage"`
-	// Whether overage is allowed when quota is exhausted
+	// Whether additional usage is allowed when quota is exhausted
 	OverageAllowedWithExhaustedQuota bool `json:"overageAllowedWithExhaustedQuota"`
 	// Percentage of entitlement remaining
 	RemainingPercentage float64 `json:"remainingPercentage"`
@@ -81,7 +81,8 @@ type AgentInfo struct {
 	ID string `json:"id"`
 	// MCP server configurations attached to this agent, keyed by server name. Server config
 	// shape mirrors the MCP `mcpServers` schema.
-	McpServers map[string]any `json:"mcpServers,omitempty"`
+	// Experimental: MCPServers is part of an experimental API and may change or be removed.
+	MCPServers map[string]any `json:"mcpServers,omitzero"`
 	// Preferred model id for this agent. When omitted, inherits the outer agent's model.
 	Model *string `json:"model,omitempty"`
 	// Unique identifier of the custom agent
@@ -90,11 +91,11 @@ type AgentInfo struct {
 	// from disk; remote agents do not have a path.
 	Path *string `json:"path,omitempty"`
 	// Skill names preloaded into this agent's context. Omitted means none.
-	Skills []string `json:"skills,omitempty"`
+	Skills []string `json:"skills,omitzero"`
 	// Where the agent definition was loaded from
 	Source *AgentInfoSource `json:"source,omitempty"`
 	// Allowed tool names for this agent. Empty array means none; omitted means inherit defaults.
-	Tools []string `json:"tools,omitempty"`
+	Tools []string `json:"tools,omitzero"`
 	// Whether the agent can be selected directly by the user. Agents marked `false` are
 	// subagent-only.
 	UserInvocable *bool `json:"userInvocable,omitempty"`
@@ -105,6 +106,184 @@ type AgentInfo struct {
 type AgentList struct {
 	// Available custom agents
 	Agents []AgentInfo `json:"agents"`
+}
+
+// Full registry entry for the spawned child. Lets the controller call
+// `handleLiveTargetSelected(entry)` directly without re-reading the registry (avoids a
+// TOCTOU window).
+// Experimental: AgentRegistryLiveTargetEntry is part of an experimental API and may change
+// or be removed.
+type AgentRegistryLiveTargetEntry struct {
+	// Kind of attention required when status === "attention". Meaningful only when status ===
+	// "attention".
+	AttentionKind *AgentRegistryLiveTargetEntryAttentionKind `json:"attentionKind,omitempty"`
+	// Git branch of the session (when known)
+	Branch *string `json:"branch,omitempty"`
+	// Copilot CLI version that wrote the entry
+	CopilotVersion string `json:"copilotVersion"`
+	// Working directory of the session (when known)
+	Cwd *string `json:"cwd,omitempty"`
+	// Bind host for the entry's JSON-RPC server
+	Host string `json:"host"`
+	// Process kind tag for the registry entry
+	Kind AgentRegistryLiveTargetEntryKind `json:"kind"`
+	// Wall-clock milliseconds since the watcher last observed this entry (heartbeat freshness)
+	LastSeenMs int64 `json:"lastSeenMs"`
+	// How the most recent turn ended (clean vs aborted). Lets the renderer distinguish done
+	// from done_cancelled.
+	LastTerminalEvent *AgentRegistryLiveTargetEntryLastTerminalEvent `json:"lastTerminalEvent,omitempty"`
+	// Model identifier currently selected for the session
+	Model *string `json:"model,omitempty"`
+	// Operating-system pid of the process owning this entry
+	Pid int64 `json:"pid"`
+	// TCP port the entry's JSON-RPC server is listening on
+	Port int64 `json:"port"`
+	// Registry entry schema version (1 = ui-server, 2 = managed-server)
+	SchemaVersion int64 `json:"schemaVersion"`
+	// Session ID of the foreground session for this entry
+	SessionID *string `json:"sessionId,omitempty"`
+	// Friendly session name (when set)
+	SessionName *string `json:"sessionName,omitempty"`
+	// ISO 8601 timestamp captured at registration
+	StartedAt string `json:"startedAt"`
+	// Coarse lifecycle status of the foreground session
+	Status *AgentRegistryLiveTargetEntryStatus `json:"status,omitempty"`
+	// Monotonic per-publisher revision counter incremented on every status update. Lets
+	// watchers detect transient flips.
+	StatusRevision *int64 `json:"statusRevision,omitempty"`
+	// Connection token (null when the target is unauthenticated)
+	// Internal: Token is part of the SDK's internal API surface and is not intended for
+	// external use.
+	Token *string `json:"token,omitempty"`
+}
+
+// Per-spawn log-capture outcome; populated from spawnLiveTarget.
+// Experimental: AgentRegistryLogCapture is part of an experimental API and may change or be
+// removed.
+type AgentRegistryLogCapture struct {
+	// Whether per-spawn log capture is on (false when env-disabled or open failed)
+	Enabled bool `json:"enabled"`
+	// Human-readable open failure message (only set when enabled === false AND the env-disable
+	// opt-out was NOT used)
+	OpenError *string `json:"openError,omitempty"`
+	// Categorized reason for log-open failure
+	OpenErrorReason *AgentRegistryLogCaptureOpenErrorReason `json:"openErrorReason,omitempty"`
+	// Absolute path to the per-spawn log file (only set when enabled)
+	Path *string `json:"path,omitempty"`
+}
+
+// Inputs to spawn a managed-server child via the controller's spawn delegate.
+// Experimental: AgentRegistrySpawnRequest is part of an experimental API and may change or
+// be removed.
+type AgentRegistrySpawnRequest struct {
+	// Custom or built-in agent name (e.g. 'explore'). When omitted, the child uses its own
+	// default.
+	AgentName *string `json:"agentName,omitempty"`
+	// Working directory for the spawned child (must be an existing directory)
+	Cwd string `json:"cwd"`
+	// Optional first user message. Forwarded to the caller (the CLI's spawn wrapper sends it
+	// post-attach via the standard LocalRpcSession.send path).
+	InitialPrompt *string `json:"initialPrompt,omitempty"`
+	// Model identifier to apply to the new session
+	Model *string `json:"model,omitempty"`
+	// Friendly session name. Must satisfy validateSessionName: non-empty, no leading/trailing
+	// whitespace, <=100 chars, no control chars, no double quotes.
+	Name *string `json:"name,omitempty"`
+	// Permission posture for the new session. 'yolo' requires the controller-local session to
+	// currently be in allow-all mode.
+	PermissionMode *AgentRegistrySpawnPermissionMode `json:"permissionMode,omitempty"`
+}
+
+// Outcome of an agentRegistry.spawn call.
+// Experimental: AgentRegistrySpawnResult is part of an experimental API and may change or
+// be removed.
+type AgentRegistrySpawnResult interface {
+	agentRegistrySpawnResult()
+	Kind() AgentRegistrySpawnResultKind
+}
+
+type RawAgentRegistrySpawnResultData struct {
+	Discriminator AgentRegistrySpawnResultKind
+	Raw           json.RawMessage
+}
+
+func (RawAgentRegistrySpawnResultData) agentRegistrySpawnResult() {}
+func (r RawAgentRegistrySpawnResultData) Kind() AgentRegistrySpawnResultKind {
+	return r.Discriminator
+}
+
+// `child_process.spawn` itself failed before the child entered the registry.
+// Experimental: AgentRegistrySpawnError is part of an experimental API and may change or be
+// removed.
+type AgentRegistrySpawnError struct {
+	// Underlying errno code (e.g. ENOENT, EACCES) when available
+	Code *string `json:"code,omitempty"`
+	// Human-readable error message
+	Message string `json:"message"`
+}
+
+func (AgentRegistrySpawnError) agentRegistrySpawnResult() {}
+func (AgentRegistrySpawnError) Kind() AgentRegistrySpawnResultKind {
+	return AgentRegistrySpawnResultKindSpawnError
+}
+
+// Spawn succeeded but the child did not publish a matching managed-server entry within the
+// timeout.
+// Experimental: AgentRegistrySpawnRegistryTimeout is part of an experimental API and may
+// change or be removed.
+type AgentRegistrySpawnRegistryTimeout struct {
+	// Process ID of the orphaned child (so the caller can offer 'kill the pid' guidance)
+	ChildPid int64 `json:"childPid"`
+	// Per-spawn log-capture outcome; populated from spawnLiveTarget.
+	LogCapture *AgentRegistryLogCapture `json:"logCapture,omitempty"`
+}
+
+func (AgentRegistrySpawnRegistryTimeout) agentRegistrySpawnResult() {}
+func (AgentRegistrySpawnRegistryTimeout) Kind() AgentRegistrySpawnResultKind {
+	return AgentRegistrySpawnResultKindRegistryTimeout
+}
+
+// Managed-server child was spawned and registered successfully.
+// Experimental: AgentRegistrySpawnSpawned is part of an experimental API and may change or
+// be removed.
+type AgentRegistrySpawnSpawned struct {
+	// Full registry entry for the spawned child. Lets the controller call
+	// `handleLiveTargetSelected(entry)` directly without re-reading the registry (avoids a
+	// TOCTOU window).
+	Entry AgentRegistryLiveTargetEntry `json:"entry"`
+	// If the delegate attempted to send the initial prompt and failed, the categorized error
+	// message.
+	InitialPromptError *string `json:"initialPromptError,omitempty"`
+	// Whether the delegate already sent the initial prompt. Always omitted in the current
+	// wiring: the controller sends the prompt post-attach via the standard LocalRpcSession.send
+	// path.
+	InitialPromptSent *bool `json:"initialPromptSent,omitempty"`
+	// Per-spawn log-capture outcome; populated from spawnLiveTarget.
+	LogCapture *AgentRegistryLogCapture `json:"logCapture,omitempty"`
+}
+
+func (AgentRegistrySpawnSpawned) agentRegistrySpawnResult() {}
+func (AgentRegistrySpawnSpawned) Kind() AgentRegistrySpawnResultKind {
+	return AgentRegistrySpawnResultKindSpawned
+}
+
+// Synchronous pre-validation rejected the spawn request.
+// Experimental: AgentRegistrySpawnValidationError is part of an experimental API and may
+// change or be removed.
+type AgentRegistrySpawnValidationError struct {
+	// Which parameter field was invalid. Omitted when the rejection is not field-specific.
+	Field *AgentRegistrySpawnValidationErrorField `json:"field,omitempty"`
+	// Human-readable explanation; safe to surface in the UI banner. Never logged to
+	// unrestricted telemetry.
+	Message string `json:"message"`
+	// Categorized reason for the rejection. Low-cardinality enum so telemetry can aggregate by
+	// reason without leaking raw paths or agent/model names.
+	Reason AgentRegistrySpawnValidationErrorReason `json:"reason"`
+}
+
+func (AgentRegistrySpawnValidationError) agentRegistrySpawnResult() {}
+func (AgentRegistrySpawnValidationError) Kind() AgentRegistrySpawnResultKind {
+	return AgentRegistrySpawnResultKindValidationError
 }
 
 // Custom agents available to the session after reloading definitions from disk.
@@ -129,6 +308,196 @@ type AgentSelectRequest struct {
 type AgentSelectResult struct {
 	// The newly selected custom agent
 	Agent AgentInfo `json:"agent"`
+}
+
+// Indicates whether the operation succeeded and reports the post-mutation state.
+// Experimental: AllowAllPermissionSetResult is part of an experimental API and may change
+// or be removed.
+type AllowAllPermissionSetResult struct {
+	// Authoritative allow-all state after the mutation
+	Enabled bool `json:"enabled"`
+	// Whether the operation succeeded
+	Success bool `json:"success"`
+}
+
+// Current full allow-all permission state.
+// Experimental: AllowAllPermissionState is part of an experimental API and may change or be
+// removed.
+type AllowAllPermissionState struct {
+	// Whether full allow-all permissions are currently active
+	Enabled bool `json:"enabled"`
+}
+
+// A user message attachment — a file, directory, code selection, blob, GitHub reference, or
+// extension-supplied context payload
+// Experimental: Attachment is part of an experimental API and may change or be removed.
+type Attachment interface {
+	attachment()
+	Type() AttachmentType
+}
+
+type RawAttachmentData struct {
+	Discriminator AttachmentType
+	Raw           json.RawMessage
+}
+
+func (RawAttachmentData) attachment() {}
+func (r RawAttachmentData) Type() AttachmentType {
+	return r.Discriminator
+}
+
+// Blob attachment with inline base64-encoded data
+// Experimental: AttachmentBlob is part of an experimental API and may change or be removed.
+type AttachmentBlob struct {
+	// Base64-encoded content
+	Data string `json:"data"`
+	// User-facing display name for the attachment
+	DisplayName *string `json:"displayName,omitempty"`
+	// MIME type of the inline data
+	MIMEType string `json:"mimeType"`
+}
+
+func (AttachmentBlob) attachment() {}
+func (AttachmentBlob) Type() AttachmentType {
+	return AttachmentTypeBlob
+}
+
+// Directory attachment
+// Experimental: AttachmentDirectory is part of an experimental API and may change or be
+// removed.
+type AttachmentDirectory struct {
+	// User-facing display name for the attachment
+	DisplayName string `json:"displayName"`
+	// Absolute directory path
+	Path string `json:"path"`
+}
+
+func (AttachmentDirectory) attachment() {}
+func (AttachmentDirectory) Type() AttachmentType {
+	return AttachmentTypeDirectory
+}
+
+// Structured context contributed by an extension. Composer pills displayed in the host are
+// forwarded back through session.send.attachments, then rendered into the model prompt as
+// an <extension_context> XML block.
+// Experimental: AttachmentExtensionContext is part of an experimental API and may change or
+// be removed.
+type AttachmentExtensionContext struct {
+	// Provider-local canvas identifier when the push was bound to a canvas instance
+	CanvasID *string `json:"canvasId,omitempty"`
+	// ISO 8601 timestamp captured by the runtime when the push was accepted
+	CapturedAt time.Time `json:"capturedAt"`
+	// Owning extension identifier. Runtime-derived from the caller's connection when produced
+	// via session.extensions.sendAttachmentsToMessage; preserved verbatim on subsequent
+	// transports.
+	ExtensionID string `json:"extensionId"`
+	// Open canvas instance identifier when the push was bound to a canvas instance
+	InstanceID *string `json:"instanceId,omitempty"`
+	// Caller-supplied JSON payload
+	Payload any `json:"payload,omitempty"`
+	// Human-readable composer pill label
+	Title string `json:"title"`
+}
+
+func (AttachmentExtensionContext) attachment() {}
+func (AttachmentExtensionContext) Type() AttachmentType {
+	return AttachmentTypeExtensionContext
+}
+
+// File attachment
+// Experimental: AttachmentFile is part of an experimental API and may change or be removed.
+type AttachmentFile struct {
+	// User-facing display name for the attachment
+	DisplayName string `json:"displayName"`
+	// Optional line range to scope the attachment to a specific section of the file
+	LineRange *AttachmentFileLineRange `json:"lineRange,omitempty"`
+	// Absolute file path
+	Path string `json:"path"`
+}
+
+func (AttachmentFile) attachment() {}
+func (AttachmentFile) Type() AttachmentType {
+	return AttachmentTypeFile
+}
+
+// GitHub issue, pull request, or discussion reference
+// Experimental: AttachmentGitHubReference is part of an experimental API and may change or
+// be removed.
+type AttachmentGitHubReference struct {
+	// Issue, pull request, or discussion number
+	Number int64 `json:"number"`
+	// Type of GitHub reference
+	ReferenceType AttachmentGitHubReferenceType `json:"referenceType"`
+	// Current state of the referenced item (e.g., open, closed, merged)
+	State string `json:"state"`
+	// Title of the referenced item
+	Title string `json:"title"`
+	// URL to the referenced item on GitHub
+	URL string `json:"url"`
+}
+
+func (AttachmentGitHubReference) attachment() {}
+func (AttachmentGitHubReference) Type() AttachmentType {
+	return AttachmentTypeGitHubReference
+}
+
+// Code selection attachment from an editor
+// Experimental: AttachmentSelection is part of an experimental API and may change or be
+// removed.
+type AttachmentSelection struct {
+	// User-facing display name for the selection
+	DisplayName string `json:"displayName"`
+	// Absolute path to the file containing the selection
+	FilePath string `json:"filePath"`
+	// Position range of the selection within the file
+	Selection AttachmentSelectionDetails `json:"selection"`
+	// The selected text content
+	Text string `json:"text"`
+}
+
+func (AttachmentSelection) attachment() {}
+func (AttachmentSelection) Type() AttachmentType {
+	return AttachmentTypeSelection
+}
+
+// Optional line range to scope the attachment to a specific section of the file
+// Experimental: AttachmentFileLineRange is part of an experimental API and may change or be
+// removed.
+type AttachmentFileLineRange struct {
+	// End line number (1-based, inclusive)
+	End int64 `json:"end"`
+	// Start line number (1-based)
+	Start int64 `json:"start"`
+}
+
+// Position range of the selection within the file
+// Experimental: AttachmentSelectionDetails is part of an experimental API and may change or
+// be removed.
+type AttachmentSelectionDetails struct {
+	// End position of the selection
+	End AttachmentSelectionDetailsEnd `json:"end"`
+	// Start position of the selection
+	Start AttachmentSelectionDetailsStart `json:"start"`
+}
+
+// End position of the selection
+// Experimental: AttachmentSelectionDetailsEnd is part of an experimental API and may change
+// or be removed.
+type AttachmentSelectionDetailsEnd struct {
+	// End character offset within the line (0-based)
+	Character int64 `json:"character"`
+	// End line number (0-based)
+	Line int64 `json:"line"`
+}
+
+// Start position of the selection
+// Experimental: AttachmentSelectionDetailsStart is part of an experimental API and may
+// change or be removed.
+type AttachmentSelectionDetailsStart struct {
+	// Start character offset within the line (0-based)
+	Character int64 `json:"character"`
+	// Start line number (0-based)
+	Line int64 `json:"line"`
 }
 
 // The new auth credentials to install on the session. When omitted or `undefined`, the call
@@ -211,8 +580,8 @@ func (EnvAuthInfo) Type() AuthInfoType {
 }
 
 // Schema for the `GhCliAuthInfo` type.
-// Experimental: GhCliAuthInfo is part of an experimental API and may change or be removed.
-type GhCliAuthInfo struct {
+// Experimental: GhCLIAuthInfo is part of an experimental API and may change or be removed.
+type GhCLIAuthInfo struct {
 	// Snapshot of the authenticated user's Copilot subscription info, if known. Mirrors the
 	// GitHub API `/copilot_internal/v2/token` user response shape — the runtime trusts this
 	// verbatim and does not re-fetch when set.
@@ -225,9 +594,9 @@ type GhCliAuthInfo struct {
 	Token string `json:"token"`
 }
 
-func (GhCliAuthInfo) authInfo() {}
-func (GhCliAuthInfo) Type() AuthInfoType {
-	return AuthInfoTypeGhCli
+func (GhCLIAuthInfo) authInfo() {}
+func (GhCLIAuthInfo) Type() AuthInfoType {
+	return AuthInfoTypeGhCLI
 }
 
 // Schema for the `HMACAuthInfo` type.
@@ -238,14 +607,14 @@ type HMACAuthInfo struct {
 	// verbatim and does not re-fetch when set.
 	CopilotUser *CopilotUserResponse `json:"copilotUser,omitempty"`
 	// HMAC secret used to sign requests.
-	Hmac string `json:"hmac"`
+	HMAC string `json:"hmac"`
 	// Authentication host. HMAC auth always targets the public GitHub host.
 	Host HMACAuthInfoHost `json:"host"`
 }
 
 func (HMACAuthInfo) authInfo() {}
 func (HMACAuthInfo) Type() AuthInfoType {
-	return AuthInfoTypeHmac
+	return AuthInfoTypeHMAC
 }
 
 // Schema for the `TokenAuthInfo` type.
@@ -282,6 +651,182 @@ type UserAuthInfo struct {
 func (UserAuthInfo) authInfo() {}
 func (UserAuthInfo) Type() AuthInfoType {
 	return AuthInfoTypeUser
+}
+
+// Canvas action that the agent or host can invoke. To discover the input schema for a
+// particular action, call the list_canvas_capabilities tool.
+// Experimental: CanvasAction is part of an experimental API and may change or be removed.
+type CanvasAction struct {
+	// Description of the action
+	Description *string `json:"description,omitempty"`
+	// JSON Schema for the action input
+	InputSchema any `json:"inputSchema,omitempty"`
+	// Action name exposed by the canvas provider
+	Name string `json:"name"`
+}
+
+// Canvas action invocation parameters.
+// Experimental: CanvasActionInvokeRequest is part of an experimental API and may change or
+// be removed.
+type CanvasActionInvokeRequest struct {
+	// Action name to invoke
+	ActionName string `json:"actionName"`
+	// Action input
+	Input any `json:"input,omitempty"`
+	// Open canvas instance identifier
+	InstanceID string `json:"instanceId"`
+}
+
+// Canvas action invocation result.
+// Experimental: CanvasActionInvokeResult is part of an experimental API and may change or
+// be removed.
+type CanvasActionInvokeResult struct {
+	// Provider-supplied action result
+	Result any `json:"result,omitempty"`
+}
+
+// Canvas close parameters.
+// Experimental: CanvasCloseRequest is part of an experimental API and may change or be
+// removed.
+type CanvasCloseRequest struct {
+	// Open canvas instance identifier
+	InstanceID string `json:"instanceId"`
+}
+
+// Experimental: CanvasCloseResult is part of an experimental API and may change or be
+// removed.
+type CanvasCloseResult struct {
+}
+
+// Host context supplied by the runtime.
+// Experimental: CanvasHostContext is part of an experimental API and may change or be
+// removed.
+type CanvasHostContext struct {
+	// Host capabilities
+	Capabilities *CanvasHostContextCapabilities `json:"capabilities,omitempty"`
+}
+
+// Host capabilities
+// Experimental: CanvasHostContextCapabilities is part of an experimental API and may change
+// or be removed.
+type CanvasHostContextCapabilities struct {
+	// Whether canvas rendering is supported
+	Canvases *bool `json:"canvases,omitempty"`
+}
+
+// JSON Schema for canvas open input
+// Experimental: CanvasJSONSchema is part of an experimental API and may change or be
+// removed.
+type CanvasJSONSchema any
+
+// Declared canvases available in this session.
+// Experimental: CanvasList is part of an experimental API and may change or be removed.
+type CanvasList struct {
+	// Declared canvases available in this session
+	Canvases []DiscoveredCanvas `json:"canvases"`
+}
+
+// Live open-canvas snapshot.
+// Experimental: CanvasListOpenResult is part of an experimental API and may change or be
+// removed.
+type CanvasListOpenResult struct {
+	// Currently open canvas instances
+	OpenCanvases []OpenCanvasInstance `json:"openCanvases"`
+}
+
+// Canvas open parameters.
+// Experimental: CanvasOpenRequest is part of an experimental API and may change or be
+// removed.
+type CanvasOpenRequest struct {
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier. Optional when the canvasId is unique across providers;
+	// required to disambiguate when multiple providers register the same canvasId.
+	ExtensionID *string `json:"extensionId,omitempty"`
+	// Canvas open input
+	Input any `json:"input,omitempty"`
+	// Caller-supplied stable instance identifier
+	InstanceID string `json:"instanceId"`
+}
+
+// Canvas close parameters sent to the provider.
+// Experimental: CanvasProviderCloseRequest is part of an experimental API and may change or
+// be removed.
+type CanvasProviderCloseRequest struct {
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Host context supplied by the runtime.
+	Host *CanvasHostContext `json:"host,omitempty"`
+	// Canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Session context supplied by the runtime.
+	Session *CanvasSessionContext `json:"session,omitempty"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+// Canvas action invocation parameters sent to the provider.
+// Experimental: CanvasProviderInvokeActionRequest is part of an experimental API and may
+// change or be removed.
+type CanvasProviderInvokeActionRequest struct {
+	// Action name to invoke
+	ActionName string `json:"actionName"`
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Host context supplied by the runtime.
+	Host *CanvasHostContext `json:"host,omitempty"`
+	// Action input
+	Input any `json:"input,omitempty"`
+	// Canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Session context supplied by the runtime.
+	Session *CanvasSessionContext `json:"session,omitempty"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+// Canvas open parameters sent to the provider.
+// Experimental: CanvasProviderOpenRequest is part of an experimental API and may change or
+// be removed.
+type CanvasProviderOpenRequest struct {
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Host context supplied by the runtime.
+	Host *CanvasHostContext `json:"host,omitempty"`
+	// Canvas open input
+	Input any `json:"input,omitempty"`
+	// Stable caller-supplied canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Session context supplied by the runtime.
+	Session *CanvasSessionContext `json:"session,omitempty"`
+	// Target session identifier
+	SessionID string `json:"sessionId"`
+}
+
+// Canvas open result returned by the provider.
+// Experimental: CanvasProviderOpenResult is part of an experimental API and may change or
+// be removed.
+type CanvasProviderOpenResult struct {
+	// Provider-supplied status text
+	Status *string `json:"status,omitempty"`
+	// Provider-supplied title
+	Title *string `json:"title,omitempty"`
+	// URL for web-rendered canvases
+	URL *string `json:"url,omitempty"`
+}
+
+// Session context supplied by the runtime.
+// Experimental: CanvasSessionContext is part of an experimental API and may change or be
+// removed.
+type CanvasSessionContext struct {
+	// Active session working directory, when known.
+	WorkingDirectory *string `json:"workingDirectory,omitempty"`
 }
 
 // Slash commands available in the session, after applying any include/exclude filters.
@@ -428,22 +973,22 @@ type CopilotUserResponse struct {
 	AssignedDate               *string `json:"assigned_date,omitempty"`
 	CanSignupForLimited        *bool   `json:"can_signup_for_limited,omitempty"`
 	ChatEnabled                *bool   `json:"chat_enabled,omitempty"`
-	CliRemoteControlEnabled    *bool   `json:"cli_remote_control_enabled,omitempty"`
+	CLIRemoteControlEnabled    *bool   `json:"cli_remote_control_enabled,omitempty"`
 	CloudSessionStorageEnabled *bool   `json:"cloud_session_storage_enabled,omitempty"`
 	CodexAgentEnabled          *bool   `json:"codex_agent_enabled,omitempty"`
 	CopilotignoreEnabled       *bool   `json:"copilotignore_enabled,omitempty"`
 	CopilotPlan                *string `json:"copilot_plan,omitempty"`
 	// Schema for the `CopilotUserResponseEndpoints` type.
 	Endpoints             *CopilotUserResponseEndpoints             `json:"endpoints,omitempty"`
-	IsMcpEnabled          *bool                                     `json:"is_mcp_enabled,omitempty"`
-	LimitedUserQuotas     map[string]float64                        `json:"limited_user_quotas,omitempty"`
+	IsMCPEnabled          *bool                                     `json:"is_mcp_enabled,omitempty"`
+	LimitedUserQuotas     map[string]float64                        `json:"limited_user_quotas,omitzero"`
 	LimitedUserResetDate  *string                                   `json:"limited_user_reset_date,omitempty"`
 	Login                 *string                                   `json:"login,omitempty"`
-	MonthlyQuotas         map[string]float64                        `json:"monthly_quotas,omitempty"`
-	OrganizationList      []CopilotUserResponseOrganizationListItem `json:"organization_list,omitempty"`
-	OrganizationLoginList []string                                  `json:"organization_login_list,omitempty"`
+	MonthlyQuotas         map[string]float64                        `json:"monthly_quotas,omitzero"`
+	OrganizationList      []CopilotUserResponseOrganizationListItem `json:"organization_list,omitzero"`
+	OrganizationLoginList []string                                  `json:"organization_login_list,omitzero"`
 	QuotaResetDate        *string                                   `json:"quota_reset_date,omitempty"`
-	QuotaResetDateUtc     *string                                   `json:"quota_reset_date_utc,omitempty"`
+	QuotaResetDateUTC     *string                                   `json:"quota_reset_date_utc,omitempty"`
 	// Schema for the `CopilotUserResponseQuotaSnapshots` type.
 	QuotaSnapshots      *CopilotUserResponseQuotaSnapshots `json:"quota_snapshots,omitempty"`
 	RestrictedTelemetry *bool                              `json:"restricted_telemetry,omitempty"`
@@ -490,7 +1035,7 @@ type CopilotUserResponseQuotaSnapshotsChat struct {
 	QuotaRemaining    *float64 `json:"quota_remaining,omitempty"`
 	QuotaResetAt      *float64 `json:"quota_reset_at,omitempty"`
 	Remaining         *float64 `json:"remaining,omitempty"`
-	TimestampUtc      *string  `json:"timestamp_utc,omitempty"`
+	TimestampUTC      *string  `json:"timestamp_utc,omitempty"`
 	TokenBasedBilling *bool    `json:"token_based_billing,omitempty"`
 	Unlimited         *bool    `json:"unlimited,omitempty"`
 }
@@ -508,7 +1053,7 @@ type CopilotUserResponseQuotaSnapshotsCompletions struct {
 	QuotaRemaining    *float64 `json:"quota_remaining,omitempty"`
 	QuotaResetAt      *float64 `json:"quota_reset_at,omitempty"`
 	Remaining         *float64 `json:"remaining,omitempty"`
-	TimestampUtc      *string  `json:"timestamp_utc,omitempty"`
+	TimestampUTC      *string  `json:"timestamp_utc,omitempty"`
 	TokenBasedBilling *bool    `json:"token_based_billing,omitempty"`
 	Unlimited         *bool    `json:"unlimited,omitempty"`
 }
@@ -526,14 +1071,18 @@ type CopilotUserResponseQuotaSnapshotsPremiumInteractions struct {
 	QuotaRemaining    *float64 `json:"quota_remaining,omitempty"`
 	QuotaResetAt      *float64 `json:"quota_reset_at,omitempty"`
 	Remaining         *float64 `json:"remaining,omitempty"`
-	TimestampUtc      *string  `json:"timestamp_utc,omitempty"`
+	TimestampUTC      *string  `json:"timestamp_utc,omitempty"`
 	TokenBasedBilling *bool    `json:"token_based_billing,omitempty"`
 	Unlimited         *bool    `json:"unlimited,omitempty"`
 }
 
-// The currently selected model and reasoning effort for the session.
+// The currently selected model, reasoning effort, and context tier for the session. The
+// context tier reflects `Session.getContextTier()`, restored from the session journal on
+// resume.
 // Experimental: CurrentModel is part of an experimental API and may change or be removed.
 type CurrentModel struct {
+	// Context tier for models that support multiple context-window sizes.
+	ContextTier *ContextTier `json:"contextTier,omitempty"`
 	// Currently active model identifier
 	ModelID *string `json:"modelId,omitempty"`
 	// Reasoning effort level currently applied to the active model, when one is set. Reads
@@ -542,16 +1091,56 @@ type CurrentModel struct {
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 }
 
+// Lightweight metadata for a currently initialized session tool
+// Experimental: CurrentToolMetadata is part of an experimental API and may change or be
+// removed.
+type CurrentToolMetadata struct {
+	// Whether the tool is loaded on demand via tool search
+	DeferLoading *bool `json:"deferLoading,omitempty"`
+	// Tool description
+	Description string `json:"description"`
+	// JSON Schema for tool input
+	InputSchema map[string]any `json:"input_schema,omitzero"`
+	// MCP server name for MCP-backed tools
+	MCPServerName *string `json:"mcpServerName,omitempty"`
+	// Raw MCP tool name for MCP-backed tools
+	MCPToolName *string `json:"mcpToolName,omitempty"`
+	// Model-facing tool name
+	Name string `json:"name"`
+	// Optional MCP/config namespaced tool name
+	NamespacedName *string `json:"namespacedName,omitempty"`
+}
+
+// Canvas available in the current session.
+// Experimental: DiscoveredCanvas is part of an experimental API and may change or be
+// removed.
+type DiscoveredCanvas struct {
+	// Actions the agent or host may invoke on an open instance
+	Actions []CanvasAction `json:"actions,omitzero"`
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Short, single-sentence description shown to the agent in canvas catalogs.
+	Description string `json:"description"`
+	// Human-readable canvas name
+	DisplayName string `json:"displayName"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Owning extension display name, when available
+	ExtensionName *string `json:"extensionName,omitempty"`
+	// JSON Schema for canvas open input
+	InputSchema any `json:"inputSchema,omitempty"`
+}
+
 // Schema for the `DiscoveredMcpServer` type.
-type DiscoveredMcpServer struct {
+type DiscoveredMCPServer struct {
 	// Whether the server is enabled (not in the disabled list)
 	Enabled bool `json:"enabled"`
 	// Server name (config key)
 	Name string `json:"name"`
 	// Configuration source: user, workspace, plugin, or builtin
-	Source McpServerSource `json:"source"`
-	// Server transport type: stdio, http, sse, or memory
-	Type *DiscoveredMcpServerType `json:"type,omitempty"`
+	Source MCPServerSource `json:"source"`
+	// Server transport type: stdio, http, sse (deprecated), or memory
+	Type *DiscoveredMCPServerType `json:"type,omitempty"`
 }
 
 // Slash-prefixed command string to enqueue for FIFO processing.
@@ -585,7 +1174,7 @@ type EventLogReadRequest struct {
 	// beginning of the session's persisted history.
 	Cursor *string `json:"cursor,omitempty"`
 	// Maximum number of events to return in this batch (1–1000, default 200).
-	Max *int32 `json:"max,omitempty"`
+	Max *int64 `json:"max,omitempty"`
 	// Either '*' to receive all event types, or a non-empty list of event types to receive
 	Types *EventLogTypes `json:"types,omitempty"`
 	// Milliseconds to wait for new events when the cursor is at the tail of history. 0
@@ -722,9 +1311,9 @@ func (ExternalToolTextResultForLlm) externalToolResult() {}
 // or be removed.
 type ExternalToolTextResultForLlm struct {
 	// Base64-encoded binary results returned to the model
-	BinaryResultsForLlm []ExternalToolTextResultForLlmBinaryResultsForLlm `json:"binaryResultsForLlm,omitempty"`
+	BinaryResultsForLlm []ExternalToolTextResultForLlmBinaryResultsForLlm `json:"binaryResultsForLlm,omitzero"`
 	// Structured content blocks from the tool
-	Contents []ExternalToolTextResultForLlmContent `json:"contents,omitempty"`
+	Contents []ExternalToolTextResultForLlmContent `json:"contents,omitzero"`
 	// Optional error message for failed executions
 	Error *string `json:"error,omitempty"`
 	// Execution outcome classification. Optional for back-compat; normalized to 'success' (or
@@ -735,7 +1324,7 @@ type ExternalToolTextResultForLlm struct {
 	// Text result returned to the model
 	TextResultForLlm string `json:"textResultForLlm"`
 	// Optional tool-specific telemetry
-	ToolTelemetry map[string]any `json:"toolTelemetry,omitempty"`
+	ToolTelemetry map[string]any `json:"toolTelemetry,omitzero"`
 }
 
 // Binary result returned by a tool for the model
@@ -746,6 +1335,8 @@ type ExternalToolTextResultForLlmBinaryResultsForLlm struct {
 	Data string `json:"data"`
 	// Human-readable description of the binary data
 	Description *string `json:"description,omitempty"`
+	// Optional metadata from the producing tool.
+	Metadata map[string]any `json:"metadata,omitzero"`
 	// MIME type of the binary data
 	MIMEType string `json:"mimeType"`
 	// Binary result type discriminator. Use "image" for images and "resource" for other binary
@@ -822,7 +1413,7 @@ type ExternalToolTextResultForLlmContentResourceLink struct {
 	// Human-readable description of the resource
 	Description *string `json:"description,omitempty"`
 	// Icons associated with this resource
-	Icons []ExternalToolTextResultForLlmContentResourceLinkIcon `json:"icons,omitempty"`
+	Icons []ExternalToolTextResultForLlmContentResourceLinkIcon `json:"icons,omitzero"`
 	// MIME type of the resource content
 	MIMEType *string `json:"mimeType,omitempty"`
 	// Resource name identifier
@@ -919,7 +1510,7 @@ type ExternalToolTextResultForLlmContentResourceLinkIcon struct {
 	// MIME type of the icon image
 	MIMEType *string `json:"mimeType,omitempty"`
 	// Available icon sizes (e.g., ['16x16', '32x32'])
-	Sizes []string `json:"sizes,omitempty"`
+	Sizes []string `json:"sizes,omitzero"`
 	// URL or path to the icon image
 	Src string `json:"src"`
 	// Theme variant this icon is intended for
@@ -1035,6 +1626,14 @@ type HistoryCompactContextWindow struct {
 	ToolDefinitionsTokens *int64 `json:"toolDefinitionsTokens,omitempty"`
 }
 
+// Optional compaction parameters.
+// Experimental: HistoryCompactRequest is part of an experimental API and may change or be
+// removed.
+type HistoryCompactRequest struct {
+	// Optional user-provided instructions to focus the compaction summary
+	CustomInstructions *string `json:"customInstructions,omitempty"`
+}
+
 // Compaction outcome with the number of tokens and messages removed, summary text, and the
 // resulting context window breakdown.
 // Experimental: HistoryCompactResult is part of an experimental API and may change or be
@@ -1101,21 +1700,21 @@ type InstalledPlugin struct {
 // Experimental: InstalledPluginSource is part of an experimental API and may change or be
 // removed.
 type InstalledPluginSource struct {
-	InstalledPluginSourceGithub *InstalledPluginSourceGithub
+	InstalledPluginSourceGitHub *InstalledPluginSourceGitHub
 	InstalledPluginSourceLocal  *InstalledPluginSourceLocal
 	InstalledPluginSourceURL    *InstalledPluginSourceURL
 	String                      *string
 }
 
-// Schema for the `InstalledPluginSourceGithub` type.
-// Experimental: InstalledPluginSourceGithub is part of an experimental API and may change
+// Schema for the `InstalledPluginSourceGitHub` type.
+// Experimental: InstalledPluginSourceGitHub is part of an experimental API and may change
 // or be removed.
-type InstalledPluginSourceGithub struct {
+type InstalledPluginSourceGitHub struct {
 	Path *string `json:"path,omitempty"`
 	Ref  *string `json:"ref,omitempty"`
 	Repo string  `json:"repo"`
 	// Constant value. Always "github".
-	Source InstalledPluginSourceGithubSource `json:"source"`
+	Source InstalledPluginSourceGitHubSource `json:"source"`
 }
 
 // Schema for the `InstalledPluginSourceLocal` type.
@@ -1152,7 +1751,7 @@ type InstructionsGetSourcesResult struct {
 type InstructionsSources struct {
 	// Glob pattern(s) from frontmatter — when set, this instruction applies only to matching
 	// files
-	ApplyTo []string `json:"applyTo,omitempty"`
+	ApplyTo []string `json:"applyTo,omitzero"`
 	// Raw content of the instruction file
 	Content string `json:"content"`
 	// When true, this source starts disabled and must be toggled on by the user
@@ -1213,19 +1812,189 @@ type LspInitializeRequest struct {
 	WorkingDirectory *string `json:"workingDirectory,omitempty"`
 }
 
+// MCP server, tool name, and arguments to invoke from an MCP App view.
+// Experimental: MCPAppsCallToolRequest is part of an experimental API and may change or be
+// removed.
+type MCPAppsCallToolRequest struct {
+	// Tool arguments
+	Arguments map[string]any `json:"arguments,omitzero"`
+	// **Required.** Server whose ui:// view issued the request. Per SEP-1865 ('callable by the
+	// app from this server only'), the call is rejected when this differs from `serverName`,
+	// and rejected outright when missing.
+	OriginServerName string `json:"originServerName"`
+	// MCP server hosting the tool
+	ServerName string `json:"serverName"`
+	// MCP tool name
+	ToolName string `json:"toolName"`
+}
+
+// Capability negotiation snapshot
+// Experimental: MCPAppsDiagnoseCapability is part of an experimental API and may change or
+// be removed.
+type MCPAppsDiagnoseCapability struct {
+	// Whether the runtime advertises `extensions.io.modelcontextprotocol/ui` to MCP servers
+	Advertised bool `json:"advertised"`
+	// Whether the MCP_APPS feature flag (or COPILOT_MCP_APPS env override) is on
+	FeatureFlagEnabled bool `json:"featureFlagEnabled"`
+	// Whether the session has the `mcp-apps` capability
+	SessionHasMCPApps bool `json:"sessionHasMcpApps"`
+}
+
+// MCP server to diagnose MCP Apps wiring for.
+// Experimental: MCPAppsDiagnoseRequest is part of an experimental API and may change or be
+// removed.
+type MCPAppsDiagnoseRequest struct {
+	// MCP server to probe
+	ServerName string `json:"serverName"`
+}
+
+// Diagnostic snapshot of MCP Apps wiring for the named server.
+// Experimental: MCPAppsDiagnoseResult is part of an experimental API and may change or be
+// removed.
+type MCPAppsDiagnoseResult struct {
+	// Capability negotiation snapshot
+	Capability MCPAppsDiagnoseCapability `json:"capability"`
+	// What the server returned for this session
+	Server MCPAppsDiagnoseServer `json:"server"`
+}
+
+// What the server returned for this session
+// Experimental: MCPAppsDiagnoseServer is part of an experimental API and may change or be
+// removed.
+type MCPAppsDiagnoseServer struct {
+	// Whether the named server is currently connected
+	Connected bool `json:"connected"`
+	// Up to 5 tool names with `_meta.ui` for quick inspection
+	SampleToolNames []string `json:"sampleToolNames"`
+	// Total tools returned by the server's tools/list
+	ToolCount float64 `json:"toolCount"`
+	// Tools whose `_meta.ui` is populated (resourceUri and/or visibility set)
+	ToolsWithUIMeta float64 `json:"toolsWithUiMeta"`
+}
+
+// Current host context advertised to MCP App guests.
+// Experimental: MCPAppsHostContext is part of an experimental API and may change or be
+// removed.
+type MCPAppsHostContext struct {
+	// Current host context
+	Context MCPAppsHostContextDetails `json:"context"`
+}
+
+// Current host context
+// Experimental: MCPAppsHostContextDetails is part of an experimental API and may change or
+// be removed.
+type MCPAppsHostContextDetails struct {
+	// Display modes the host supports
+	AvailableDisplayModes []MCPAppsHostContextDetailsAvailableDisplayMode `json:"availableDisplayModes,omitzero"`
+	// Current display mode (SEP-1865)
+	DisplayMode *MCPAppsHostContextDetailsDisplayMode `json:"displayMode,omitempty"`
+	// BCP-47 locale, e.g. 'en-US'
+	Locale *string `json:"locale,omitempty"`
+	// Platform type for responsive design
+	Platform *MCPAppsHostContextDetailsPlatform `json:"platform,omitempty"`
+	// UI theme preference per SEP-1865
+	Theme *MCPAppsHostContextDetailsTheme `json:"theme,omitempty"`
+	// IANA timezone, e.g. 'America/New_York'
+	TimeZone *string `json:"timeZone,omitempty"`
+	// Host application identifier
+	UserAgent *string `json:"userAgent,omitempty"`
+}
+
+// MCP server to list app-callable tools for.
+// Experimental: MCPAppsListToolsRequest is part of an experimental API and may change or be
+// removed.
+type MCPAppsListToolsRequest struct {
+	// **Required.** Server whose ui:// view issued the request. Per SEP-1865 ('callable by the
+	// app from this server only'), the call is rejected when this differs from `serverName`,
+	// and rejected outright when missing.
+	OriginServerName string `json:"originServerName"`
+	// MCP server hosting the app
+	ServerName string `json:"serverName"`
+}
+
+// App-callable tools from the named MCP server.
+// Experimental: MCPAppsListToolsResult is part of an experimental API and may change or be
+// removed.
+type MCPAppsListToolsResult struct {
+	// App-callable tools from the server
+	Tools []map[string]any `json:"tools"`
+}
+
+// MCP server and resource URI to fetch.
+// Experimental: MCPAppsReadResourceRequest is part of an experimental API and may change or
+// be removed.
+type MCPAppsReadResourceRequest struct {
+	// Name of the MCP server hosting the resource
+	ServerName string `json:"serverName"`
+	// Resource URI (typically ui://...)
+	URI string `json:"uri"`
+}
+
+// Resource contents returned by the MCP server.
+// Experimental: MCPAppsReadResourceResult is part of an experimental API and may change or
+// be removed.
+type MCPAppsReadResourceResult struct {
+	// Resource contents returned by the server
+	Contents []MCPAppsResourceContent `json:"contents"`
+}
+
+// Schema for the `McpAppsResourceContent` type.
+// Experimental: MCPAppsResourceContent is part of an experimental API and may change or be
+// removed.
+type MCPAppsResourceContent struct {
+	// Base64-encoded binary content
+	Blob *string `json:"blob,omitempty"`
+	// Resource-level metadata (CSP, permissions, etc.)
+	Meta map[string]any `json:"_meta,omitzero"`
+	// MIME type of the content
+	MIMEType *string `json:"mimeType,omitempty"`
+	// Text content (e.g. HTML)
+	Text *string `json:"text,omitempty"`
+	// The resource URI (typically ui://...)
+	URI string `json:"uri"`
+}
+
+// Host context advertised to MCP App guests
+// Experimental: MCPAppsSetHostContextDetails is part of an experimental API and may change
+// or be removed.
+type MCPAppsSetHostContextDetails struct {
+	// Display modes the host supports
+	AvailableDisplayModes []MCPAppsSetHostContextDetailsAvailableDisplayMode `json:"availableDisplayModes,omitzero"`
+	// Current display mode (SEP-1865)
+	DisplayMode *MCPAppsSetHostContextDetailsDisplayMode `json:"displayMode,omitempty"`
+	// BCP-47 locale, e.g. 'en-US'
+	Locale *string `json:"locale,omitempty"`
+	// Platform type for responsive design
+	Platform *MCPAppsSetHostContextDetailsPlatform `json:"platform,omitempty"`
+	// UI theme preference per SEP-1865
+	Theme *MCPAppsSetHostContextDetailsTheme `json:"theme,omitempty"`
+	// IANA timezone, e.g. 'America/New_York'
+	TimeZone *string `json:"timeZone,omitempty"`
+	// Host application identifier
+	UserAgent *string `json:"userAgent,omitempty"`
+}
+
+// Host context to advertise to MCP App guests.
+// Experimental: MCPAppsSetHostContextRequest is part of an experimental API and may change
+// or be removed.
+type MCPAppsSetHostContextRequest struct {
+	// Host context advertised to MCP App guests
+	Context MCPAppsSetHostContextDetails `json:"context"`
+}
+
 // The requestId previously passed to executeSampling that should be cancelled.
-// Experimental: McpCancelSamplingExecutionParams is part of an experimental API and may
+// Experimental: MCPCancelSamplingExecutionParams is part of an experimental API and may
 // change or be removed.
-type McpCancelSamplingExecutionParams struct {
+type MCPCancelSamplingExecutionParams struct {
 	// The requestId previously passed to executeSampling that should be cancelled
 	RequestID string `json:"requestId"`
 }
 
 // Indicates whether an in-flight sampling execution with the given requestId was found and
 // cancelled.
-// Experimental: McpCancelSamplingExecutionResult is part of an experimental API and may
+// Experimental: MCPCancelSamplingExecutionResult is part of an experimental API and may
 // change or be removed.
-type McpCancelSamplingExecutionResult struct {
+type MCPCancelSamplingExecutionResult struct {
 	// True if an in-flight execution with the given requestId was found and signalled to
 	// cancel. False when no such execution is in flight (already completed, never started, or
 	// cancelled by another caller).
@@ -1233,103 +2002,106 @@ type McpCancelSamplingExecutionResult struct {
 }
 
 // MCP server name and configuration to add to user configuration.
-type McpConfigAddRequest struct {
+type MCPConfigAddRequest struct {
 	// MCP server configuration (stdio process or remote HTTP/SSE)
-	Config McpServerConfig `json:"config"`
+	Config MCPServerConfig `json:"config"`
 	// Unique name for the MCP server
 	Name string `json:"name"`
 }
 
-type McpConfigAddResult struct {
+type MCPConfigAddResult struct {
 }
 
 // MCP server names to disable for new sessions.
-type McpConfigDisableRequest struct {
+type MCPConfigDisableRequest struct {
 	// Names of MCP servers to disable. Each server is added to the persisted disabled list so
 	// new sessions skip it. Already-disabled names are ignored. Active sessions keep their
 	// current connections until they end.
 	Names []string `json:"names"`
 }
 
-type McpConfigDisableResult struct {
+type MCPConfigDisableResult struct {
 }
 
 // MCP server names to enable for new sessions.
-type McpConfigEnableRequest struct {
+type MCPConfigEnableRequest struct {
 	// Names of MCP servers to enable. Each server is removed from the persisted disabled list
 	// so new sessions spawn it. Unknown or already-enabled names are ignored.
 	Names []string `json:"names"`
 }
 
-type McpConfigEnableResult struct {
+type MCPConfigEnableResult struct {
 }
 
 // User-configured MCP servers, keyed by server name.
-type McpConfigList struct {
+type MCPConfigList struct {
 	// All MCP servers from user config, keyed by name
-	Servers map[string]McpServerConfig `json:"servers"`
+	Servers map[string]MCPServerConfig `json:"servers"`
+}
+
+type MCPConfigReloadResult struct {
 }
 
 // MCP server name to remove from user configuration.
-type McpConfigRemoveRequest struct {
+type MCPConfigRemoveRequest struct {
 	// Name of the MCP server to remove
 	Name string `json:"name"`
 }
 
-type McpConfigRemoveResult struct {
+type MCPConfigRemoveResult struct {
 }
 
 // MCP server name and replacement configuration to write to user configuration.
-type McpConfigUpdateRequest struct {
+type MCPConfigUpdateRequest struct {
 	// MCP server configuration (stdio process or remote HTTP/SSE)
-	Config McpServerConfig `json:"config"`
+	Config MCPServerConfig `json:"config"`
 	// Name of the MCP server to update
 	Name string `json:"name"`
 }
 
-type McpConfigUpdateResult struct {
+type MCPConfigUpdateResult struct {
 }
 
 // Name of the MCP server to disable for the session.
-// Experimental: McpDisableRequest is part of an experimental API and may change or be
+// Experimental: MCPDisableRequest is part of an experimental API and may change or be
 // removed.
-type McpDisableRequest struct {
+type MCPDisableRequest struct {
 	// Name of the MCP server to disable
 	ServerName string `json:"serverName"`
 }
 
 // Optional working directory used as context for MCP server discovery.
-type McpDiscoverRequest struct {
+type MCPDiscoverRequest struct {
 	// Working directory used as context for discovery (e.g., plugin resolution)
 	WorkingDirectory *string `json:"workingDirectory,omitempty"`
 }
 
 // MCP servers discovered from user, workspace, plugin, and built-in sources.
-type McpDiscoverResult struct {
+type MCPDiscoverResult struct {
 	// MCP servers discovered from all sources
-	Servers []DiscoveredMcpServer `json:"servers"`
+	Servers []DiscoveredMCPServer `json:"servers"`
 }
 
 // Name of the MCP server to enable for the session.
-// Experimental: McpEnableRequest is part of an experimental API and may change or be
+// Experimental: MCPEnableRequest is part of an experimental API and may change or be
 // removed.
-type McpEnableRequest struct {
+type MCPEnableRequest struct {
 	// Name of the MCP server to enable
 	ServerName string `json:"serverName"`
 }
 
 // Identifiers and raw MCP CreateMessageRequest params used to run a sampling inference.
-// Experimental: McpExecuteSamplingParams is part of an experimental API and may change or
+// Experimental: MCPExecuteSamplingParams is part of an experimental API and may change or
 // be removed.
-type McpExecuteSamplingParams struct {
+type MCPExecuteSamplingParams struct {
 	// The original MCP JSON-RPC request ID (string or number). Used by the runtime to correlate
 	// the inference with the originating MCP request for telemetry; this is distinct from
 	// `requestId` (which is the schema-level cancellation handle).
-	McpRequestID any `json:"mcpRequestId"`
+	MCPRequestID any `json:"mcpRequestId"`
 	// Raw MCP CreateMessageRequest params, as received in the `sampling.requested` event.
 	// Treated as opaque at the schema layer; the runtime converts the embedded MCP messages
 	// into the OpenAI chat-completion shape internally.
-	Request McpExecuteSamplingRequest `json:"request"`
+	Request MCPExecuteSamplingRequest `json:"request"`
 	// Caller-provided unique identifier for this sampling execution. Use this same ID with
 	// cancelSamplingExecution to cancel the in-flight call. Must be unique within the session
 	// for the lifetime of the call.
@@ -1341,24 +2113,24 @@ type McpExecuteSamplingParams struct {
 // Raw MCP CreateMessageRequest params, as received in the `sampling.requested` event.
 // Treated as opaque at the schema layer; the runtime converts the embedded MCP messages
 // into the OpenAI chat-completion shape internally.
-// Experimental: McpExecuteSamplingRequest is part of an experimental API and may change or
+// Experimental: MCPExecuteSamplingRequest is part of an experimental API and may change or
 // be removed.
-type McpExecuteSamplingRequest struct {
+type MCPExecuteSamplingRequest struct {
 }
 
 // MCP CreateMessageResult payload (with optional 'tools' extension), present when
 // action='success'. Treated as opaque at the schema layer; consumers should
 // construct/consume it per the MCP CreateMessageResult shape.
-// Experimental: McpExecuteSamplingResult is part of an experimental API and may change or
+// Experimental: MCPExecuteSamplingResult is part of an experimental API and may change or
 // be removed.
-type McpExecuteSamplingResult struct {
+type MCPExecuteSamplingResult struct {
 }
 
 // Remote MCP server name and optional overrides controlling reauthentication, OAuth client
 // display name, and the callback success-page copy.
-// Experimental: McpOauthLoginRequest is part of an experimental API and may change or be
+// Experimental: MCPOauthLoginRequest is part of an experimental API and may change or be
 // removed.
-type McpOauthLoginRequest struct {
+type MCPOauthLoginRequest struct {
 	// Optional override for the body text shown on the OAuth loopback callback success page.
 	// When omitted, the runtime applies a neutral fallback; callers driving interactive auth
 	// should pass surface-specific copy telling the user where to return.
@@ -1379,9 +2151,9 @@ type McpOauthLoginRequest struct {
 
 // OAuth authorization URL the caller should open, or empty when cached tokens already
 // authenticated the server.
-// Experimental: McpOauthLoginResult is part of an experimental API and may change or be
+// Experimental: MCPOauthLoginResult is part of an experimental API and may change or be
 // removed.
-type McpOauthLoginResult struct {
+type MCPOauthLoginResult struct {
 	// URL the caller should open in a browser to complete OAuth. Omitted when cached tokens
 	// were still valid and no browser interaction was needed — the server is already
 	// reconnected in that case. When present, the runtime starts the callback listener before
@@ -1392,9 +2164,9 @@ type McpOauthLoginResult struct {
 
 // Indicates whether the auto-managed `github` MCP server was removed (false when nothing to
 // remove).
-// Experimental: McpRemoveGitHubResult is part of an experimental API and may change or be
+// Experimental: MCPRemoveGitHubResult is part of an experimental API and may change or be
 // removed.
-type McpRemoveGitHubResult struct {
+type MCPRemoveGitHubResult struct {
 	// True when the auto-managed `github` MCP server was removed; false when no removal
 	// happened (e.g. user has explicitly configured a `github` server, or the server was not
 	// registered).
@@ -1402,130 +2174,147 @@ type McpRemoveGitHubResult struct {
 }
 
 // Outcome of an MCP sampling execution: success result, failure error, or cancellation.
-// Experimental: McpSamplingExecutionResult is part of an experimental API and may change or
+// Experimental: MCPSamplingExecutionResult is part of an experimental API and may change or
 // be removed.
-type McpSamplingExecutionResult struct {
+type MCPSamplingExecutionResult struct {
 	// Outcome of the sampling inference. 'success' produced a response; 'failure' encountered
 	// an error (including agent-side rejection by content filter or criteria); 'cancelled' the
 	// caller cancelled this execution via cancelSamplingExecution.
-	Action McpSamplingExecutionAction `json:"action"`
+	Action MCPSamplingExecutionAction `json:"action"`
 	// Error description, present when action='failure'.
 	Error *string `json:"error,omitempty"`
 	// MCP CreateMessageResult payload (with optional 'tools' extension), present when
 	// action='success'. Treated as opaque at the schema layer; consumers should
 	// construct/consume it per the MCP CreateMessageResult shape.
-	Result *McpExecuteSamplingResult `json:"result,omitempty"`
+	Result *MCPExecuteSamplingResult `json:"result,omitempty"`
 }
 
 // Schema for the `McpServer` type.
-// Experimental: McpServer is part of an experimental API and may change or be removed.
-type McpServer struct {
+// Experimental: MCPServer is part of an experimental API and may change or be removed.
+type MCPServer struct {
 	// Error message if the server failed to connect
 	Error *string `json:"error,omitempty"`
 	// Server name (config key)
 	Name string `json:"name"`
 	// Configuration source: user, workspace, plugin, or builtin
-	Source *McpServerSource `json:"source,omitempty"`
+	Source *MCPServerSource `json:"source,omitempty"`
 	// Connection status: connected, failed, needs-auth, pending, disabled, or not_configured
-	Status McpServerStatus `json:"status"`
+	Status MCPServerStatus `json:"status"`
+}
+
+// Set to `true` to use defaults, or provide an object with additional auth or OIDC settings.
+type MCPServerAuthConfig interface {
+	mcpServerAuthConfig()
+}
+
+type MCPServerAuthConfigBoolean bool
+
+func (MCPServerAuthConfigBoolean) mcpServerAuthConfig() {}
+
+func (MCPServerAuthConfigRedirectPort) mcpServerAuthConfig() {}
+
+// Authentication settings with optional redirect port configuration.
+type MCPServerAuthConfigRedirectPort struct {
+	// Fixed port for the OAuth redirect callback server.
+	RedirectPort *int32 `json:"redirectPort,omitempty"`
 }
 
 // MCP server configuration (stdio process or remote HTTP/SSE)
-type McpServerConfig interface {
+type MCPServerConfig interface {
 	mcpServerConfig()
 }
 
-type RawMcpServerConfigData struct {
+type RawMCPServerConfigData struct {
 	Raw json.RawMessage
 }
 
-func (RawMcpServerConfigData) mcpServerConfig() {}
+func (RawMCPServerConfigData) mcpServerConfig() {}
 
 // Remote MCP server configuration accessed over HTTP or SSE.
-type McpServerConfigHTTP struct {
-	// Additional authentication configuration for this server.
-	Auth *McpServerConfigHTTPAuth `json:"auth,omitempty"`
+type MCPServerConfigHTTP struct {
+	// Set to `true` to use defaults, or provide an object with additional auth or OIDC settings.
+	Auth MCPServerAuthConfig `json:"auth,omitempty"`
 	// Content filtering mode to apply to all tools, or a map of tool name to content filtering
 	// mode.
 	FilterMapping FilterMapping `json:"filterMapping,omitempty"`
 	// HTTP headers to include in requests to the remote MCP server.
-	Headers map[string]string `json:"headers,omitempty"`
+	Headers map[string]string `json:"headers,omitzero"`
 	// Whether this server is a built-in fallback used when the user has not configured their
 	// own server.
 	IsDefaultServer *bool `json:"isDefaultServer,omitempty"`
 	// OAuth client ID for a pre-registered remote MCP OAuth client.
 	OauthClientID *string `json:"oauthClientId,omitempty"`
 	// OAuth grant type to use when authenticating to the remote MCP server.
-	OauthGrantType *McpServerConfigHTTPOauthGrantType `json:"oauthGrantType,omitempty"`
+	OauthGrantType *MCPServerConfigHTTPOauthGrantType `json:"oauthGrantType,omitempty"`
 	// Whether the configured OAuth client is public and does not require a client secret.
 	OauthPublicClient *bool `json:"oauthPublicClient,omitempty"`
+	// Set to `true` to use defaults, or provide an object with additional auth or OIDC settings.
+	Oidc MCPServerAuthConfig `json:"oidc,omitempty"`
 	// Timeout in milliseconds for tool calls to this server.
 	Timeout *int64 `json:"timeout,omitempty"`
 	// Tools to include. Defaults to all tools if not specified.
-	Tools []string `json:"tools,omitempty"`
+	Tools []string `json:"tools,omitzero"`
 	// Remote transport type. Defaults to "http" when omitted.
-	Type *McpServerConfigHTTPType `json:"type,omitempty"`
+	Type *MCPServerConfigHTTPType `json:"type,omitempty"`
 	// URL of the remote MCP server endpoint.
 	URL string `json:"url"`
 }
 
-func (McpServerConfigHTTP) mcpServerConfig() {}
+func (MCPServerConfigHTTP) mcpServerConfig() {}
 
 // Stdio MCP server configuration launched as a child process.
-type McpServerConfigStdio struct {
+type MCPServerConfigStdio struct {
 	// Command-line arguments passed to the Stdio MCP server process.
-	Args []string `json:"args,omitempty"`
+	Args []string `json:"args,omitzero"`
+	// Set to `true` to use defaults, or provide an object with additional auth or OIDC settings.
+	Auth MCPServerAuthConfig `json:"auth,omitempty"`
 	// Executable command used to start the Stdio MCP server process.
 	Command string `json:"command"`
 	// Working directory for the Stdio MCP server process.
 	Cwd *string `json:"cwd,omitempty"`
 	// Environment variables to pass to the Stdio MCP server process.
-	Env map[string]string `json:"env,omitempty"`
+	Env map[string]string `json:"env,omitzero"`
 	// Content filtering mode to apply to all tools, or a map of tool name to content filtering
 	// mode.
 	FilterMapping FilterMapping `json:"filterMapping,omitempty"`
 	// Whether this server is a built-in fallback used when the user has not configured their
 	// own server.
 	IsDefaultServer *bool `json:"isDefaultServer,omitempty"`
+	// Set to `true` to use defaults, or provide an object with additional auth or OIDC settings.
+	Oidc MCPServerAuthConfig `json:"oidc,omitempty"`
 	// Timeout in milliseconds for tool calls to this server.
 	Timeout *int64 `json:"timeout,omitempty"`
 	// Tools to include. Defaults to all tools if not specified.
-	Tools []string `json:"tools,omitempty"`
+	Tools []string `json:"tools,omitzero"`
 }
 
-func (McpServerConfigStdio) mcpServerConfig() {}
-
-// Additional authentication configuration for this server.
-type McpServerConfigHTTPAuth struct {
-	// Fixed port for the OAuth redirect callback server.
-	RedirectPort *int32 `json:"redirectPort,omitempty"`
-}
+func (MCPServerConfigStdio) mcpServerConfig() {}
 
 // MCP servers configured for the session, with their connection status.
-// Experimental: McpServerList is part of an experimental API and may change or be removed.
-type McpServerList struct {
+// Experimental: MCPServerList is part of an experimental API and may change or be removed.
+type MCPServerList struct {
 	// Configured MCP servers
-	Servers []McpServer `json:"servers"`
+	Servers []MCPServer `json:"servers"`
 }
 
 // Mode controlling how MCP server env values are resolved (`direct` or `indirect`).
-// Experimental: McpSetEnvValueModeParams is part of an experimental API and may change or
+// Experimental: MCPSetEnvValueModeParams is part of an experimental API and may change or
 // be removed.
-type McpSetEnvValueModeParams struct {
+type MCPSetEnvValueModeParams struct {
 	// How environment-variable values supplied to MCP servers are resolved. "direct" passes
 	// literal string values; "indirect" treats values as references (e.g. names of environment
 	// variables on the host) that the runtime resolves before launch. Defaults to the runtime's
 	// startup mode; clients that intentionally launch MCP servers with literal values (e.g. CLI
 	// prompt mode and ACP) set this to "direct".
-	Mode McpSetEnvValueModeDetails `json:"mode"`
+	Mode MCPSetEnvValueModeDetails `json:"mode"`
 }
 
 // Env-value mode recorded on the session after the update.
-// Experimental: McpSetEnvValueModeResult is part of an experimental API and may change or
+// Experimental: MCPSetEnvValueModeResult is part of an experimental API and may change or
 // be removed.
-type McpSetEnvValueModeResult struct {
+type MCPSetEnvValueModeResult struct {
 	// Mode recorded on the session after the update
-	Mode McpSetEnvValueModeDetails `json:"mode"`
+	Mode MCPSetEnvValueModeDetails `json:"mode"`
 }
 
 // Model identifier and token limits used to compute the context-info breakdown.
@@ -1673,7 +2462,7 @@ type Model struct {
 	// Policy state (if applicable)
 	Policy *ModelPolicy `json:"policy,omitempty"`
 	// Supported reasoning effort levels (only present if model supports reasoning effort)
-	SupportedReasoningEfforts []string `json:"supportedReasoningEfforts,omitempty"`
+	SupportedReasoningEfforts []string `json:"supportedReasoningEfforts,omitzero"`
 }
 
 // Billing information
@@ -1688,15 +2477,30 @@ type ModelBilling struct {
 type ModelBillingTokenPrices struct {
 	// Number of tokens per standard billing batch
 	BatchSize *int64 `json:"batchSize,omitempty"`
-	// Price per billing batch of cached tokens in nano-AIUs (1 nano-AIU = 0.000000001 AIU, 1
-	// AIU = $0.01 USD)
-	CachePrice *int64 `json:"cachePrice,omitempty"`
-	// Price per billing batch of input tokens in nano-AIUs (1 nano-AIU = 0.000000001 AIU, 1 AIU
-	// = $0.01 USD)
-	InputPrice *int64 `json:"inputPrice,omitempty"`
-	// Price per billing batch of output tokens in nano-AIUs (1 nano-AIU = 0.000000001 AIU, 1
-	// AIU = $0.01 USD)
-	OutputPrice *int64 `json:"outputPrice,omitempty"`
+	// AI Credits cost per billing batch of cached tokens
+	CachePrice *float64 `json:"cachePrice,omitempty"`
+	// Prompt token budget (max_prompt_tokens) for the default tier. The total context window is
+	// this value plus the model's max_output_tokens.
+	ContextMax *int64 `json:"contextMax,omitempty"`
+	// AI Credits cost per billing batch of input tokens
+	InputPrice *float64 `json:"inputPrice,omitempty"`
+	// Long context tier pricing (available for models with extended context windows)
+	LongContext *ModelBillingTokenPricesLongContext `json:"longContext,omitempty"`
+	// AI Credits cost per billing batch of output tokens
+	OutputPrice *float64 `json:"outputPrice,omitempty"`
+}
+
+// Long context tier pricing (available for models with extended context windows)
+type ModelBillingTokenPricesLongContext struct {
+	// AI Credits cost per billing batch of cached tokens
+	CachePrice *float64 `json:"cachePrice,omitempty"`
+	// Prompt token budget (max_prompt_tokens) for the long context tier. The total context
+	// window is this value plus the model's max_output_tokens.
+	ContextMax *int64 `json:"contextMax,omitempty"`
+	// AI Credits cost per billing batch of input tokens
+	InputPrice *float64 `json:"inputPrice,omitempty"`
+	// AI Credits cost per billing batch of output tokens
+	OutputPrice *float64 `json:"outputPrice,omitempty"`
 }
 
 // Model capabilities and limits
@@ -1762,7 +2566,7 @@ type ModelCapabilitiesOverrideLimitsVision struct {
 	// Maximum image size in bytes
 	MaxPromptImageSize *int64 `json:"max_prompt_image_size,omitempty"`
 	// MIME types the model accepts
-	SupportedMediaTypes []string `json:"supported_media_types,omitempty"`
+	SupportedMediaTypes []string `json:"supported_media_types,omitzero"`
 }
 
 // Feature flags indicating what the model supports
@@ -1788,6 +2592,14 @@ type ModelCapabilitiesSupports struct {
 type ModelList struct {
 	// List of available models with full metadata
 	Models []Model `json:"models"`
+}
+
+// Optional listing options.
+// Experimental: ModelListRequest is part of an experimental API and may change or be
+// removed.
+type ModelListRequest struct {
+	// If true, bypasses the per-session model list cache and re-fetches from CAPI.
+	SkipCache *bool `json:"skipCache,omitempty"`
 }
 
 // Policy state (if applicable)
@@ -1823,10 +2635,14 @@ type ModelsListRequest struct {
 	GitHubToken *string `json:"gitHubToken,omitempty"`
 }
 
-// Target model identifier and optional reasoning effort, summary, and capability overrides.
+// Target model identifier and optional reasoning effort, summary, capability overrides, and
+// context tier.
 // Experimental: ModelSwitchToRequest is part of an experimental API and may change or be
 // removed.
 type ModelSwitchToRequest struct {
+	// Explicit context tier for the selected model. `"default"` / `"long_context"` apply the
+	// requested tier; omit this field to use normal model behavior with no explicit tier.
+	ContextTier *ContextTier `json:"contextTier,omitempty"`
 	// Override individual model capabilities resolved by the runtime
 	ModelCapabilities *ModelCapabilitiesOverride `json:"modelCapabilities,omitempty"`
 	// Model identifier to switch to
@@ -1883,6 +2699,32 @@ type NameSetAutoResult struct {
 type NameSetRequest struct {
 	// New session name (1–100 characters, trimmed of leading/trailing whitespace)
 	Name string `json:"name"`
+}
+
+// Open canvas instance snapshot.
+// Experimental: OpenCanvasInstance is part of an experimental API and may change or be
+// removed.
+type OpenCanvasInstance struct {
+	// Runtime-controlled routing state for an open canvas instance.
+	Availability CanvasInstanceAvailability `json:"availability"`
+	// Provider-local canvas identifier
+	CanvasID string `json:"canvasId"`
+	// Owning provider identifier
+	ExtensionID string `json:"extensionId"`
+	// Owning extension display name, when available
+	ExtensionName *string `json:"extensionName,omitempty"`
+	// Input supplied when the instance was opened
+	Input any `json:"input,omitempty"`
+	// Stable caller-supplied canvas instance identifier
+	InstanceID string `json:"instanceId"`
+	// Whether this snapshot came from an idempotent reopen
+	Reopen bool `json:"reopen"`
+	// Provider-supplied status text
+	Status *string `json:"status,omitempty"`
+	// Rendered title
+	Title *string `json:"title,omitempty"`
+	// URL for web-rendered canvases
+	URL *string `json:"url,omitempty"`
 }
 
 // Schema for the `PendingPermissionRequest` type.
@@ -2202,33 +3044,33 @@ func (PermissionDecisionApproveForLocationApprovalExtensionPermissionAccess) Kin
 }
 
 // Schema for the `PermissionDecisionApproveForLocationApprovalMcp` type.
-// Experimental: PermissionDecisionApproveForLocationApprovalMcp is part of an experimental
+// Experimental: PermissionDecisionApproveForLocationApprovalMCP is part of an experimental
 // API and may change or be removed.
-type PermissionDecisionApproveForLocationApprovalMcp struct {
+type PermissionDecisionApproveForLocationApprovalMCP struct {
 	// MCP server name.
 	ServerName string `json:"serverName"`
 	// MCP tool name, or null to cover every tool on the server.
 	ToolName *string `json:"toolName"`
 }
 
-func (PermissionDecisionApproveForLocationApprovalMcp) permissionDecisionApproveForLocationApproval() {
+func (PermissionDecisionApproveForLocationApprovalMCP) permissionDecisionApproveForLocationApproval() {
 }
-func (PermissionDecisionApproveForLocationApprovalMcp) Kind() PermissionDecisionApproveForLocationApprovalKind {
-	return PermissionDecisionApproveForLocationApprovalKindMcp
+func (PermissionDecisionApproveForLocationApprovalMCP) Kind() PermissionDecisionApproveForLocationApprovalKind {
+	return PermissionDecisionApproveForLocationApprovalKindMCP
 }
 
 // Schema for the `PermissionDecisionApproveForLocationApprovalMcpSampling` type.
-// Experimental: PermissionDecisionApproveForLocationApprovalMcpSampling is part of an
+// Experimental: PermissionDecisionApproveForLocationApprovalMCPSampling is part of an
 // experimental API and may change or be removed.
-type PermissionDecisionApproveForLocationApprovalMcpSampling struct {
+type PermissionDecisionApproveForLocationApprovalMCPSampling struct {
 	// MCP server name.
 	ServerName string `json:"serverName"`
 }
 
-func (PermissionDecisionApproveForLocationApprovalMcpSampling) permissionDecisionApproveForLocationApproval() {
+func (PermissionDecisionApproveForLocationApprovalMCPSampling) permissionDecisionApproveForLocationApproval() {
 }
-func (PermissionDecisionApproveForLocationApprovalMcpSampling) Kind() PermissionDecisionApproveForLocationApprovalKind {
-	return PermissionDecisionApproveForLocationApprovalKindMcpSampling
+func (PermissionDecisionApproveForLocationApprovalMCPSampling) Kind() PermissionDecisionApproveForLocationApprovalKind {
+	return PermissionDecisionApproveForLocationApprovalKindMCPSampling
 }
 
 // Schema for the `PermissionDecisionApproveForLocationApprovalMemory` type.
@@ -2345,32 +3187,32 @@ func (PermissionDecisionApproveForSessionApprovalExtensionPermissionAccess) Kind
 }
 
 // Schema for the `PermissionDecisionApproveForSessionApprovalMcp` type.
-// Experimental: PermissionDecisionApproveForSessionApprovalMcp is part of an experimental
+// Experimental: PermissionDecisionApproveForSessionApprovalMCP is part of an experimental
 // API and may change or be removed.
-type PermissionDecisionApproveForSessionApprovalMcp struct {
+type PermissionDecisionApproveForSessionApprovalMCP struct {
 	// MCP server name.
 	ServerName string `json:"serverName"`
 	// MCP tool name, or null to cover every tool on the server.
 	ToolName *string `json:"toolName"`
 }
 
-func (PermissionDecisionApproveForSessionApprovalMcp) permissionDecisionApproveForSessionApproval() {}
-func (PermissionDecisionApproveForSessionApprovalMcp) Kind() PermissionDecisionApproveForSessionApprovalKind {
-	return PermissionDecisionApproveForSessionApprovalKindMcp
+func (PermissionDecisionApproveForSessionApprovalMCP) permissionDecisionApproveForSessionApproval() {}
+func (PermissionDecisionApproveForSessionApprovalMCP) Kind() PermissionDecisionApproveForSessionApprovalKind {
+	return PermissionDecisionApproveForSessionApprovalKindMCP
 }
 
 // Schema for the `PermissionDecisionApproveForSessionApprovalMcpSampling` type.
-// Experimental: PermissionDecisionApproveForSessionApprovalMcpSampling is part of an
+// Experimental: PermissionDecisionApproveForSessionApprovalMCPSampling is part of an
 // experimental API and may change or be removed.
-type PermissionDecisionApproveForSessionApprovalMcpSampling struct {
+type PermissionDecisionApproveForSessionApprovalMCPSampling struct {
 	// MCP server name.
 	ServerName string `json:"serverName"`
 }
 
-func (PermissionDecisionApproveForSessionApprovalMcpSampling) permissionDecisionApproveForSessionApproval() {
+func (PermissionDecisionApproveForSessionApprovalMCPSampling) permissionDecisionApproveForSessionApproval() {
 }
-func (PermissionDecisionApproveForSessionApprovalMcpSampling) Kind() PermissionDecisionApproveForSessionApprovalKind {
-	return PermissionDecisionApproveForSessionApprovalKindMcpSampling
+func (PermissionDecisionApproveForSessionApprovalMCPSampling) Kind() PermissionDecisionApproveForSessionApprovalKind {
+	return PermissionDecisionApproveForSessionApprovalKindMCPSampling
 }
 
 // Schema for the `PermissionDecisionApproveForSessionApprovalMemory` type.
@@ -2508,7 +3350,7 @@ type PermissionPathsConfig struct {
 	// directory). When `unrestricted` is true, these are still pre-populated on the
 	// UnrestrictedPathManager so they remain visible via getDirectories() (e.g. for @-mention
 	// completion).
-	AdditionalDirectories []string `json:"additionalDirectories,omitempty"`
+	AdditionalDirectories []string `json:"additionalDirectories,omitzero"`
 	// Whether to include the system temp directory in the allowed list (defaults to true).
 	// Ignored when `unrestricted` is true.
 	IncludeTempDirectory *bool `json:"includeTempDirectory,omitempty"`
@@ -2609,8 +3451,8 @@ type PermissionsConfigureAdditionalContentExclusionPolicy struct {
 // Experimental: PermissionsConfigureAdditionalContentExclusionPolicyRule is part of an
 // experimental API and may change or be removed.
 type PermissionsConfigureAdditionalContentExclusionPolicyRule struct {
-	IfAnyMatch  []string `json:"ifAnyMatch,omitempty"`
-	IfNoneMatch []string `json:"ifNoneMatch,omitempty"`
+	IfAnyMatch  []string `json:"ifAnyMatch,omitzero"`
+	IfNoneMatch []string `json:"ifNoneMatch,omitzero"`
 	Paths       []string `json:"paths"`
 	// Schema for the `PermissionsConfigureAdditionalContentExclusionPolicyRuleSource` type.
 	Source PermissionsConfigureAdditionalContentExclusionPolicyRuleSource `json:"source"`
@@ -2631,7 +3473,7 @@ type PermissionsConfigureParams struct {
 	// If specified, replaces the host-supplied GitHub Content Exclusion policies on the session
 	// (combined with natively-discovered policies when evaluating tool/file access). Omit to
 	// leave the current policies unchanged.
-	AdditionalContentExclusionPolicies []PermissionsConfigureAdditionalContentExclusionPolicy `json:"additionalContentExclusionPolicies,omitempty"`
+	AdditionalContentExclusionPolicies []PermissionsConfigureAdditionalContentExclusionPolicy `json:"additionalContentExclusionPolicies,omitzero"`
 	// If specified, sets whether path/URL read permission requests are auto-approved. Omit to
 	// leave the current value unchanged.
 	ApproveAllReadPermissionRequests *bool `json:"approveAllReadPermissionRequests,omitempty"`
@@ -2648,7 +3490,7 @@ type PermissionsConfigureParams struct {
 	// If specified, replaces the session's URL-permission policy. The runtime constructs a
 	// fresh DefaultUrlManager based on these inputs. Omit to leave the current URL policy
 	// unchanged.
-	Urls *PermissionUrlsConfig `json:"urls,omitempty"`
+	URLs *PermissionURLsConfig `json:"urls,omitempty"`
 }
 
 // Indicates whether the operation succeeded.
@@ -2665,6 +3507,12 @@ type PermissionsConfigureResult struct {
 type PermissionsFolderTrustAddTrustedResult struct {
 	// Whether the operation succeeded
 	Success bool `json:"success"`
+}
+
+// No parameters.
+// Experimental: PermissionsGetAllowAllRequest is part of an experimental API and may change
+// or be removed.
+type PermissionsGetAllowAllRequest struct {
 }
 
 // Tool approval to persist and apply
@@ -2744,32 +3592,32 @@ func (PermissionsLocationsAddToolApprovalDetailsExtensionPermissionAccess) Kind(
 }
 
 // Schema for the `PermissionsLocationsAddToolApprovalDetailsMcp` type.
-// Experimental: PermissionsLocationsAddToolApprovalDetailsMcp is part of an experimental
+// Experimental: PermissionsLocationsAddToolApprovalDetailsMCP is part of an experimental
 // API and may change or be removed.
-type PermissionsLocationsAddToolApprovalDetailsMcp struct {
+type PermissionsLocationsAddToolApprovalDetailsMCP struct {
 	// MCP server name.
 	ServerName string `json:"serverName"`
 	// MCP tool name, or null to cover every tool on the server.
 	ToolName *string `json:"toolName"`
 }
 
-func (PermissionsLocationsAddToolApprovalDetailsMcp) permissionsLocationsAddToolApprovalDetails() {}
-func (PermissionsLocationsAddToolApprovalDetailsMcp) Kind() PermissionsLocationsAddToolApprovalDetailsKind {
-	return PermissionsLocationsAddToolApprovalDetailsKindMcp
+func (PermissionsLocationsAddToolApprovalDetailsMCP) permissionsLocationsAddToolApprovalDetails() {}
+func (PermissionsLocationsAddToolApprovalDetailsMCP) Kind() PermissionsLocationsAddToolApprovalDetailsKind {
+	return PermissionsLocationsAddToolApprovalDetailsKindMCP
 }
 
 // Schema for the `PermissionsLocationsAddToolApprovalDetailsMcpSampling` type.
-// Experimental: PermissionsLocationsAddToolApprovalDetailsMcpSampling is part of an
+// Experimental: PermissionsLocationsAddToolApprovalDetailsMCPSampling is part of an
 // experimental API and may change or be removed.
-type PermissionsLocationsAddToolApprovalDetailsMcpSampling struct {
+type PermissionsLocationsAddToolApprovalDetailsMCPSampling struct {
 	// MCP server name.
 	ServerName string `json:"serverName"`
 }
 
-func (PermissionsLocationsAddToolApprovalDetailsMcpSampling) permissionsLocationsAddToolApprovalDetails() {
+func (PermissionsLocationsAddToolApprovalDetailsMCPSampling) permissionsLocationsAddToolApprovalDetails() {
 }
-func (PermissionsLocationsAddToolApprovalDetailsMcpSampling) Kind() PermissionsLocationsAddToolApprovalDetailsKind {
-	return PermissionsLocationsAddToolApprovalDetailsKindMcpSampling
+func (PermissionsLocationsAddToolApprovalDetailsMCPSampling) Kind() PermissionsLocationsAddToolApprovalDetailsKind {
+	return PermissionsLocationsAddToolApprovalDetailsKindMCPSampling
 }
 
 // Schema for the `PermissionsLocationsAddToolApprovalDetailsMemory` type.
@@ -2820,9 +3668,9 @@ type PermissionsLocationsAddToolApprovalResult struct {
 // or be removed.
 type PermissionsModifyRulesParams struct {
 	// Rules to add to the scope. Applied before `remove`/`removeAll`.
-	Add []PermissionRule `json:"add,omitempty"`
+	Add []PermissionRule `json:"add,omitzero"`
 	// Specific rules to remove from the scope. Ignored when `removeAll` is true.
-	Remove []PermissionRule `json:"remove,omitempty"`
+	Remove []PermissionRule `json:"remove,omitzero"`
 	// When true, removes every rule currently in the scope (after any `add` is applied). Useful
 	// for clearing the location scope wholesale.
 	RemoveAll *bool `json:"removeAll,omitempty"`
@@ -2889,6 +3737,16 @@ type PermissionsResetSessionApprovalsResult struct {
 	Success bool `json:"success"`
 }
 
+// Whether to enable full allow-all permissions for the session.
+// Experimental: PermissionsSetAllowAllRequest is part of an experimental API and may change
+// or be removed.
+type PermissionsSetAllowAllRequest struct {
+	// Whether to enable full allow-all permissions
+	Enabled bool `json:"enabled"`
+	// Optional source for allow-all telemetry. Defaults to `rpc` when omitted for SDK callers.
+	Source *PermissionsSetAllowAllSource `json:"source,omitempty"`
+}
+
 // Allow-all toggle for tool permission requests, with an optional telemetry source.
 // Experimental: PermissionsSetApproveAllRequest is part of an experimental API and may
 // change or be removed.
@@ -2926,9 +3784,9 @@ type PermissionsSetRequiredResult struct {
 }
 
 // Indicates whether the operation succeeded.
-// Experimental: PermissionsUrlsSetUnrestrictedModeResult is part of an experimental API and
+// Experimental: PermissionsURLsSetUnrestrictedModeResult is part of an experimental API and
 // may change or be removed.
-type PermissionsUrlsSetUnrestrictedModeResult struct {
+type PermissionsURLsSetUnrestrictedModeResult struct {
 	// Whether the operation succeeded
 	Success bool `json:"success"`
 }
@@ -2936,21 +3794,21 @@ type PermissionsUrlsSetUnrestrictedModeResult struct {
 // If specified, replaces the session's URL-permission policy. The runtime constructs a
 // fresh DefaultUrlManager based on these inputs. Omit to leave the current URL policy
 // unchanged.
-// Experimental: PermissionUrlsConfig is part of an experimental API and may change or be
+// Experimental: PermissionURLsConfig is part of an experimental API and may change or be
 // removed.
-type PermissionUrlsConfig struct {
+type PermissionURLsConfig struct {
 	// Initial list of allowed URL/domain patterns. Patterns may include path components.
 	// Ignored when `unrestricted` is true.
-	InitialAllowed []string `json:"initialAllowed,omitempty"`
+	InitialAllowed []string `json:"initialAllowed,omitzero"`
 	// If true, the runtime allows access to all URLs without prompting. Initial allow-list is
 	// ignored when this is true.
 	Unrestricted *bool `json:"unrestricted,omitempty"`
 }
 
 // Whether the URL-permission policy should run in unrestricted mode.
-// Experimental: PermissionUrlsSetUnrestrictedModeParams is part of an experimental API and
+// Experimental: PermissionURLsSetUnrestrictedModeParams is part of an experimental API and
 // may change or be removed.
-type PermissionUrlsSetUnrestrictedModeParams struct {
+type PermissionURLsSetUnrestrictedModeParams struct {
 	// Whether to allow access to all URLs without prompting. Toggles the runtime's
 	// URL-permission policy in place.
 	Enabled bool `json:"enabled"`
@@ -3010,6 +3868,167 @@ type Plugin struct {
 type PluginList struct {
 	// Installed plugins
 	Plugins []Plugin `json:"plugins"`
+}
+
+// Schema for the `PushAttachment` type.
+// Experimental: PushAttachment is part of an experimental API and may change or be removed.
+type PushAttachment interface {
+	pushAttachment()
+	Type() PushAttachmentType
+}
+
+type RawPushAttachmentData struct {
+	Discriminator PushAttachmentType
+	Raw           json.RawMessage
+}
+
+func (RawPushAttachmentData) pushAttachment() {}
+func (r RawPushAttachmentData) Type() PushAttachmentType {
+	return r.Discriminator
+}
+
+// Slim input shape for extension_context attachments; identity fields are runtime-derived.
+// Experimental: ExtensionContextPushInput is part of an experimental API and may change or
+// be removed.
+type ExtensionContextPushInput struct {
+	// Caller-supplied JSON payload (required, may be null but not undefined)
+	Payload any `json:"payload"`
+	// Human-readable composer pill label
+	Title string `json:"title"`
+}
+
+func (ExtensionContextPushInput) pushAttachment() {}
+func (ExtensionContextPushInput) Type() PushAttachmentType {
+	return PushAttachmentTypeExtensionContext
+}
+
+// Blob attachment with inline base64-encoded data
+// Experimental: PushAttachmentBlob is part of an experimental API and may change or be
+// removed.
+type PushAttachmentBlob struct {
+	// Base64-encoded content
+	Data string `json:"data"`
+	// User-facing display name for the attachment
+	DisplayName *string `json:"displayName,omitempty"`
+	// MIME type of the inline data
+	MIMEType string `json:"mimeType"`
+}
+
+func (PushAttachmentBlob) pushAttachment() {}
+func (PushAttachmentBlob) Type() PushAttachmentType {
+	return PushAttachmentTypeBlob
+}
+
+// Directory attachment
+// Experimental: PushAttachmentDirectory is part of an experimental API and may change or be
+// removed.
+type PushAttachmentDirectory struct {
+	// User-facing display name for the attachment
+	DisplayName string `json:"displayName"`
+	// Absolute directory path
+	Path string `json:"path"`
+}
+
+func (PushAttachmentDirectory) pushAttachment() {}
+func (PushAttachmentDirectory) Type() PushAttachmentType {
+	return PushAttachmentTypeDirectory
+}
+
+// File attachment
+// Experimental: PushAttachmentFile is part of an experimental API and may change or be
+// removed.
+type PushAttachmentFile struct {
+	// User-facing display name for the attachment
+	DisplayName string `json:"displayName"`
+	// Optional line range to scope the attachment to a specific section of the file
+	LineRange *PushAttachmentFileLineRange `json:"lineRange,omitempty"`
+	// Absolute file path
+	Path string `json:"path"`
+}
+
+func (PushAttachmentFile) pushAttachment() {}
+func (PushAttachmentFile) Type() PushAttachmentType {
+	return PushAttachmentTypeFile
+}
+
+// GitHub issue, pull request, or discussion reference
+// Experimental: PushAttachmentGitHubReference is part of an experimental API and may change
+// or be removed.
+type PushAttachmentGitHubReference struct {
+	// Issue, pull request, or discussion number
+	Number int64 `json:"number"`
+	// Type of GitHub reference
+	ReferenceType PushAttachmentGitHubReferenceType `json:"referenceType"`
+	// Current state of the referenced item (e.g., open, closed, merged)
+	State string `json:"state"`
+	// Title of the referenced item
+	Title string `json:"title"`
+	// URL to the referenced item on GitHub
+	URL string `json:"url"`
+}
+
+func (PushAttachmentGitHubReference) pushAttachment() {}
+func (PushAttachmentGitHubReference) Type() PushAttachmentType {
+	return PushAttachmentTypeGitHubReference
+}
+
+// Code selection attachment from an editor
+// Experimental: PushAttachmentSelection is part of an experimental API and may change or be
+// removed.
+type PushAttachmentSelection struct {
+	// User-facing display name for the selection
+	DisplayName string `json:"displayName"`
+	// Absolute path to the file containing the selection
+	FilePath string `json:"filePath"`
+	// Position range of the selection within the file
+	Selection PushAttachmentSelectionDetails `json:"selection"`
+	// The selected text content
+	Text string `json:"text"`
+}
+
+func (PushAttachmentSelection) pushAttachment() {}
+func (PushAttachmentSelection) Type() PushAttachmentType {
+	return PushAttachmentTypeSelection
+}
+
+// Optional line range to scope the attachment to a specific section of the file
+// Experimental: PushAttachmentFileLineRange is part of an experimental API and may change
+// or be removed.
+type PushAttachmentFileLineRange struct {
+	// End line number (1-based, inclusive)
+	End int64 `json:"end"`
+	// Start line number (1-based)
+	Start int64 `json:"start"`
+}
+
+// Position range of the selection within the file
+// Experimental: PushAttachmentSelectionDetails is part of an experimental API and may
+// change or be removed.
+type PushAttachmentSelectionDetails struct {
+	// End position of the selection
+	End PushAttachmentSelectionDetailsEnd `json:"end"`
+	// Start position of the selection
+	Start PushAttachmentSelectionDetailsStart `json:"start"`
+}
+
+// End position of the selection
+// Experimental: PushAttachmentSelectionDetailsEnd is part of an experimental API and may
+// change or be removed.
+type PushAttachmentSelectionDetailsEnd struct {
+	// End character offset within the line (0-based)
+	Character int64 `json:"character"`
+	// End line number (0-based)
+	Line int64 `json:"line"`
+}
+
+// Start position of the selection
+// Experimental: PushAttachmentSelectionDetailsStart is part of an experimental API and may
+// change or be removed.
+type PushAttachmentSelectionDetailsStart struct {
+	// Start character offset within the line (0-based)
+	Character int64 `json:"character"`
+	// Start line number (0-based)
+	Line int64 `json:"line"`
 }
 
 // Result of the queued command execution.
@@ -3165,6 +4184,9 @@ type RemoteSessionConnectionResult struct {
 	SessionID string `json:"sessionId"`
 }
 
+type RuntimeShutdownResult struct {
+}
+
 // Schema for the `ScheduleEntry` type.
 // Experimental: ScheduleEntry is part of an experimental API and may change or be removed.
 type ScheduleEntry struct {
@@ -3207,150 +4229,30 @@ type ScheduleStopResult struct {
 	Entry *ScheduleEntry `json:"entry,omitempty"`
 }
 
-// A user message attachment — a file, directory, code selection, blob, or GitHub reference
-// Experimental: SendAttachment is part of an experimental API and may change or be removed.
-type SendAttachment interface {
-	sendAttachment()
-	Type() SendAttachmentType
+// Secret values to add to the redaction filter.
+type SecretsAddFilterValuesRequest struct {
+	// Raw secret values to register for redaction
+	Values []string `json:"values"`
 }
 
-type RawSendAttachmentData struct {
-	Discriminator SendAttachmentType
-	Raw           json.RawMessage
+// Confirmation that the secret values were registered.
+type SecretsAddFilterValuesResult struct {
+	// Whether the values were successfully registered
+	Ok bool `json:"ok"`
 }
 
-func (RawSendAttachmentData) sendAttachment() {}
-func (r RawSendAttachmentData) Type() SendAttachmentType {
-	return r.Discriminator
-}
-
-// Blob attachment with inline base64-encoded data
-// Experimental: SendAttachmentBlob is part of an experimental API and may change or be
-// removed.
-type SendAttachmentBlob struct {
-	// Base64-encoded content
-	Data string `json:"data"`
-	// User-facing display name for the attachment
-	DisplayName *string `json:"displayName,omitempty"`
-	// MIME type of the inline data
-	MIMEType string `json:"mimeType"`
-}
-
-func (SendAttachmentBlob) sendAttachment() {}
-func (SendAttachmentBlob) Type() SendAttachmentType {
-	return SendAttachmentTypeBlob
-}
-
-// Directory attachment
-// Experimental: SendAttachmentDirectory is part of an experimental API and may change or be
-// removed.
-type SendAttachmentDirectory struct {
-	// User-facing display name for the attachment
-	DisplayName string `json:"displayName"`
-	// Absolute directory path
-	Path string `json:"path"`
-}
-
-func (SendAttachmentDirectory) sendAttachment() {}
-func (SendAttachmentDirectory) Type() SendAttachmentType {
-	return SendAttachmentTypeDirectory
-}
-
-// File attachment
-// Experimental: SendAttachmentFile is part of an experimental API and may change or be
-// removed.
-type SendAttachmentFile struct {
-	// User-facing display name for the attachment
-	DisplayName string `json:"displayName"`
-	// Optional line range to scope the attachment to a specific section of the file
-	LineRange *SendAttachmentFileLineRange `json:"lineRange,omitempty"`
-	// Absolute file path
-	Path string `json:"path"`
-}
-
-func (SendAttachmentFile) sendAttachment() {}
-func (SendAttachmentFile) Type() SendAttachmentType {
-	return SendAttachmentTypeFile
-}
-
-// GitHub issue, pull request, or discussion reference
-// Experimental: SendAttachmentGithubReference is part of an experimental API and may change
-// or be removed.
-type SendAttachmentGithubReference struct {
-	// Issue, pull request, or discussion number
-	Number int64 `json:"number"`
-	// Type of GitHub reference
-	ReferenceType SendAttachmentGithubReferenceType `json:"referenceType"`
-	// Current state of the referenced item (e.g., open, closed, merged)
-	State string `json:"state"`
-	// Title of the referenced item
-	Title string `json:"title"`
-	// URL to the referenced item on GitHub
-	URL string `json:"url"`
-}
-
-func (SendAttachmentGithubReference) sendAttachment() {}
-func (SendAttachmentGithubReference) Type() SendAttachmentType {
-	return SendAttachmentTypeGithubReference
-}
-
-// Code selection attachment from an editor
-// Experimental: SendAttachmentSelection is part of an experimental API and may change or be
-// removed.
-type SendAttachmentSelection struct {
-	// User-facing display name for the selection
-	DisplayName string `json:"displayName"`
-	// Absolute path to the file containing the selection
-	FilePath string `json:"filePath"`
-	// Position range of the selection within the file
-	Selection SendAttachmentSelectionDetails `json:"selection"`
-	// The selected text content
-	Text string `json:"text"`
-}
-
-func (SendAttachmentSelection) sendAttachment() {}
-func (SendAttachmentSelection) Type() SendAttachmentType {
-	return SendAttachmentTypeSelection
-}
-
-// Optional line range to scope the attachment to a specific section of the file
-// Experimental: SendAttachmentFileLineRange is part of an experimental API and may change
-// or be removed.
-type SendAttachmentFileLineRange struct {
-	// End line number (1-based, inclusive)
-	End int64 `json:"end"`
-	// Start line number (1-based)
-	Start int64 `json:"start"`
-}
-
-// Position range of the selection within the file
-// Experimental: SendAttachmentSelectionDetails is part of an experimental API and may
+// Parameters for session.extensions.sendAttachmentsToMessage.
+// Experimental: SendAttachmentsToMessageParams is part of an experimental API and may
 // change or be removed.
-type SendAttachmentSelectionDetails struct {
-	// End position of the selection
-	End SendAttachmentSelectionDetailsEnd `json:"end"`
-	// Start position of the selection
-	Start SendAttachmentSelectionDetailsStart `json:"start"`
-}
-
-// End position of the selection
-// Experimental: SendAttachmentSelectionDetailsEnd is part of an experimental API and may
-// change or be removed.
-type SendAttachmentSelectionDetailsEnd struct {
-	// End character offset within the line (0-based)
-	Character int64 `json:"character"`
-	// End line number (0-based)
-	Line int64 `json:"line"`
-}
-
-// Start position of the selection
-// Experimental: SendAttachmentSelectionDetailsStart is part of an experimental API and may
-// change or be removed.
-type SendAttachmentSelectionDetailsStart struct {
-	// Start character offset within the line (0-based)
-	Character int64 `json:"character"`
-	// Start line number (0-based)
-	Line int64 `json:"line"`
+type SendAttachmentsToMessageParams struct {
+	// Attachments to push into the next user-message turn. extension_context entries take the
+	// slim shape; standard variants take their full AttachmentSchema shape.
+	Attachments []PushAttachment `json:"attachments"`
+	// Optional canvas instance binding the push for provenance. When supplied, the runtime
+	// resolves the canvas, verifies it is owned by the calling extension, and stamps
+	// canvasId/instanceId onto each extension_context entry. When omitted, no resolution runs
+	// and those fields stay unset on the attachment.
+	InstanceID *string `json:"instanceId,omitempty"`
 }
 
 // Parameters for sending a user message to the session
@@ -3361,7 +4263,7 @@ type SendRequest struct {
 	AgentMode *SendAgentMode `json:"agentMode,omitempty"`
 	// Optional attachments (files, directories, selections, blobs, GitHub references) to
 	// include with the message
-	Attachments []SendAttachment `json:"attachments,omitempty"`
+	Attachments []Attachment `json:"attachments,omitzero"`
 	// If false, this message will not trigger a Premium Request Unit charge. User messages
 	// default to billable.
 	Billable *bool `json:"billable,omitempty"`
@@ -3377,12 +4279,14 @@ type SendRequest struct {
 	// Custom HTTP headers to include in outbound model requests for this turn. Merged with
 	// session-level provider headers; per-turn headers augment and overwrite session-level
 	// headers with the same key.
-	RequestHeaders map[string]string `json:"requestHeaders,omitempty"`
+	RequestHeaders map[string]string `json:"requestHeaders,omitzero"`
 	// If set, the request will fail if the named tool is not available when this message is
 	// among the user messages at the start of the current exchange
 	RequiredTool *string `json:"requiredTool,omitempty"`
 	// Optional provenance tag copied to the resulting user.message event. Supported values are
 	// `system`, `command-*`, and `schedule-*`.
+	// Internal: Source is part of the SDK's internal API surface and is not intended for
+	// external use.
 	Source any `json:"source,omitempty"`
 	// W3C Trace Context traceparent header for distributed tracing of this agent turn
 	Traceparent *string `json:"traceparent,omitempty"`
@@ -3458,6 +4362,11 @@ type SessionBulkDeleteResult struct {
 	FreedBytes map[string]int64 `json:"freedBytes"`
 }
 
+// Experimental: SessionCanvasCloseResult is part of an experimental API and may change or
+// be removed.
+type SessionCanvasCloseResult struct {
+}
+
 // Schema for the `SessionContext` type.
 // Experimental: SessionContext is part of an experimental API and may change or be removed.
 type SessionContext struct {
@@ -3484,9 +4393,12 @@ type SessionContextInfo struct {
 	CompactionThreshold int64 `json:"compactionThreshold"`
 	// Tokens consumed by user/assistant/tool messages
 	ConversationTokens int64 `json:"conversationTokens"`
-	// Total context limit for /context display. promptTokenLimit + min(32k or 64k,
-	// outputTokenLimit) depending on model.
+	// Total context limit for /context display: promptTokenLimit + outputTokenLimit (the
+	// model's full max_output_tokens reserved on top of the prompt budget).
 	Limit int64 `json:"limit"`
+	// Tokens consumed by MCP tool definitions (subset of toolDefinitionsTokens, excludes
+	// deferred tools)
+	MCPToolsTokens int64 `json:"mcpToolsTokens"`
 	// The model used for token counting
 	ModelName string `json:"modelName"`
 	// Maximum prompt tokens allowed by the model (or DEFAULT_TOKEN_LIMIT if unspecified)
@@ -3499,11 +4411,13 @@ type SessionContextInfo struct {
 	TotalTokens int64 `json:"totalTokens"`
 }
 
-// The same metadata records, with summary and context fields backfilled where available.
+// The enriched metadata records, with summary and context fields backfilled where
+// available. Sessions confirmed empty and unnamed are omitted.
 // Experimental: SessionEnrichMetadataResult is part of an experimental API and may change
 // or be removed.
 type SessionEnrichMetadataResult struct {
-	// Same records, with summary and context backfilled
+	// Enriched records, with summary and context backfilled. Sessions confirmed empty and
+	// unnamed may be omitted.
 	Sessions []SessionMetadata `json:"sessions"`
 }
 
@@ -3522,9 +4436,16 @@ type SessionExtensionsEnableResult struct {
 type SessionExtensionsReloadResult struct {
 }
 
+// Experimental: SessionExtensionsSendAttachmentsToMessageResult is part of an experimental
+// API and may change or be removed.
+type SessionExtensionsSendAttachmentsToMessageResult struct {
+}
+
 // File path, content to append, and optional mode for the client-provided session
 // filesystem.
-type SessionFsAppendFileRequest struct {
+// Experimental: SessionFSAppendFileRequest is part of an experimental API and may change or
+// be removed.
+type SessionFSAppendFileRequest struct {
 	// Content to append
 	Content string `json:"content"`
 	// Optional POSIX-style mode for newly created files
@@ -3536,15 +4457,18 @@ type SessionFsAppendFileRequest struct {
 }
 
 // Describes a filesystem error.
-type SessionFsError struct {
+// Experimental: SessionFSError is part of an experimental API and may change or be removed.
+type SessionFSError struct {
 	// Error classification
-	Code SessionFsErrorCode `json:"code"`
+	Code SessionFSErrorCode `json:"code"`
 	// Free-form detail about the error, for logging/diagnostics
 	Message *string `json:"message,omitempty"`
 }
 
 // Path to test for existence in the client-provided session filesystem.
-type SessionFsExistsRequest struct {
+// Experimental: SessionFSExistsRequest is part of an experimental API and may change or be
+// removed.
+type SessionFSExistsRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
 	// Target session identifier
@@ -3552,14 +4476,18 @@ type SessionFsExistsRequest struct {
 }
 
 // Indicates whether the requested path exists in the client-provided session filesystem.
-type SessionFsExistsResult struct {
+// Experimental: SessionFSExistsResult is part of an experimental API and may change or be
+// removed.
+type SessionFSExistsResult struct {
 	// Whether the path exists
 	Exists bool `json:"exists"`
 }
 
 // Directory path to create in the client-provided session filesystem, with options for
 // recursive creation and POSIX mode.
-type SessionFsMkdirRequest struct {
+// Experimental: SessionFSMkdirRequest is part of an experimental API and may change or be
+// removed.
+type SessionFSMkdirRequest struct {
 	// Optional POSIX-style mode for newly created directories
 	Mode *int64 `json:"mode,omitempty"`
 	// Path using SessionFs conventions
@@ -3571,7 +4499,9 @@ type SessionFsMkdirRequest struct {
 }
 
 // Directory path whose entries should be listed from the client-provided session filesystem.
-type SessionFsReaddirRequest struct {
+// Experimental: SessionFSReaddirRequest is part of an experimental API and may change or be
+// removed.
+type SessionFSReaddirRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
 	// Target session identifier
@@ -3579,24 +4509,30 @@ type SessionFsReaddirRequest struct {
 }
 
 // Names of entries in the requested directory, or a filesystem error if the read failed.
-type SessionFsReaddirResult struct {
+// Experimental: SessionFSReaddirResult is part of an experimental API and may change or be
+// removed.
+type SessionFSReaddirResult struct {
 	// Entry names in the directory
 	Entries []string `json:"entries"`
 	// Describes a filesystem error.
-	Error *SessionFsError `json:"error,omitempty"`
+	Error *SessionFSError `json:"error,omitempty"`
 }
 
 // Schema for the `SessionFsReaddirWithTypesEntry` type.
-type SessionFsReaddirWithTypesEntry struct {
+// Experimental: SessionFSReaddirWithTypesEntry is part of an experimental API and may
+// change or be removed.
+type SessionFSReaddirWithTypesEntry struct {
 	// Entry name
 	Name string `json:"name"`
 	// Entry type
-	Type SessionFsReaddirWithTypesEntryType `json:"type"`
+	Type SessionFSReaddirWithTypesEntryType `json:"type"`
 }
 
 // Directory path whose entries (with type information) should be listed from the
 // client-provided session filesystem.
-type SessionFsReaddirWithTypesRequest struct {
+// Experimental: SessionFSReaddirWithTypesRequest is part of an experimental API and may
+// change or be removed.
+type SessionFSReaddirWithTypesRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
 	// Target session identifier
@@ -3605,15 +4541,19 @@ type SessionFsReaddirWithTypesRequest struct {
 
 // Entries in the requested directory paired with file/directory type information, or a
 // filesystem error if the read failed.
-type SessionFsReaddirWithTypesResult struct {
+// Experimental: SessionFSReaddirWithTypesResult is part of an experimental API and may
+// change or be removed.
+type SessionFSReaddirWithTypesResult struct {
 	// Directory entries with type information
-	Entries []SessionFsReaddirWithTypesEntry `json:"entries"`
+	Entries []SessionFSReaddirWithTypesEntry `json:"entries"`
 	// Describes a filesystem error.
-	Error *SessionFsError `json:"error,omitempty"`
+	Error *SessionFSError `json:"error,omitempty"`
 }
 
 // Path of the file to read from the client-provided session filesystem.
-type SessionFsReadFileRequest struct {
+// Experimental: SessionFSReadFileRequest is part of an experimental API and may change or
+// be removed.
+type SessionFSReadFileRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
 	// Target session identifier
@@ -3621,16 +4561,20 @@ type SessionFsReadFileRequest struct {
 }
 
 // File content as a UTF-8 string, or a filesystem error if the read failed.
-type SessionFsReadFileResult struct {
+// Experimental: SessionFSReadFileResult is part of an experimental API and may change or be
+// removed.
+type SessionFSReadFileResult struct {
 	// File content as UTF-8 string
 	Content string `json:"content"`
 	// Describes a filesystem error.
-	Error *SessionFsError `json:"error,omitempty"`
+	Error *SessionFSError `json:"error,omitempty"`
 }
 
 // Source and destination paths for renaming or moving an entry in the client-provided
 // session filesystem.
-type SessionFsRenameRequest struct {
+// Experimental: SessionFSRenameRequest is part of an experimental API and may change or be
+// removed.
+type SessionFSRenameRequest struct {
 	// Destination path using SessionFs conventions
 	Dest string `json:"dest"`
 	// Target session identifier
@@ -3641,7 +4585,9 @@ type SessionFsRenameRequest struct {
 
 // Path to remove from the client-provided session filesystem, with options for recursive
 // removal and force.
-type SessionFsRmRequest struct {
+// Experimental: SessionFSRmRequest is part of an experimental API and may change or be
+// removed.
+type SessionFSRmRequest struct {
 	// Ignore errors if the path does not exist
 	Force *bool `json:"force,omitempty"`
 	// Path using SessionFs conventions
@@ -3653,18 +4599,18 @@ type SessionFsRmRequest struct {
 }
 
 // Optional capabilities declared by the provider
-type SessionFsSetProviderCapabilities struct {
+type SessionFSSetProviderCapabilities struct {
 	// Whether the provider supports SQLite query/exists operations
 	Sqlite *bool `json:"sqlite,omitempty"`
 }
 
 // Initial working directory, session-state path layout, and path conventions used to
 // register the calling SDK client as the session filesystem provider.
-type SessionFsSetProviderRequest struct {
+type SessionFSSetProviderRequest struct {
 	// Optional capabilities declared by the provider
-	Capabilities *SessionFsSetProviderCapabilities `json:"capabilities,omitempty"`
+	Capabilities *SessionFSSetProviderCapabilities `json:"capabilities,omitempty"`
 	// Path conventions used by this filesystem
-	Conventions SessionFsSetProviderConventions `json:"conventions"`
+	Conventions SessionFSSetProviderConventions `json:"conventions"`
 	// Initial working directory for sessions
 	InitialCwd string `json:"initialCwd"`
 	// Path within each session's SessionFs where the runtime stores files for that session
@@ -3672,44 +4618,52 @@ type SessionFsSetProviderRequest struct {
 }
 
 // Indicates whether the calling client was registered as the session filesystem provider.
-type SessionFsSetProviderResult struct {
+type SessionFSSetProviderResult struct {
 	// Whether the provider was set successfully
 	Success bool `json:"success"`
 }
 
 // Identifies the target session.
-type SessionFsSqliteExistsRequest struct {
+// Experimental: SessionFSSqliteExistsRequest is part of an experimental API and may change
+// or be removed.
+type SessionFSSqliteExistsRequest struct {
 	// Target session identifier
 	SessionID string `json:"sessionId"`
 }
 
 // Indicates whether the per-session SQLite database already exists.
-type SessionFsSqliteExistsResult struct {
+// Experimental: SessionFSSqliteExistsResult is part of an experimental API and may change
+// or be removed.
+type SessionFSSqliteExistsResult struct {
 	// Whether the session database already exists
 	Exists bool `json:"exists"`
 }
 
 // SQL query, query type, and optional bind parameters for executing a SQLite query against
 // the per-session database.
-type SessionFsSqliteQueryRequest struct {
+// Experimental: SessionFSSqliteQueryRequest is part of an experimental API and may change
+// or be removed.
+type SessionFSSqliteQueryRequest struct {
 	// Optional named bind parameters
-	Params map[string]any `json:"params,omitempty"`
+	Params map[string]any `json:"params,omitzero"`
 	// SQL query to execute
 	Query string `json:"query"`
 	// How to execute the query: 'exec' for DDL/multi-statement (no results), 'query' for SELECT
 	// (returns rows), 'run' for INSERT/UPDATE/DELETE (returns rowsAffected)
-	QueryType SessionFsSqliteQueryType `json:"queryType"`
+	QueryType SessionFSSqliteQueryType `json:"queryType"`
 	// Target session identifier
 	SessionID string `json:"sessionId"`
 }
 
 // Query results including rows, columns, and rows affected, or a filesystem error if
 // execution failed.
-type SessionFsSqliteQueryResult struct {
+// Experimental: SessionFSSqliteQueryResult is part of an experimental API and may change or
+// be removed.
+type SessionFSSqliteQueryResult struct {
 	// Column names from the result set
 	Columns []string `json:"columns"`
 	// Describes a filesystem error.
-	Error *SessionFsError `json:"error,omitempty"`
+	Error *SessionFSError `json:"error,omitempty"`
 	// SQLite last_insert_rowid() value for INSERT.
 	LastInsertRowid *int64 `json:"lastInsertRowid,omitempty"`
 	// For SELECT: array of row objects. For others: empty array.
@@ -3719,7 +4673,9 @@ type SessionFsSqliteQueryResult struct {
 }
 
 // Path whose metadata should be returned from the client-provided session filesystem.
-type SessionFsStatRequest struct {
+// Experimental: SessionFSStatRequest is part of an experimental API and may change or be
+// removed.
+type SessionFSStatRequest struct {
 	// Path using SessionFs conventions
 	Path string `json:"path"`
 	// Target session identifier
@@ -3727,11 +4683,13 @@ type SessionFsStatRequest struct {
 }
 
 // Filesystem metadata for the requested path, or a filesystem error if the stat failed.
-type SessionFsStatResult struct {
+// Experimental: SessionFSStatResult is part of an experimental API and may change or be
+// removed.
+type SessionFSStatResult struct {
 	// ISO 8601 timestamp of creation
 	Birthtime time.Time `json:"birthtime"`
 	// Describes a filesystem error.
-	Error *SessionFsError `json:"error,omitempty"`
+	Error *SessionFSError `json:"error,omitempty"`
 	// Whether the path is a directory
 	IsDirectory bool `json:"isDirectory"`
 	// Whether the path is a file
@@ -3743,7 +4701,9 @@ type SessionFsStatResult struct {
 }
 
 // File path, content to write, and optional mode for the client-provided session filesystem.
-type SessionFsWriteFileRequest struct {
+// Experimental: SessionFSWriteFileRequest is part of an experimental API and may change or
+// be removed.
+type SessionFSWriteFileRequest struct {
 	// Content to write
 	Content string `json:"content"`
 	// Optional POSIX-style mode for newly created files
@@ -3778,21 +4738,21 @@ type SessionInstalledPlugin struct {
 // Experimental: SessionInstalledPluginSource is part of an experimental API and may change
 // or be removed.
 type SessionInstalledPluginSource struct {
-	SessionInstalledPluginSourceGithub *SessionInstalledPluginSourceGithub
+	SessionInstalledPluginSourceGitHub *SessionInstalledPluginSourceGitHub
 	SessionInstalledPluginSourceLocal  *SessionInstalledPluginSourceLocal
 	SessionInstalledPluginSourceURL    *SessionInstalledPluginSourceURL
 	String                             *string
 }
 
-// Schema for the `SessionInstalledPluginSourceGithub` type.
-// Experimental: SessionInstalledPluginSourceGithub is part of an experimental API and may
+// Schema for the `SessionInstalledPluginSourceGitHub` type.
+// Experimental: SessionInstalledPluginSourceGitHub is part of an experimental API and may
 // change or be removed.
-type SessionInstalledPluginSourceGithub struct {
+type SessionInstalledPluginSourceGitHub struct {
 	Path *string `json:"path,omitempty"`
 	Ref  *string `json:"ref,omitempty"`
 	Repo string  `json:"repo"`
 	// Constant value. Always "github".
-	Source SessionInstalledPluginSourceGithubSource `json:"source"`
+	Source SessionInstalledPluginSourceGitHubSource `json:"source"`
 }
 
 // Schema for the `SessionInstalledPluginSourceLocal` type.
@@ -3853,26 +4813,40 @@ type SessionLoadDeferredRepoHooksResult struct {
 type SessionLspInitializeResult struct {
 }
 
-// Experimental: SessionMcpDisableResult is part of an experimental API and may change or be
-// removed.
-type SessionMcpDisableResult struct {
+// Standard MCP CallToolResult
+// Experimental: SessionMCPAppsCallToolResult is part of an experimental API and may change
+// or be removed.
+type SessionMCPAppsCallToolResult map[string]any
+
+// Experimental: SessionMCPAppsSetHostContextResult is part of an experimental API and may
+// change or be removed.
+type SessionMCPAppsSetHostContextResult struct {
 }
 
-// Experimental: SessionMcpEnableResult is part of an experimental API and may change or be
+// Experimental: SessionMCPDisableResult is part of an experimental API and may change or be
 // removed.
-type SessionMcpEnableResult struct {
+type SessionMCPDisableResult struct {
 }
 
-// Experimental: SessionMcpReloadResult is part of an experimental API and may change or be
+// Experimental: SessionMCPEnableResult is part of an experimental API and may change or be
 // removed.
-type SessionMcpReloadResult struct {
+type SessionMCPEnableResult struct {
+}
+
+// Experimental: SessionMCPReloadResult is part of an experimental API and may change or be
+// removed.
+type SessionMCPReloadResult struct {
 }
 
 // Schema for the `SessionMetadata` type.
 // Experimental: SessionMetadata is part of an experimental API and may change or be removed.
 type SessionMetadata struct {
+	// Runtime client name that created/last resumed this session
+	ClientName *string `json:"clientName,omitempty"`
 	// Schema for the `SessionContext` type.
 	Context *SessionContext `json:"context,omitempty"`
+	// True for detached maintenance sessions that should be hidden from normal resume lists.
+	IsDetached *bool `json:"isDetached,omitempty"`
 	// True for remote (GitHub) sessions; false for local
 	IsRemote bool `json:"isRemote"`
 	// GitHub task ID, when this local session is bound to one. Only present for local sessions
@@ -3898,6 +4872,8 @@ type SessionMetadataSnapshot struct {
 	// Local consumers may surface a confirmation prompt before fully attaching. Always false
 	// for new sessions.
 	AlreadyInUse bool `json:"alreadyInUse"`
+	// Runtime client name associated with the session (telemetry identifier).
+	ClientName *string `json:"clientName,omitempty"`
 	// The current agent mode for this session (e.g., 'interactive', 'plan', 'autopilot')
 	CurrentMode MetadataSnapshotCurrentMode `json:"currentMode"`
 	// User-provided name supplied at session construction (via `--name`), if any. Immutable
@@ -3931,6 +4907,16 @@ type SessionMetadataSnapshot struct {
 	// Absolute path to the session's workspace directory on disk, or null if the session has no
 	// associated workspace
 	WorkspacePath *string `json:"workspacePath"`
+}
+
+// The list of models available to this session.
+// Experimental: SessionModelList is part of an experimental API and may change or be
+// removed.
+type SessionModelList struct {
+	// Available models, ordered with the most preferred default first.
+	List []any `json:"list"`
+	// Per-quota snapshots returned alongside the model list, keyed by quota type.
+	QuotaSnapshots map[string]any `json:"quotaSnapshots,omitzero"`
 }
 
 // Experimental: SessionModeSetResult is part of an experimental API and may change or be
@@ -3985,7 +4971,7 @@ type SessionRemoteDisableResult struct {
 // be removed.
 type SessionsBulkDeleteRequest struct {
 	// Session IDs to close, deactivate, and delete from disk
-	SessionIds []string `json:"sessionIds"`
+	SessionIDs []string `json:"sessionIds"`
 }
 
 // Session IDs to test for live in-use locks.
@@ -3993,7 +4979,7 @@ type SessionsBulkDeleteRequest struct {
 // be removed.
 type SessionsCheckInUseRequest struct {
 	// Session IDs to test for live in-use locks
-	SessionIds []string `json:"sessionIds"`
+	SessionIDs []string `json:"sessionIds"`
 }
 
 // Session IDs from the input set that are currently in use by another process.
@@ -4185,12 +5171,15 @@ type SessionSkillsEnableResult struct {
 type SessionSkillsEnsureLoadedResult struct {
 }
 
-// Optional metadata-load limit and context filter applied to the returned sessions.
+// Optional metadata-load limit and filters applied to the returned sessions.
 // Experimental: SessionsListRequest is part of an experimental API and may change or be
 // removed.
 type SessionsListRequest struct {
 	// Optional filter applied to the returned sessions
 	Filter *SessionListFilter `json:"filter,omitempty"`
+	// When true, include detached maintenance sessions. Defaults to false for user-facing
+	// session lists.
+	IncludeDetached *bool `json:"includeDetached,omitempty"`
 	// When provided, only the first N sessions (sorted by modification time, newest first) load
 	// full metadata; remaining sessions return basic info only. Use 0 to return only basic info
 	// for every session.
@@ -4213,7 +5202,7 @@ type SessionsPruneOldRequest struct {
 	// When true, only report what would be deleted without performing any deletion
 	DryRun *bool `json:"dryRun,omitempty"`
 	// Session IDs that should never be considered for pruning
-	ExcludeSessionIds []string `json:"excludeSessionIds,omitempty"`
+	ExcludeSessionIDs []string `json:"excludeSessionIds,omitzero"`
 	// When true, named sessions (set via /rename) are also eligible for pruning
 	IncludeNamed *bool `json:"includeNamed,omitempty"`
 	// Delete sessions whose modifiedTime is at least this many days old
@@ -4302,13 +5291,15 @@ type SessionTelemetrySetFeatureOverridesResult struct {
 type SessionUpdateOptionsParams struct {
 	// Additional content-exclusion policies to merge into the session's policy set. Opaque
 	// shape; see `ContentExclusionApiResponse` in the runtime.
-	AdditionalContentExclusionPolicies []any `json:"additionalContentExclusionPolicies,omitempty"`
+	// Experimental: AdditionalContentExclusionPolicies is part of an experimental API and may
+	// change or be removed.
+	AdditionalContentExclusionPolicies []any `json:"additionalContentExclusionPolicies,omitzero"`
 	// Runtime context discriminator (e.g., `cli`, `actions`).
 	AgentContext *string `json:"agentContext,omitempty"`
 	// Whether to disable the `ask_user` tool (encourages autonomous behavior).
 	AskUserDisabled *bool `json:"askUserDisabled,omitempty"`
 	// Allowlist of tool names available to this session.
-	AvailableTools []string `json:"availableTools,omitempty"`
+	AvailableTools []string `json:"availableTools,omitzero"`
 	// Identifier of the client driving the session.
 	ClientName *string `json:"clientName,omitempty"`
 	// Whether to include the `Co-authored-by` trailer in commit messages.
@@ -4320,9 +5311,15 @@ type SessionUpdateOptionsParams struct {
 	// Whether to default custom agents to local-only execution.
 	CustomAgentsLocalOnly *bool `json:"customAgentsLocalOnly,omitempty"`
 	// Instruction source IDs to exclude from the system prompt.
-	DisabledInstructionSources []string `json:"disabledInstructionSources,omitempty"`
+	DisabledInstructionSources []string `json:"disabledInstructionSources,omitzero"`
 	// Skill IDs that should be excluded from this session.
-	DisabledSkills []string `json:"disabledSkills,omitempty"`
+	DisabledSkills []string `json:"disabledSkills,omitzero"`
+	// Whether to enable loading of `.github/hooks/` filesystem hooks. Separate from the SDK
+	// callback hook mechanism.
+	EnableFileHooks *bool `json:"enableFileHooks,omitempty"`
+	// Whether to enable host git operations (context resolution, child repo scanning, git info
+	// in system prompt).
+	EnableHostGitOperations *bool `json:"enableHostGitOperations,omitempty"`
 	// Whether to discover custom instructions on demand after successful file views (AGENTS.md
 	// / CLAUDE.md / .github/copilot-instructions.md surfacing). Combined with
 	// `skipCustomInstructions` and the runtime-side `ON_DEMAND_INSTRUCTIONS` feature flag.
@@ -4331,6 +5328,11 @@ type SessionUpdateOptionsParams struct {
 	EnableReasoningSummaries *bool `json:"enableReasoningSummaries,omitempty"`
 	// Whether shell-script safety heuristics are enabled.
 	EnableScriptSafety *bool `json:"enableScriptSafety,omitempty"`
+	// Whether to enable cross-session store writes and reads.
+	EnableSessionStore *bool `json:"enableSessionStore,omitempty"`
+	// Whether to enable skill directory scanning and loading. Falls back to
+	// enableConfigDiscovery when unset.
+	EnableSkills *bool `json:"enableSkills,omitempty"`
 	// Whether to stream model responses.
 	EnableStreaming *bool `json:"enableStreaming,omitempty"`
 	// How env values are passed to MCP servers (`direct` inlines literal values; `indirect`
@@ -4340,12 +5342,12 @@ type SessionUpdateOptionsParams struct {
 	// log directory is used.
 	EventsLogDirectory *string `json:"eventsLogDirectory,omitempty"`
 	// Denylist of tool names for this session.
-	ExcludedTools []string `json:"excludedTools,omitempty"`
+	ExcludedTools []string `json:"excludedTools,omitzero"`
 	// Map of feature-flag IDs to their boolean enabled state.
-	FeatureFlags map[string]bool `json:"featureFlags,omitempty"`
+	FeatureFlags map[string]bool `json:"featureFlags,omitzero"`
 	// Full set of installed plugins for the session. Replaces the existing list; the runtime
 	// invalidates the skills cache only when the list materially changes.
-	InstalledPlugins []SessionInstalledPlugin `json:"installedPlugins,omitempty"`
+	InstalledPlugins []SessionInstalledPlugin `json:"installedPlugins,omitzero"`
 	// Stable integration identifier used for analytics and rate-limit attribution.
 	IntegrationID *string `json:"integrationId,omitempty"`
 	// Whether experimental capabilities are enabled.
@@ -4360,23 +5362,36 @@ type SessionUpdateOptionsParams struct {
 	ManageScheduleEnabled *bool `json:"manageScheduleEnabled,omitempty"`
 	// The model ID to use for assistant turns.
 	Model *string `json:"model,omitempty"`
+	// Organization-level custom instructions to inject into the system prompt.
+	OrganizationCustomInstructions *string `json:"organizationCustomInstructions,omitempty"`
 	// Custom model-provider configuration (BYOK). Opaque shape; see `ProviderConfig` in the
 	// runtime.
+	// Experimental: Provider is part of an experimental API and may change or be removed.
 	Provider any `json:"provider,omitempty"`
 	// Reasoning effort for the selected model (model-defined enum).
 	ReasoningEffort *string `json:"reasoningEffort,omitempty"`
 	// Whether the session is running in an interactive UI.
 	RunningInInteractiveMode *bool `json:"runningInInteractiveMode,omitempty"`
 	// Sandbox configuration shape; opaque to SDK consumers. See `SandboxConfig` in the runtime.
+	// Experimental: SandboxConfig is part of an experimental API and may change or be removed.
 	SandboxConfig any `json:"sandboxConfig,omitempty"`
 	// Shell init profile (`None` or `NonInteractive`).
 	ShellInitProfile *string `json:"shellInitProfile,omitempty"`
 	// Per-shell process flags (e.g., `pwsh` arguments).
-	ShellProcessFlags []string `json:"shellProcessFlags,omitempty"`
+	ShellProcessFlags []string `json:"shellProcessFlags,omitzero"`
 	// Additional directories to search for skills.
-	SkillDirectories []string `json:"skillDirectories,omitempty"`
+	SkillDirectories []string `json:"skillDirectories,omitzero"`
 	// Whether to skip loading custom instruction sources.
 	SkipCustomInstructions *bool `json:"skipCustomInstructions,omitempty"`
+	// Whether to skip embedding retrieval pipeline initialization and execution.
+	SkipEmbeddingRetrieval *bool `json:"skipEmbeddingRetrieval,omitempty"`
+	// When true, the selected custom agent's prompt is not injected into the user message
+	// (skill context is still injected). Used by automation triggers where the agent prompt is
+	// already in the problem statement.
+	SuppressCustomAgentPrompt *bool `json:"suppressCustomAgentPrompt,omitempty"`
+	// Controls how availableTools (allowlist) and excludedTools (denylist) combine when both
+	// are set.
+	ToolFilterPrecedence *OptionsUpdateToolFilterPrecedence `json:"toolFilterPrecedence,omitempty"`
 	// Optional path for trajectory output.
 	TrajectoryFile *string `json:"trajectoryFile,omitempty"`
 	// Absolute working-directory path for shell tools.
@@ -4514,9 +5529,9 @@ type SkillsDisableRequest struct {
 // Optional project paths and additional skill directories to include in discovery.
 type SkillsDiscoverRequest struct {
 	// Optional list of project directory paths to scan for project-scoped skills
-	ProjectPaths []string `json:"projectPaths,omitempty"`
+	ProjectPaths []string `json:"projectPaths,omitzero"`
 	// Optional list of additional skill directory paths to include
-	SkillDirectories []string `json:"skillDirectories,omitempty"`
+	SkillDirectories []string `json:"skillDirectories,omitzero"`
 }
 
 // Name of the skill to enable for the session.
@@ -4540,7 +5555,7 @@ type SkillsGetInvokedResult struct {
 // removed.
 type SkillsInvokedSkill struct {
 	// Tools that should be auto-approved when this skill is active, captured at invocation time
-	AllowedTools []string `json:"allowedTools,omitempty"`
+	AllowedTools []string `json:"allowedTools,omitzero"`
 	// Full content of the skill file
 	Content string `json:"content"`
 	// Turn number when the skill was invoked
@@ -4566,7 +5581,7 @@ type SkillsLoadDiagnostics struct {
 // removed.
 type SlashCommandInfo struct {
 	// Canonical aliases without leading slashes
-	Aliases []string `json:"aliases,omitempty"`
+	Aliases []string `json:"aliases,omitzero"`
 	// Whether the command may run while an agent turn is active
 	AllowDuringAgentExecution bool `json:"allowDuringAgentExecution"`
 	// Human-readable command description
@@ -5036,13 +6051,21 @@ type Tool struct {
 	// tools)
 	NamespacedName *string `json:"namespacedName,omitempty"`
 	// JSON Schema for the tool's input parameters
-	Parameters map[string]any `json:"parameters,omitempty"`
+	Parameters map[string]any `json:"parameters,omitzero"`
 }
 
 // Built-in tools available for the requested model, with their parameters and instructions.
 type ToolList struct {
 	// List of available built-in tools with metadata
 	Tools []Tool `json:"tools"`
+}
+
+// Current lightweight tool metadata snapshot for the session.
+// Experimental: ToolsGetCurrentMetadataResult is part of an experimental API and may change
+// or be removed.
+type ToolsGetCurrentMetadataResult struct {
+	// Current tool metadata, or null when tools have not been initialized yet
+	Tools []CurrentToolMetadata `json:"tools"`
 }
 
 // Resolve, build, and validate the runtime tool list for this session. Subagent sessions
@@ -5092,24 +6115,24 @@ type UIElicitationArrayEnumFieldItems struct {
 // Experimental: UIElicitationFieldValue is part of an experimental API and may change or be
 // removed.
 type UIElicitationFieldValue interface {
-	uIElicitationFieldValue()
+	uiElicitationFieldValue()
 }
 
 type UIElicitationBooleanValue bool
 
-func (UIElicitationBooleanValue) uIElicitationFieldValue() {}
+func (UIElicitationBooleanValue) uiElicitationFieldValue() {}
 
 type UIElicitationNumberValue float64
 
-func (UIElicitationNumberValue) uIElicitationFieldValue() {}
+func (UIElicitationNumberValue) uiElicitationFieldValue() {}
 
 type UIElicitationStringArrayValue []string
 
-func (UIElicitationStringArrayValue) uIElicitationFieldValue() {}
+func (UIElicitationStringArrayValue) uiElicitationFieldValue() {}
 
 type UIElicitationStringValue string
 
-func (UIElicitationStringValue) uIElicitationFieldValue() {}
+func (UIElicitationStringValue) uiElicitationFieldValue() {}
 
 // Prompt message and JSON schema describing the form fields to elicit from the user.
 // Experimental: UIElicitationRequest is part of an experimental API and may change or be
@@ -5128,7 +6151,7 @@ type UIElicitationResponse struct {
 	// The user's response: accept (submitted), decline (rejected), or cancel (dismissed)
 	Action UIElicitationResponseAction `json:"action"`
 	// The form values submitted by the user (present when action is 'accept')
-	Content map[string]UIElicitationFieldValue `json:"content,omitempty"`
+	Content map[string]UIElicitationFieldValue `json:"content,omitzero"`
 }
 
 // The form values submitted by the user (present when action is 'accept')
@@ -5153,7 +6176,7 @@ type UIElicitationSchema struct {
 	// Form field definitions, keyed by field name
 	Properties map[string]UIElicitationSchemaProperty `json:"properties"`
 	// List of required field names
-	Required []string `json:"required,omitempty"`
+	Required []string `json:"required,omitzero"`
 	// Schema type indicator (always 'object')
 	Type UIElicitationSchemaType `json:"type"`
 }
@@ -5162,7 +6185,7 @@ type UIElicitationSchema struct {
 // Experimental: UIElicitationSchemaProperty is part of an experimental API and may change
 // or be removed.
 type UIElicitationSchemaProperty interface {
-	uIElicitationSchemaProperty()
+	uiElicitationSchemaProperty()
 	Type() UIElicitationSchemaPropertyType
 }
 
@@ -5171,7 +6194,7 @@ type RawUIElicitationSchemaPropertyData struct {
 	Raw           json.RawMessage
 }
 
-func (RawUIElicitationSchemaPropertyData) uIElicitationSchemaProperty() {}
+func (RawUIElicitationSchemaPropertyData) uiElicitationSchemaProperty() {}
 func (r RawUIElicitationSchemaPropertyData) Type() UIElicitationSchemaPropertyType {
 	return r.Discriminator
 }
@@ -5181,7 +6204,7 @@ func (r RawUIElicitationSchemaPropertyData) Type() UIElicitationSchemaPropertyTy
 // or be removed.
 type UIElicitationArrayAnyOfField struct {
 	// Default values selected when the form is first shown.
-	Default []string `json:"default,omitempty"`
+	Default []string `json:"default,omitzero"`
 	// Help text describing the field.
 	Description *string `json:"description,omitempty"`
 	// Schema applied to each item in the array.
@@ -5194,7 +6217,7 @@ type UIElicitationArrayAnyOfField struct {
 	Title *string `json:"title,omitempty"`
 }
 
-func (UIElicitationArrayAnyOfField) uIElicitationSchemaProperty() {}
+func (UIElicitationArrayAnyOfField) uiElicitationSchemaProperty() {}
 func (UIElicitationArrayAnyOfField) Type() UIElicitationSchemaPropertyType {
 	return UIElicitationSchemaPropertyTypeArray
 }
@@ -5204,7 +6227,7 @@ func (UIElicitationArrayAnyOfField) Type() UIElicitationSchemaPropertyType {
 // or be removed.
 type UIElicitationArrayEnumField struct {
 	// Default values selected when the form is first shown.
-	Default []string `json:"default,omitempty"`
+	Default []string `json:"default,omitzero"`
 	// Help text describing the field.
 	Description *string `json:"description,omitempty"`
 	// Schema applied to each item in the array.
@@ -5217,7 +6240,7 @@ type UIElicitationArrayEnumField struct {
 	Title *string `json:"title,omitempty"`
 }
 
-func (UIElicitationArrayEnumField) uIElicitationSchemaProperty() {}
+func (UIElicitationArrayEnumField) uiElicitationSchemaProperty() {}
 func (UIElicitationArrayEnumField) Type() UIElicitationSchemaPropertyType {
 	return UIElicitationSchemaPropertyTypeArray
 }
@@ -5234,7 +6257,7 @@ type UIElicitationSchemaPropertyBoolean struct {
 	Title *string `json:"title,omitempty"`
 }
 
-func (UIElicitationSchemaPropertyBoolean) uIElicitationSchemaProperty() {}
+func (UIElicitationSchemaPropertyBoolean) uiElicitationSchemaProperty() {}
 func (UIElicitationSchemaPropertyBoolean) Type() UIElicitationSchemaPropertyType {
 	return UIElicitationSchemaPropertyTypeBoolean
 }
@@ -5256,7 +6279,7 @@ type UIElicitationSchemaPropertyNumber struct {
 	Discriminator UIElicitationSchemaPropertyNumberType `json:"type,omitempty"`
 }
 
-func (UIElicitationSchemaPropertyNumber) uIElicitationSchemaProperty() {}
+func (UIElicitationSchemaPropertyNumber) uiElicitationSchemaProperty() {}
 func (r UIElicitationSchemaPropertyNumber) Type() UIElicitationSchemaPropertyType {
 	if r.Discriminator == "" {
 		return UIElicitationSchemaPropertyTypeNumber
@@ -5282,7 +6305,7 @@ type UIElicitationSchemaPropertyString struct {
 	Title *string `json:"title,omitempty"`
 }
 
-func (UIElicitationSchemaPropertyString) uIElicitationSchemaProperty() {}
+func (UIElicitationSchemaPropertyString) uiElicitationSchemaProperty() {}
 func (UIElicitationSchemaPropertyString) Type() UIElicitationSchemaPropertyType {
 	return UIElicitationSchemaPropertyTypeString
 }
@@ -5298,12 +6321,12 @@ type UIElicitationStringEnumField struct {
 	// Allowed string values.
 	Enum []string `json:"enum"`
 	// Optional display labels for each enum value, in the same order as `enum`.
-	EnumNames []string `json:"enumNames,omitempty"`
+	EnumNames []string `json:"enumNames,omitzero"`
 	// Human-readable label for the field.
 	Title *string `json:"title,omitempty"`
 }
 
-func (UIElicitationStringEnumField) uIElicitationSchemaProperty() {}
+func (UIElicitationStringEnumField) uiElicitationSchemaProperty() {}
 func (UIElicitationStringEnumField) Type() UIElicitationSchemaPropertyType {
 	return UIElicitationSchemaPropertyTypeString
 }
@@ -5322,7 +6345,7 @@ type UIElicitationStringOneOfField struct {
 	Title *string `json:"title,omitempty"`
 }
 
-func (UIElicitationStringOneOfField) uIElicitationSchemaProperty() {}
+func (UIElicitationStringOneOfField) uiElicitationSchemaProperty() {}
 func (UIElicitationStringOneOfField) Type() UIElicitationSchemaPropertyType {
 	return UIElicitationSchemaPropertyTypeString
 }
@@ -5483,7 +6506,7 @@ type UsageGetMetricsResult struct {
 	// ISO 8601 timestamp when the session started
 	SessionStartTime time.Time `json:"sessionStartTime"`
 	// Session-wide per-token-type accumulated token counts
-	TokenDetails map[string]UsageMetricsTokenDetail `json:"tokenDetails,omitempty"`
+	TokenDetails map[string]UsageMetricsTokenDetail `json:"tokenDetails,omitzero"`
 	// Total time spent in model API calls (milliseconds)
 	TotalAPIDurationMs int64 `json:"totalApiDurationMs"`
 	// Session-wide accumulated nano-AI units cost
@@ -5516,7 +6539,7 @@ type UsageMetricsModelMetric struct {
 	// Request count and cost metrics for this model
 	Requests UsageMetricsModelMetricRequests `json:"requests"`
 	// Token count details per type
-	TokenDetails map[string]UsageMetricsModelMetricTokenDetail `json:"tokenDetails,omitempty"`
+	TokenDetails map[string]UsageMetricsModelMetricTokenDetail `json:"tokenDetails,omitzero"`
 	// Accumulated nano-AI units cost for this model
 	TotalNanoAiu *float64 `json:"totalNanoAiu,omitempty"`
 	// Token usage metrics for this model
@@ -5563,6 +6586,9 @@ type UsageMetricsModelMetricUsage struct {
 type UsageMetricsTokenDetail struct {
 	// Accumulated token count for this token type
 	TokenCount int64 `json:"tokenCount"`
+}
+
+type UserSettingsReloadResult struct {
 }
 
 // The approval to add as a session-scoped rule
@@ -5636,18 +6662,18 @@ func (UserToolSessionApprovalExtensionPermissionAccess) Kind() UserToolSessionAp
 }
 
 // Schema for the `UserToolSessionApprovalMcp` type.
-// Experimental: UserToolSessionApprovalMcp is part of an experimental API and may change or
+// Experimental: UserToolSessionApprovalMCP is part of an experimental API and may change or
 // be removed.
-type UserToolSessionApprovalMcp struct {
+type UserToolSessionApprovalMCP struct {
 	// MCP server name
 	ServerName string `json:"serverName"`
 	// Optional MCP tool name, or null for all tools on the server
 	ToolName *string `json:"toolName"`
 }
 
-func (UserToolSessionApprovalMcp) userToolSessionApproval() {}
-func (UserToolSessionApprovalMcp) Kind() UserToolSessionApprovalKind {
-	return UserToolSessionApprovalKindMcp
+func (UserToolSessionApprovalMCP) userToolSessionApproval() {}
+func (UserToolSessionApprovalMCP) Kind() UserToolSessionApprovalKind {
+	return UserToolSessionApprovalKindMCP
 }
 
 // Schema for the `UserToolSessionApprovalMemory` type.
@@ -5683,6 +6709,38 @@ func (UserToolSessionApprovalWrite) Kind() UserToolSessionApprovalKind {
 	return UserToolSessionApprovalKindWrite
 }
 
+// A single changed file and its unified diff.
+// Experimental: WorkspaceDiffFileChange is part of an experimental API and may change or be
+// removed.
+type WorkspaceDiffFileChange struct {
+	// Type of change represented by this file diff.
+	ChangeType WorkspaceDiffFileChangeType `json:"changeType"`
+	// Unified diff content for the file. Empty when the diff was truncated.
+	Diff string `json:"diff"`
+	// Whether the diff content was omitted because it exceeded the per-file size limit.
+	IsTruncated *bool `json:"isTruncated,omitempty"`
+	// Original file path for renamed files.
+	OldPath *string `json:"oldPath,omitempty"`
+	// Path to the changed file, relative to the workspace root.
+	Path string `json:"path"`
+}
+
+// Workspace diff result for the requested mode.
+// Experimental: WorkspaceDiffResult is part of an experimental API and may change or be
+// removed.
+type WorkspaceDiffResult struct {
+	// Default branch used for a branch diff, when branch mode was requested.
+	BaseBranch *string `json:"baseBranch,omitempty"`
+	// Changed files and their unified diffs.
+	Changes []WorkspaceDiffFileChange `json:"changes"`
+	// Whether a requested branch diff fell back to unstaged changes because branch diff failed.
+	IsFallback bool `json:"isFallback"`
+	// Effective mode used for the returned changes.
+	Mode WorkspaceDiffMode `json:"mode"`
+	// Diff mode requested by the client.
+	RequestedMode WorkspaceDiffMode `json:"requestedMode"`
+}
+
 // Schema for the `WorkspacesCheckpoints` type.
 // Experimental: WorkspacesCheckpoints is part of an experimental API and may change or be
 // removed.
@@ -5705,6 +6763,14 @@ type WorkspacesCreateFileRequest struct {
 	Path string `json:"path"`
 }
 
+// Parameters for computing a workspace diff.
+// Experimental: WorkspacesDiffRequest is part of an experimental API and may change or be
+// removed.
+type WorkspacesDiffRequest struct {
+	// Diff mode requested by the client.
+	Mode WorkspaceDiffMode `json:"mode"`
+}
+
 // Current workspace metadata for the session, including its absolute filesystem path when
 // available.
 // Experimental: WorkspacesGetWorkspaceResult is part of an experimental API and may change
@@ -5720,6 +6786,7 @@ type WorkspacesGetWorkspaceResult struct {
 type WorkspacesGetWorkspaceResultWorkspace struct {
 	Branch                 *string    `json:"branch,omitempty"`
 	ChronicleSyncDismissed *bool      `json:"chronicle_sync_dismissed,omitempty"`
+	ClientName             *string    `json:"client_name,omitempty"`
 	CreatedAt              *time.Time `json:"created_at,omitempty"`
 	Cwd                    *string    `json:"cwd,omitempty"`
 	GitRoot                *string    `json:"git_root,omitempty"`
@@ -5867,6 +6934,169 @@ const (
 	AgentInfoSourceUser AgentInfoSource = "user"
 )
 
+// Kind of attention required when status === "attention". Meaningful only when status ===
+// "attention".
+// Experimental: AgentRegistryLiveTargetEntryAttentionKind is part of an experimental API
+// and may change or be removed.
+type AgentRegistryLiveTargetEntryAttentionKind string
+
+const (
+	// Session is waiting on an elicitation prompt
+	AgentRegistryLiveTargetEntryAttentionKindElicitation AgentRegistryLiveTargetEntryAttentionKind = "elicitation"
+	// Session is blocked on an unrecoverable error
+	AgentRegistryLiveTargetEntryAttentionKindError AgentRegistryLiveTargetEntryAttentionKind = "error"
+	// Session is waiting for the user to approve or reject a plan
+	AgentRegistryLiveTargetEntryAttentionKindExitPlan AgentRegistryLiveTargetEntryAttentionKind = "exit_plan"
+	// Session is waiting for a tool-permission decision
+	AgentRegistryLiveTargetEntryAttentionKindPermission AgentRegistryLiveTargetEntryAttentionKind = "permission"
+	// Session is waiting for free-form user input
+	AgentRegistryLiveTargetEntryAttentionKindUserInput AgentRegistryLiveTargetEntryAttentionKind = "user_input"
+)
+
+// Process kind tag for the registry entry
+// Experimental: AgentRegistryLiveTargetEntryKind is part of an experimental API and may
+// change or be removed.
+type AgentRegistryLiveTargetEntryKind string
+
+const (
+	// Headless `--server --managed-server` child spawned by a controller
+	AgentRegistryLiveTargetEntryKindManagedServer AgentRegistryLiveTargetEntryKind = "managed-server"
+	// Interactive Copilot CLI exposing a UI server (legacy/normal CLI process)
+	AgentRegistryLiveTargetEntryKindUIServer AgentRegistryLiveTargetEntryKind = "ui-server"
+)
+
+// How the most recent turn ended (clean vs aborted). Lets the renderer distinguish done
+// from done_cancelled.
+// Experimental: AgentRegistryLiveTargetEntryLastTerminalEvent is part of an experimental
+// API and may change or be removed.
+type AgentRegistryLiveTargetEntryLastTerminalEvent string
+
+const (
+	// Last turn was aborted (e.g. user interrupted)
+	AgentRegistryLiveTargetEntryLastTerminalEventAbort AgentRegistryLiveTargetEntryLastTerminalEvent = "abort"
+	// Last turn ended cleanly (model returned a final assistant message)
+	AgentRegistryLiveTargetEntryLastTerminalEventTurnEnd AgentRegistryLiveTargetEntryLastTerminalEvent = "turn_end"
+)
+
+// Coarse lifecycle status of the foreground session
+// Experimental: AgentRegistryLiveTargetEntryStatus is part of an experimental API and may
+// change or be removed.
+type AgentRegistryLiveTargetEntryStatus string
+
+const (
+	// Session needs user attention (see attentionKind for the specific reason)
+	AgentRegistryLiveTargetEntryStatusAttention AgentRegistryLiveTargetEntryStatus = "attention"
+	// Last turn completed successfully
+	AgentRegistryLiveTargetEntryStatusDone AgentRegistryLiveTargetEntryStatus = "done"
+	// Session is idle, waiting for input
+	AgentRegistryLiveTargetEntryStatusWaiting AgentRegistryLiveTargetEntryStatus = "waiting"
+	// Session is actively processing a turn
+	AgentRegistryLiveTargetEntryStatusWorking AgentRegistryLiveTargetEntryStatus = "working"
+)
+
+// Categorized reason for log-open failure
+// Experimental: AgentRegistryLogCaptureOpenErrorReason is part of an experimental API and
+// may change or be removed.
+type AgentRegistryLogCaptureOpenErrorReason string
+
+const (
+	// No space left on device
+	AgentRegistryLogCaptureOpenErrorReasonDiskFull AgentRegistryLogCaptureOpenErrorReason = "disk_full"
+	// Other / uncategorized open failure
+	AgentRegistryLogCaptureOpenErrorReasonOther AgentRegistryLogCaptureOpenErrorReason = "other"
+	// Filesystem permission denied opening the log file
+	AgentRegistryLogCaptureOpenErrorReasonPermission AgentRegistryLogCaptureOpenErrorReason = "permission"
+)
+
+// Permission posture for the new session. 'yolo' requires the controller-local session to
+// currently be in allow-all mode.
+// Experimental: AgentRegistrySpawnPermissionMode is part of an experimental API and may
+// change or be removed.
+type AgentRegistrySpawnPermissionMode string
+
+const (
+	// Standard permission posture (prompts for each request)
+	AgentRegistrySpawnPermissionModeDefault AgentRegistrySpawnPermissionMode = "default"
+	// Full allow-all (requires the controller-local session to currently be in allow-all mode)
+	AgentRegistrySpawnPermissionModeYolo AgentRegistrySpawnPermissionMode = "yolo"
+)
+
+// Kind discriminator for AgentRegistrySpawnResult.
+type AgentRegistrySpawnResultKind string
+
+const (
+	AgentRegistrySpawnResultKindRegistryTimeout AgentRegistrySpawnResultKind = "registry-timeout"
+	AgentRegistrySpawnResultKindSpawned         AgentRegistrySpawnResultKind = "spawned"
+	AgentRegistrySpawnResultKindSpawnError      AgentRegistrySpawnResultKind = "spawn-error"
+	AgentRegistrySpawnResultKindValidationError AgentRegistrySpawnResultKind = "validation-error"
+)
+
+// Which parameter field was invalid. Omitted when the rejection is not field-specific.
+// Experimental: AgentRegistrySpawnValidationErrorField is part of an experimental API and
+// may change or be removed.
+type AgentRegistrySpawnValidationErrorField string
+
+const (
+	// The agentName parameter
+	AgentRegistrySpawnValidationErrorFieldAgentName AgentRegistrySpawnValidationErrorField = "agentName"
+	// The cwd parameter
+	AgentRegistrySpawnValidationErrorFieldCwd AgentRegistrySpawnValidationErrorField = "cwd"
+	// The model parameter
+	AgentRegistrySpawnValidationErrorFieldModel AgentRegistrySpawnValidationErrorField = "model"
+	// The session name parameter
+	AgentRegistrySpawnValidationErrorFieldName AgentRegistrySpawnValidationErrorField = "name"
+	// The permissionMode parameter
+	AgentRegistrySpawnValidationErrorFieldPermissionMode AgentRegistrySpawnValidationErrorField = "permissionMode"
+)
+
+// Categorized reason for the rejection. Low-cardinality enum so telemetry can aggregate by
+// reason without leaking raw paths or agent/model names.
+// Experimental: AgentRegistrySpawnValidationErrorReason is part of an experimental API and
+// may change or be removed.
+type AgentRegistrySpawnValidationErrorReason string
+
+const (
+	// Provided cwd exists but is not a directory
+	AgentRegistrySpawnValidationErrorReasonCwdNotDirectory AgentRegistrySpawnValidationErrorReason = "cwd-not-directory"
+	// Provided cwd does not exist on disk
+	AgentRegistrySpawnValidationErrorReasonCwdNotFound AgentRegistrySpawnValidationErrorReason = "cwd-not-found"
+	// Session name failed validateSessionName
+	AgentRegistrySpawnValidationErrorReasonInvalidName AgentRegistrySpawnValidationErrorReason = "invalid-name"
+	// Requested agent name was not found in builtin or custom agents
+	AgentRegistrySpawnValidationErrorReasonUnknownAgent AgentRegistrySpawnValidationErrorReason = "unknown-agent"
+	// Requested model is not available to this session
+	AgentRegistrySpawnValidationErrorReasonUnknownModel AgentRegistrySpawnValidationErrorReason = "unknown-model"
+	// Caller asked for permissionMode='yolo' but the controller is not currently in allow-all
+	// mode
+	AgentRegistrySpawnValidationErrorReasonYoloNotAllowed AgentRegistrySpawnValidationErrorReason = "yolo-not-allowed"
+)
+
+// Type of GitHub reference
+// Experimental: AttachmentGitHubReferenceType is part of an experimental API and may change
+// or be removed.
+type AttachmentGitHubReferenceType string
+
+const (
+	// GitHub discussion reference.
+	AttachmentGitHubReferenceTypeDiscussion AttachmentGitHubReferenceType = "discussion"
+	// GitHub issue reference.
+	AttachmentGitHubReferenceTypeIssue AttachmentGitHubReferenceType = "issue"
+	// GitHub pull request reference.
+	AttachmentGitHubReferenceTypePr AttachmentGitHubReferenceType = "pr"
+)
+
+// Type discriminator for Attachment.
+type AttachmentType string
+
+const (
+	AttachmentTypeBlob             AttachmentType = "blob"
+	AttachmentTypeDirectory        AttachmentType = "directory"
+	AttachmentTypeExtensionContext AttachmentType = "extension_context"
+	AttachmentTypeFile             AttachmentType = "file"
+	AttachmentTypeGitHubReference  AttachmentType = "github_reference"
+	AttachmentTypeSelection        AttachmentType = "selection"
+)
+
 // Type discriminator for AuthInfo.
 // Experimental: AuthInfoType is part of an experimental API and may change or be removed.
 type AuthInfoType string
@@ -5875,10 +7105,24 @@ const (
 	AuthInfoTypeAPIKey          AuthInfoType = "api-key"
 	AuthInfoTypeCopilotAPIToken AuthInfoType = "copilot-api-token"
 	AuthInfoTypeEnv             AuthInfoType = "env"
-	AuthInfoTypeGhCli           AuthInfoType = "gh-cli"
-	AuthInfoTypeHmac            AuthInfoType = "hmac"
+	AuthInfoTypeGhCLI           AuthInfoType = "gh-cli"
+	AuthInfoTypeHMAC            AuthInfoType = "hmac"
 	AuthInfoTypeToken           AuthInfoType = "token"
 	AuthInfoTypeUser            AuthInfoType = "user"
+)
+
+// Runtime-controlled routing state for an open canvas instance.
+// Experimental: CanvasInstanceAvailability is part of an experimental API and may change or
+// be removed.
+type CanvasInstanceAvailability string
+
+const (
+	// The owning provider is currently connected and routing calls will be dispatched normally.
+	CanvasInstanceAvailabilityReady CanvasInstanceAvailability = "ready"
+	// The owning provider is not currently connected. Routing calls fail with
+	// canvas_provider_unavailable until the agent re-issues open_canvas (which rehydrates via a
+	// fresh canvas.open) or the provider reconnects.
+	CanvasInstanceAvailabilityStale CanvasInstanceAvailability = "stale"
 )
 
 // Neutral SDK discriminator for the connected remote session kind.
@@ -5907,25 +7151,36 @@ const (
 	ContentFilterModeNone ContentFilterMode = "none"
 )
 
+// Context tier for models that support multiple context-window sizes.
+// Experimental: ContextTier is part of an experimental API and may change or be removed.
+type ContextTier string
+
+const (
+	// Use the model's default context window.
+	ContextTierDefault ContextTier = "default"
+	// Pin the session to the long-context tier when supported.
+	ContextTierLongContext ContextTier = "long_context"
+)
+
 // Authentication host (always the public GitHub host).
 type CopilotAPITokenAuthInfoHost string
 
 const (
-	CopilotAPITokenAuthInfoHostHTTPSGithubCom CopilotAPITokenAuthInfoHost = "https://github.com"
+	CopilotAPITokenAuthInfoHostHTTPSGitHubCom CopilotAPITokenAuthInfoHost = "https://github.com"
 )
 
-// Server transport type: stdio, http, sse, or memory
-type DiscoveredMcpServerType string
+// Server transport type: stdio, http, sse (deprecated), or memory
+type DiscoveredMCPServerType string
 
 const (
 	// Server communicates over streamable HTTP.
-	DiscoveredMcpServerTypeHTTP DiscoveredMcpServerType = "http"
+	DiscoveredMCPServerTypeHTTP DiscoveredMCPServerType = "http"
 	// Server is backed by an in-memory runtime implementation.
-	DiscoveredMcpServerTypeMemory DiscoveredMcpServerType = "memory"
-	// Server communicates over Server-Sent Events.
-	DiscoveredMcpServerTypeSse DiscoveredMcpServerType = "sse"
+	DiscoveredMCPServerTypeMemory DiscoveredMCPServerType = "memory"
+	// Server communicates over Server-Sent Events (deprecated).
+	DiscoveredMCPServerTypeSSE DiscoveredMCPServerType = "sse"
 	// Server communicates over stdio with a local child process.
-	DiscoveredMcpServerTypeStdio DiscoveredMcpServerType = "stdio"
+	DiscoveredMCPServerTypeStdio DiscoveredMCPServerType = "stdio"
 )
 
 type EventLogTypesString string
@@ -6030,14 +7285,14 @@ const (
 type HMACAuthInfoHost string
 
 const (
-	HMACAuthInfoHostHTTPSGithubCom HMACAuthInfoHost = "https://github.com"
+	HMACAuthInfoHostHTTPSGitHubCom HMACAuthInfoHost = "https://github.com"
 )
 
 // Constant value. Always "github".
-type InstalledPluginSourceGithubSource string
+type InstalledPluginSourceGitHubSource string
 
 const (
-	InstalledPluginSourceGithubSourceGithub InstalledPluginSourceGithubSource = "github"
+	InstalledPluginSourceGitHubSourceGitHub InstalledPluginSourceGitHubSource = "github"
 )
 
 // Constant value. Always "local".
@@ -6092,73 +7347,181 @@ const (
 	InstructionsSourcesTypeVscode InstructionsSourcesType = "vscode"
 )
 
+// Allowed values for the `McpAppsHostContextDetailsAvailableDisplayMode` enumeration.
+// Experimental: MCPAppsHostContextDetailsAvailableDisplayMode is part of an experimental
+// API and may change or be removed.
+type MCPAppsHostContextDetailsAvailableDisplayMode string
+
+const (
+	// Rendered as a fullscreen overlay
+	MCPAppsHostContextDetailsAvailableDisplayModeFullscreen MCPAppsHostContextDetailsAvailableDisplayMode = "fullscreen"
+	// Rendered inline within the host conversation surface
+	MCPAppsHostContextDetailsAvailableDisplayModeInline MCPAppsHostContextDetailsAvailableDisplayMode = "inline"
+	// Rendered as a picture-in-picture floating panel
+	MCPAppsHostContextDetailsAvailableDisplayModePip MCPAppsHostContextDetailsAvailableDisplayMode = "pip"
+)
+
+// Current display mode (SEP-1865)
+// Experimental: MCPAppsHostContextDetailsDisplayMode is part of an experimental API and may
+// change or be removed.
+type MCPAppsHostContextDetailsDisplayMode string
+
+const (
+	// Rendered as a fullscreen overlay
+	MCPAppsHostContextDetailsDisplayModeFullscreen MCPAppsHostContextDetailsDisplayMode = "fullscreen"
+	// Rendered inline within the host conversation surface
+	MCPAppsHostContextDetailsDisplayModeInline MCPAppsHostContextDetailsDisplayMode = "inline"
+	// Rendered as a picture-in-picture floating panel
+	MCPAppsHostContextDetailsDisplayModePip MCPAppsHostContextDetailsDisplayMode = "pip"
+)
+
+// Platform type for responsive design
+// Experimental: MCPAppsHostContextDetailsPlatform is part of an experimental API and may
+// change or be removed.
+type MCPAppsHostContextDetailsPlatform string
+
+const (
+	// Host runs as a desktop application
+	MCPAppsHostContextDetailsPlatformDesktop MCPAppsHostContextDetailsPlatform = "desktop"
+	// Host runs on a mobile device
+	MCPAppsHostContextDetailsPlatformMobile MCPAppsHostContextDetailsPlatform = "mobile"
+	// Host runs in a web browser
+	MCPAppsHostContextDetailsPlatformWeb MCPAppsHostContextDetailsPlatform = "web"
+)
+
+// UI theme preference per SEP-1865
+// Experimental: MCPAppsHostContextDetailsTheme is part of an experimental API and may
+// change or be removed.
+type MCPAppsHostContextDetailsTheme string
+
+const (
+	// Dark UI theme
+	MCPAppsHostContextDetailsThemeDark MCPAppsHostContextDetailsTheme = "dark"
+	// Light UI theme
+	MCPAppsHostContextDetailsThemeLight MCPAppsHostContextDetailsTheme = "light"
+)
+
+// Allowed values for the `McpAppsSetHostContextDetailsAvailableDisplayMode` enumeration.
+// Experimental: MCPAppsSetHostContextDetailsAvailableDisplayMode is part of an experimental
+// API and may change or be removed.
+type MCPAppsSetHostContextDetailsAvailableDisplayMode string
+
+const (
+	// Rendered as a fullscreen overlay
+	MCPAppsSetHostContextDetailsAvailableDisplayModeFullscreen MCPAppsSetHostContextDetailsAvailableDisplayMode = "fullscreen"
+	// Rendered inline within the host conversation surface
+	MCPAppsSetHostContextDetailsAvailableDisplayModeInline MCPAppsSetHostContextDetailsAvailableDisplayMode = "inline"
+	// Rendered as a picture-in-picture floating panel
+	MCPAppsSetHostContextDetailsAvailableDisplayModePip MCPAppsSetHostContextDetailsAvailableDisplayMode = "pip"
+)
+
+// Current display mode (SEP-1865)
+// Experimental: MCPAppsSetHostContextDetailsDisplayMode is part of an experimental API and
+// may change or be removed.
+type MCPAppsSetHostContextDetailsDisplayMode string
+
+const (
+	// Rendered as a fullscreen overlay
+	MCPAppsSetHostContextDetailsDisplayModeFullscreen MCPAppsSetHostContextDetailsDisplayMode = "fullscreen"
+	// Rendered inline within the host conversation surface
+	MCPAppsSetHostContextDetailsDisplayModeInline MCPAppsSetHostContextDetailsDisplayMode = "inline"
+	// Rendered as a picture-in-picture floating panel
+	MCPAppsSetHostContextDetailsDisplayModePip MCPAppsSetHostContextDetailsDisplayMode = "pip"
+)
+
+// Platform type for responsive design
+// Experimental: MCPAppsSetHostContextDetailsPlatform is part of an experimental API and may
+// change or be removed.
+type MCPAppsSetHostContextDetailsPlatform string
+
+const (
+	// Host runs as a desktop application
+	MCPAppsSetHostContextDetailsPlatformDesktop MCPAppsSetHostContextDetailsPlatform = "desktop"
+	// Host runs on a mobile device
+	MCPAppsSetHostContextDetailsPlatformMobile MCPAppsSetHostContextDetailsPlatform = "mobile"
+	// Host runs in a web browser
+	MCPAppsSetHostContextDetailsPlatformWeb MCPAppsSetHostContextDetailsPlatform = "web"
+)
+
+// UI theme preference per SEP-1865
+// Experimental: MCPAppsSetHostContextDetailsTheme is part of an experimental API and may
+// change or be removed.
+type MCPAppsSetHostContextDetailsTheme string
+
+const (
+	// Dark UI theme
+	MCPAppsSetHostContextDetailsThemeDark MCPAppsSetHostContextDetailsTheme = "dark"
+	// Light UI theme
+	MCPAppsSetHostContextDetailsThemeLight MCPAppsSetHostContextDetailsTheme = "light"
+)
+
 // Outcome of the sampling inference. 'success' produced a response; 'failure' encountered
 // an error (including agent-side rejection by content filter or criteria); 'cancelled' the
 // caller cancelled this execution via cancelSamplingExecution.
-// Experimental: McpSamplingExecutionAction is part of an experimental API and may change or
+// Experimental: MCPSamplingExecutionAction is part of an experimental API and may change or
 // be removed.
-type McpSamplingExecutionAction string
+type MCPSamplingExecutionAction string
 
 const (
 	// The sampling inference was cancelled before completion.
-	McpSamplingExecutionActionCancelled McpSamplingExecutionAction = "cancelled"
+	MCPSamplingExecutionActionCancelled MCPSamplingExecutionAction = "cancelled"
 	// The sampling inference failed or was rejected.
-	McpSamplingExecutionActionFailure McpSamplingExecutionAction = "failure"
+	MCPSamplingExecutionActionFailure MCPSamplingExecutionAction = "failure"
 	// The sampling inference completed and produced a result.
-	McpSamplingExecutionActionSuccess McpSamplingExecutionAction = "success"
+	MCPSamplingExecutionActionSuccess MCPSamplingExecutionAction = "success"
 )
 
 // OAuth grant type to use when authenticating to the remote MCP server.
-type McpServerConfigHTTPOauthGrantType string
+type MCPServerConfigHTTPOauthGrantType string
 
 const (
 	// Interactive browser-based authorization code flow with PKCE.
-	McpServerConfigHTTPOauthGrantTypeAuthorizationCode McpServerConfigHTTPOauthGrantType = "authorization_code"
+	MCPServerConfigHTTPOauthGrantTypeAuthorizationCode MCPServerConfigHTTPOauthGrantType = "authorization_code"
 	// Headless client credentials flow using the configured OAuth client.
-	McpServerConfigHTTPOauthGrantTypeClientCredentials McpServerConfigHTTPOauthGrantType = "client_credentials"
+	MCPServerConfigHTTPOauthGrantTypeClientCredentials MCPServerConfigHTTPOauthGrantType = "client_credentials"
 )
 
 // Remote transport type. Defaults to "http" when omitted.
-type McpServerConfigHTTPType string
+type MCPServerConfigHTTPType string
 
 const (
 	// Streamable HTTP transport.
-	McpServerConfigHTTPTypeHTTP McpServerConfigHTTPType = "http"
+	MCPServerConfigHTTPTypeHTTP MCPServerConfigHTTPType = "http"
 	// Server-Sent Events transport.
-	McpServerConfigHTTPTypeSse McpServerConfigHTTPType = "sse"
+	MCPServerConfigHTTPTypeSSE MCPServerConfigHTTPType = "sse"
 )
 
 // Configuration source: user, workspace, plugin, or builtin
-type McpServerSource string
+type MCPServerSource string
 
 const (
 	// Server bundled with the runtime.
-	McpServerSourceBuiltin McpServerSource = "builtin"
+	MCPServerSourceBuiltin MCPServerSource = "builtin"
 	// Server contributed by an installed plugin.
-	McpServerSourcePlugin McpServerSource = "plugin"
+	MCPServerSourcePlugin MCPServerSource = "plugin"
 	// Server configured in the user's global MCP configuration.
-	McpServerSourceUser McpServerSource = "user"
+	MCPServerSourceUser MCPServerSource = "user"
 	// Server configured by the current workspace.
-	McpServerSourceWorkspace McpServerSource = "workspace"
+	MCPServerSourceWorkspace MCPServerSource = "workspace"
 )
 
 // Connection status: connected, failed, needs-auth, pending, disabled, or not_configured
-// Experimental: McpServerStatus is part of an experimental API and may change or be removed.
-type McpServerStatus string
+// Experimental: MCPServerStatus is part of an experimental API and may change or be removed.
+type MCPServerStatus string
 
 const (
 	// The server is connected and available.
-	McpServerStatusConnected McpServerStatus = "connected"
+	MCPServerStatusConnected MCPServerStatus = "connected"
 	// The server is configured but disabled.
-	McpServerStatusDisabled McpServerStatus = "disabled"
+	MCPServerStatusDisabled MCPServerStatus = "disabled"
 	// The server failed to connect or initialize.
-	McpServerStatusFailed McpServerStatus = "failed"
+	MCPServerStatusFailed MCPServerStatus = "failed"
 	// The server requires authentication before it can connect.
-	McpServerStatusNeedsAuth McpServerStatus = "needs-auth"
+	MCPServerStatusNeedsAuth MCPServerStatus = "needs-auth"
 	// The server is not configured for this session.
-	McpServerStatusNotConfigured McpServerStatus = "not_configured"
+	MCPServerStatusNotConfigured MCPServerStatus = "not_configured"
 	// The server connection is still being established.
-	McpServerStatusPending McpServerStatus = "pending"
+	MCPServerStatusPending MCPServerStatus = "pending"
 )
 
 // How environment-variable values supplied to MCP servers are resolved. "direct" passes
@@ -6166,15 +7529,15 @@ const (
 // variables on the host) that the runtime resolves before launch. Defaults to the runtime's
 // startup mode; clients that intentionally launch MCP servers with literal values (e.g. CLI
 // prompt mode and ACP) set this to "direct".
-// Experimental: McpSetEnvValueModeDetails is part of an experimental API and may change or
+// Experimental: MCPSetEnvValueModeDetails is part of an experimental API and may change or
 // be removed.
-type McpSetEnvValueModeDetails string
+type MCPSetEnvValueModeDetails string
 
 const (
 	// Treat MCP server environment values as literal strings.
-	McpSetEnvValueModeDetailsDirect McpSetEnvValueModeDetails = "direct"
+	MCPSetEnvValueModeDetailsDirect MCPSetEnvValueModeDetails = "direct"
 	// Treat MCP server environment values as host-side references to resolve before launch.
-	McpSetEnvValueModeDetailsIndirect McpSetEnvValueModeDetails = "indirect"
+	MCPSetEnvValueModeDetailsIndirect MCPSetEnvValueModeDetails = "indirect"
 )
 
 // The current agent mode for this session (e.g., 'interactive', 'plan', 'autopilot')
@@ -6201,7 +7564,7 @@ const (
 	// Remote task originated from Copilot Coding Agent.
 	MetadataSnapshotRemoteMetadataTaskTypeCca MetadataSnapshotRemoteMetadataTaskType = "cca"
 	// Remote task originated from a CLI remote-session invocation.
-	MetadataSnapshotRemoteMetadataTaskTypeCli MetadataSnapshotRemoteMetadataTaskType = "cli"
+	MetadataSnapshotRemoteMetadataTaskTypeCLI MetadataSnapshotRemoteMetadataTaskType = "cli"
 )
 
 // Model capability category for grouping in the model picker
@@ -6255,6 +7618,22 @@ const (
 	OptionsUpdateEnvValueModeIndirect OptionsUpdateEnvValueMode = "indirect"
 )
 
+// Controls how availableTools (allowlist) and excludedTools (denylist) combine when both
+// are set.
+// Experimental: OptionsUpdateToolFilterPrecedence is part of an experimental API and may
+// change or be removed.
+type OptionsUpdateToolFilterPrecedence string
+
+const (
+	// If availableTools is set, it is the only constraint that applies (excludedTools is
+	// ignored). Preserves CLI / pre-existing client behavior. Default.
+	OptionsUpdateToolFilterPrecedenceAvailable OptionsUpdateToolFilterPrecedence = "available"
+	// A tool is enabled if and only if it matches the allowlist (or the allowlist is unset) AND
+	// it does not match the denylist. Makes 'all except X' expressible by combining the two
+	// lists.
+	OptionsUpdateToolFilterPrecedenceExcluded OptionsUpdateToolFilterPrecedence = "excluded"
+)
+
 // Kind discriminator for PermissionDecisionApproveForLocationApproval.
 type PermissionDecisionApproveForLocationApprovalKind string
 
@@ -6263,8 +7642,8 @@ const (
 	PermissionDecisionApproveForLocationApprovalKindCustomTool                PermissionDecisionApproveForLocationApprovalKind = "custom-tool"
 	PermissionDecisionApproveForLocationApprovalKindExtensionManagement       PermissionDecisionApproveForLocationApprovalKind = "extension-management"
 	PermissionDecisionApproveForLocationApprovalKindExtensionPermissionAccess PermissionDecisionApproveForLocationApprovalKind = "extension-permission-access"
-	PermissionDecisionApproveForLocationApprovalKindMcp                       PermissionDecisionApproveForLocationApprovalKind = "mcp"
-	PermissionDecisionApproveForLocationApprovalKindMcpSampling               PermissionDecisionApproveForLocationApprovalKind = "mcp-sampling"
+	PermissionDecisionApproveForLocationApprovalKindMCP                       PermissionDecisionApproveForLocationApprovalKind = "mcp"
+	PermissionDecisionApproveForLocationApprovalKindMCPSampling               PermissionDecisionApproveForLocationApprovalKind = "mcp-sampling"
 	PermissionDecisionApproveForLocationApprovalKindMemory                    PermissionDecisionApproveForLocationApprovalKind = "memory"
 	PermissionDecisionApproveForLocationApprovalKindRead                      PermissionDecisionApproveForLocationApprovalKind = "read"
 	PermissionDecisionApproveForLocationApprovalKindWrite                     PermissionDecisionApproveForLocationApprovalKind = "write"
@@ -6278,8 +7657,8 @@ const (
 	PermissionDecisionApproveForSessionApprovalKindCustomTool                PermissionDecisionApproveForSessionApprovalKind = "custom-tool"
 	PermissionDecisionApproveForSessionApprovalKindExtensionManagement       PermissionDecisionApproveForSessionApprovalKind = "extension-management"
 	PermissionDecisionApproveForSessionApprovalKindExtensionPermissionAccess PermissionDecisionApproveForSessionApprovalKind = "extension-permission-access"
-	PermissionDecisionApproveForSessionApprovalKindMcp                       PermissionDecisionApproveForSessionApprovalKind = "mcp"
-	PermissionDecisionApproveForSessionApprovalKindMcpSampling               PermissionDecisionApproveForSessionApprovalKind = "mcp-sampling"
+	PermissionDecisionApproveForSessionApprovalKindMCP                       PermissionDecisionApproveForSessionApprovalKind = "mcp"
+	PermissionDecisionApproveForSessionApprovalKindMCPSampling               PermissionDecisionApproveForSessionApprovalKind = "mcp-sampling"
 	PermissionDecisionApproveForSessionApprovalKindMemory                    PermissionDecisionApproveForSessionApprovalKind = "memory"
 	PermissionDecisionApproveForSessionApprovalKindRead                      PermissionDecisionApproveForSessionApprovalKind = "read"
 	PermissionDecisionApproveForSessionApprovalKindWrite                     PermissionDecisionApproveForSessionApprovalKind = "write"
@@ -6339,8 +7718,8 @@ const (
 	PermissionsLocationsAddToolApprovalDetailsKindCustomTool                PermissionsLocationsAddToolApprovalDetailsKind = "custom-tool"
 	PermissionsLocationsAddToolApprovalDetailsKindExtensionManagement       PermissionsLocationsAddToolApprovalDetailsKind = "extension-management"
 	PermissionsLocationsAddToolApprovalDetailsKindExtensionPermissionAccess PermissionsLocationsAddToolApprovalDetailsKind = "extension-permission-access"
-	PermissionsLocationsAddToolApprovalDetailsKindMcp                       PermissionsLocationsAddToolApprovalDetailsKind = "mcp"
-	PermissionsLocationsAddToolApprovalDetailsKindMcpSampling               PermissionsLocationsAddToolApprovalDetailsKind = "mcp-sampling"
+	PermissionsLocationsAddToolApprovalDetailsKindMCP                       PermissionsLocationsAddToolApprovalDetailsKind = "mcp"
+	PermissionsLocationsAddToolApprovalDetailsKindMCPSampling               PermissionsLocationsAddToolApprovalDetailsKind = "mcp-sampling"
 	PermissionsLocationsAddToolApprovalDetailsKindMemory                    PermissionsLocationsAddToolApprovalDetailsKind = "memory"
 	PermissionsLocationsAddToolApprovalDetailsKindRead                      PermissionsLocationsAddToolApprovalDetailsKind = "read"
 	PermissionsLocationsAddToolApprovalDetailsKindWrite                     PermissionsLocationsAddToolApprovalDetailsKind = "write"
@@ -6360,6 +7739,22 @@ const (
 )
 
 // Optional source for allow-all telemetry. Defaults to `rpc` when omitted for SDK callers.
+// Experimental: PermissionsSetAllowAllSource is part of an experimental API and may change
+// or be removed.
+type PermissionsSetAllowAllSource string
+
+const (
+	// Allow-all was enabled by confirming autopilot behavior.
+	PermissionsSetAllowAllSourceAutopilotConfirmation PermissionsSetAllowAllSource = "autopilot_confirmation"
+	// Allow-all was enabled from a CLI command-line flag.
+	PermissionsSetAllowAllSourceCLIFlag PermissionsSetAllowAllSource = "cli_flag"
+	// Allow-all was enabled through an RPC caller.
+	PermissionsSetAllowAllSourceRPC PermissionsSetAllowAllSource = "rpc"
+	// Allow-all was enabled by a slash command.
+	PermissionsSetAllowAllSourceSlashCommand PermissionsSetAllowAllSource = "slash_command"
+)
+
+// Optional source for allow-all telemetry. Defaults to `rpc` when omitted for SDK callers.
 // Experimental: PermissionsSetApproveAllSource is part of an experimental API and may
 // change or be removed.
 type PermissionsSetApproveAllSource string
@@ -6368,11 +7763,37 @@ const (
 	// Allow-all was enabled by confirming autopilot behavior.
 	PermissionsSetApproveAllSourceAutopilotConfirmation PermissionsSetApproveAllSource = "autopilot_confirmation"
 	// Allow-all was enabled from a CLI command-line flag.
-	PermissionsSetApproveAllSourceCliFlag PermissionsSetApproveAllSource = "cli_flag"
+	PermissionsSetApproveAllSourceCLIFlag PermissionsSetApproveAllSource = "cli_flag"
 	// Allow-all was enabled through an RPC caller.
 	PermissionsSetApproveAllSourceRPC PermissionsSetApproveAllSource = "rpc"
 	// Allow-all was enabled by a slash command.
 	PermissionsSetApproveAllSourceSlashCommand PermissionsSetApproveAllSource = "slash_command"
+)
+
+// Type of GitHub reference
+// Experimental: PushAttachmentGitHubReferenceType is part of an experimental API and may
+// change or be removed.
+type PushAttachmentGitHubReferenceType string
+
+const (
+	// GitHub discussion reference.
+	PushAttachmentGitHubReferenceTypeDiscussion PushAttachmentGitHubReferenceType = "discussion"
+	// GitHub issue reference.
+	PushAttachmentGitHubReferenceTypeIssue PushAttachmentGitHubReferenceType = "issue"
+	// GitHub pull request reference.
+	PushAttachmentGitHubReferenceTypePr PushAttachmentGitHubReferenceType = "pr"
+)
+
+// Type discriminator for PushAttachment.
+type PushAttachmentType string
+
+const (
+	PushAttachmentTypeBlob             PushAttachmentType = "blob"
+	PushAttachmentTypeDirectory        PushAttachmentType = "directory"
+	PushAttachmentTypeExtensionContext PushAttachmentType = "extension_context"
+	PushAttachmentTypeFile             PushAttachmentType = "file"
+	PushAttachmentTypeGitHubReference  PushAttachmentType = "github_reference"
+	PushAttachmentTypeSelection        PushAttachmentType = "selection"
 )
 
 // Whether this item is a queued user message or a queued slash command / model change
@@ -6432,31 +7853,6 @@ const (
 	SendAgentModeShell SendAgentMode = "shell"
 )
 
-// Type of GitHub reference
-// Experimental: SendAttachmentGithubReferenceType is part of an experimental API and may
-// change or be removed.
-type SendAttachmentGithubReferenceType string
-
-const (
-	// GitHub discussion reference.
-	SendAttachmentGithubReferenceTypeDiscussion SendAttachmentGithubReferenceType = "discussion"
-	// GitHub issue reference.
-	SendAttachmentGithubReferenceTypeIssue SendAttachmentGithubReferenceType = "issue"
-	// GitHub pull request reference.
-	SendAttachmentGithubReferenceTypePr SendAttachmentGithubReferenceType = "pr"
-)
-
-// Type discriminator for SendAttachment.
-type SendAttachmentType string
-
-const (
-	SendAttachmentTypeBlob            SendAttachmentType = "blob"
-	SendAttachmentTypeDirectory       SendAttachmentType = "directory"
-	SendAttachmentTypeFile            SendAttachmentType = "file"
-	SendAttachmentTypeGithubReference SendAttachmentType = "github_reference"
-	SendAttachmentTypeSelection       SendAttachmentType = "selection"
-)
-
 // How to deliver the message. `enqueue` (default) appends to the message queue. `immediate`
 // interjects during an in-progress turn.
 // Experimental: SendMode is part of an experimental API and may change or be removed.
@@ -6476,59 +7872,65 @@ type SessionContextHostType string
 
 const (
 	// Session repository is hosted on Azure DevOps.
-	SessionContextHostTypeAdo SessionContextHostType = "ado"
+	SessionContextHostTypeADO SessionContextHostType = "ado"
 	// Session repository is hosted on GitHub.
-	SessionContextHostTypeGithub SessionContextHostType = "github"
+	SessionContextHostTypeGitHub SessionContextHostType = "github"
 )
 
 // Error classification
-type SessionFsErrorCode string
+// Experimental: SessionFSErrorCode is part of an experimental API and may change or be
+// removed.
+type SessionFSErrorCode string
 
 const (
 	// The requested path does not exist.
-	SessionFsErrorCodeENOENT SessionFsErrorCode = "ENOENT"
+	SessionFSErrorCodeENOENT SessionFSErrorCode = "ENOENT"
 	// The filesystem operation failed for an unspecified reason.
-	SessionFsErrorCodeUNKNOWN SessionFsErrorCode = "UNKNOWN"
+	SessionFSErrorCodeUNKNOWN SessionFSErrorCode = "UNKNOWN"
 )
 
 // Entry type
-type SessionFsReaddirWithTypesEntryType string
+// Experimental: SessionFSReaddirWithTypesEntryType is part of an experimental API and may
+// change or be removed.
+type SessionFSReaddirWithTypesEntryType string
 
 const (
 	// The entry is a directory.
-	SessionFsReaddirWithTypesEntryTypeDirectory SessionFsReaddirWithTypesEntryType = "directory"
+	SessionFSReaddirWithTypesEntryTypeDirectory SessionFSReaddirWithTypesEntryType = "directory"
 	// The entry is a file.
-	SessionFsReaddirWithTypesEntryTypeFile SessionFsReaddirWithTypesEntryType = "file"
+	SessionFSReaddirWithTypesEntryTypeFile SessionFSReaddirWithTypesEntryType = "file"
 )
 
 // Path conventions used by this filesystem
-type SessionFsSetProviderConventions string
+type SessionFSSetProviderConventions string
 
 const (
 	// Paths use POSIX path conventions.
-	SessionFsSetProviderConventionsPosix SessionFsSetProviderConventions = "posix"
+	SessionFSSetProviderConventionsPosix SessionFSSetProviderConventions = "posix"
 	// Paths use Windows path conventions.
-	SessionFsSetProviderConventionsWindows SessionFsSetProviderConventions = "windows"
+	SessionFSSetProviderConventionsWindows SessionFSSetProviderConventions = "windows"
 )
 
 // How to execute the query: 'exec' for DDL/multi-statement (no results), 'query' for SELECT
 // (returns rows), 'run' for INSERT/UPDATE/DELETE (returns rowsAffected)
-type SessionFsSqliteQueryType string
+// Experimental: SessionFSSqliteQueryType is part of an experimental API and may change or
+// be removed.
+type SessionFSSqliteQueryType string
 
 const (
 	// Execute DDL or multi-statement SQL without returning rows.
-	SessionFsSqliteQueryTypeExec SessionFsSqliteQueryType = "exec"
+	SessionFSSqliteQueryTypeExec SessionFSSqliteQueryType = "exec"
 	// Execute a SELECT-style query and return rows.
-	SessionFsSqliteQueryTypeQuery SessionFsSqliteQueryType = "query"
+	SessionFSSqliteQueryTypeQuery SessionFSSqliteQueryType = "query"
 	// Execute INSERT, UPDATE, or DELETE SQL and return affected-row metadata.
-	SessionFsSqliteQueryTypeRun SessionFsSqliteQueryType = "run"
+	SessionFSSqliteQueryTypeRun SessionFSSqliteQueryType = "run"
 )
 
 // Constant value. Always "github".
-type SessionInstalledPluginSourceGithubSource string
+type SessionInstalledPluginSourceGitHubSource string
 
 const (
-	SessionInstalledPluginSourceGithubSourceGithub SessionInstalledPluginSourceGithubSource = "github"
+	SessionInstalledPluginSourceGitHubSourceGitHub SessionInstalledPluginSourceGitHubSource = "github"
 )
 
 // Constant value. Always "local".
@@ -6579,9 +7981,9 @@ type SessionWorkingDirectoryContextHostType string
 
 const (
 	// The working directory repository is hosted on Azure DevOps.
-	SessionWorkingDirectoryContextHostTypeAdo SessionWorkingDirectoryContextHostType = "ado"
+	SessionWorkingDirectoryContextHostTypeADO SessionWorkingDirectoryContextHostType = "ado"
 	// The working directory repository is hosted on GitHub.
-	SessionWorkingDirectoryContextHostTypeGithub SessionWorkingDirectoryContextHostType = "github"
+	SessionWorkingDirectoryContextHostTypeGitHub SessionWorkingDirectoryContextHostType = "github"
 )
 
 // Signal to send (default: SIGTERM)
@@ -6828,10 +8230,38 @@ const (
 	UserToolSessionApprovalKindCustomTool                UserToolSessionApprovalKind = "custom-tool"
 	UserToolSessionApprovalKindExtensionManagement       UserToolSessionApprovalKind = "extension-management"
 	UserToolSessionApprovalKindExtensionPermissionAccess UserToolSessionApprovalKind = "extension-permission-access"
-	UserToolSessionApprovalKindMcp                       UserToolSessionApprovalKind = "mcp"
+	UserToolSessionApprovalKindMCP                       UserToolSessionApprovalKind = "mcp"
 	UserToolSessionApprovalKindMemory                    UserToolSessionApprovalKind = "memory"
 	UserToolSessionApprovalKindRead                      UserToolSessionApprovalKind = "read"
 	UserToolSessionApprovalKindWrite                     UserToolSessionApprovalKind = "write"
+)
+
+// Type of change represented by this file diff.
+// Experimental: WorkspaceDiffFileChangeType is part of an experimental API and may change
+// or be removed.
+type WorkspaceDiffFileChangeType string
+
+const (
+	// The file was added.
+	WorkspaceDiffFileChangeTypeAdded WorkspaceDiffFileChangeType = "added"
+	// The file was deleted.
+	WorkspaceDiffFileChangeTypeDeleted WorkspaceDiffFileChangeType = "deleted"
+	// The file was modified.
+	WorkspaceDiffFileChangeTypeModified WorkspaceDiffFileChangeType = "modified"
+	// The file was renamed.
+	WorkspaceDiffFileChangeTypeRenamed WorkspaceDiffFileChangeType = "renamed"
+)
+
+// Diff mode requested by the client.
+// Experimental: WorkspaceDiffMode is part of an experimental API and may change or be
+// removed.
+type WorkspaceDiffMode string
+
+const (
+	// Return changes compared with the default branch.
+	WorkspaceDiffModeBranch WorkspaceDiffMode = "branch"
+	// Return staged, unstaged, and untracked working tree changes.
+	WorkspaceDiffModeUnstaged WorkspaceDiffMode = "unstaged"
 )
 
 // Repository host type, if known
@@ -6841,9 +8271,9 @@ type WorkspaceSummaryHostType string
 
 const (
 	// Workspace summary repository is hosted on Azure DevOps.
-	WorkspaceSummaryHostTypeAdo WorkspaceSummaryHostType = "ado"
+	WorkspaceSummaryHostTypeADO WorkspaceSummaryHostType = "ado"
 	// Workspace summary repository is hosted on GitHub.
-	WorkspaceSummaryHostTypeGithub WorkspaceSummaryHostType = "github"
+	WorkspaceSummaryHostTypeGitHub WorkspaceSummaryHostType = "github"
 )
 
 // Allowed values for the `WorkspacesWorkspaceDetailsHostType` enumeration.
@@ -6853,16 +8283,16 @@ type WorkspacesWorkspaceDetailsHostType string
 
 const (
 	// Workspace repository is hosted on Azure DevOps.
-	WorkspacesWorkspaceDetailsHostTypeAdo WorkspacesWorkspaceDetailsHostType = "ado"
+	WorkspacesWorkspaceDetailsHostTypeADO WorkspacesWorkspaceDetailsHostType = "ado"
 	// Workspace repository is hosted on GitHub.
-	WorkspacesWorkspaceDetailsHostTypeGithub WorkspacesWorkspaceDetailsHostType = "github"
+	WorkspacesWorkspaceDetailsHostTypeGitHub WorkspacesWorkspaceDetailsHostType = "github"
 )
 
-type serverApi struct {
+type serverAPI struct {
 	client *jsonrpc2.Client
 }
 
-type ServerAccountApi serverApi
+type ServerAccountAPI serverAPI
 
 // GetQuota gets Copilot quota usage for the authenticated user or supplied GitHub token.
 //
@@ -6872,7 +8302,7 @@ type ServerAccountApi serverApi
 // the global auth context.
 //
 // Returns: Quota usage snapshots for the resolved user, keyed by quota type.
-func (a *ServerAccountApi) GetQuota(ctx context.Context, params *AccountGetQuotaRequest) (*AccountGetQuotaResult, error) {
+func (a *ServerAccountAPI) GetQuota(ctx context.Context, params *AccountGetQuotaRequest) (*AccountGetQuotaResult, error) {
 	raw, err := a.client.Request("account.getQuota", params)
 	if err != nil {
 		return nil, err
@@ -6884,7 +8314,33 @@ func (a *ServerAccountApi) GetQuota(ctx context.Context, params *AccountGetQuota
 	return &result, nil
 }
 
-type ServerMcpApi serverApi
+// Experimental: ServerAgentRegistryAPI contains experimental APIs that may change or be
+// removed.
+type ServerAgentRegistryAPI serverAPI
+
+// Spawns a managed-server child with the supplied configuration and returns a
+// discriminated-union result. The caller (typically the CLI controller) is responsible for
+// attaching to the spawned child and sending any follow-up prompt. When the
+// controller-local spawn gate is closed the server returns JSON-RPC MethodNotFound.
+//
+// RPC method: agentRegistry.spawn.
+//
+// Parameters: Inputs to spawn a managed-server child via the controller's spawn delegate.
+//
+// Returns: Outcome of an agentRegistry.spawn call.
+func (a *ServerAgentRegistryAPI) Spawn(ctx context.Context, params *AgentRegistrySpawnRequest) (AgentRegistrySpawnResult, error) {
+	raw, err := a.client.Request("agentRegistry.spawn", params)
+	if err != nil {
+		return nil, err
+	}
+	result, err := unmarshalAgentRegistrySpawnResult(raw)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+type ServerMCPAPI serverAPI
 
 // Discovers MCP servers from user, workspace, plugin, and builtin sources.
 //
@@ -6893,31 +8349,31 @@ type ServerMcpApi serverApi
 // Parameters: Optional working directory used as context for MCP server discovery.
 //
 // Returns: MCP servers discovered from user, workspace, plugin, and built-in sources.
-func (a *ServerMcpApi) Discover(ctx context.Context, params *McpDiscoverRequest) (*McpDiscoverResult, error) {
+func (a *ServerMCPAPI) Discover(ctx context.Context, params *MCPDiscoverRequest) (*MCPDiscoverResult, error) {
 	raw, err := a.client.Request("mcp.discover", params)
 	if err != nil {
 		return nil, err
 	}
-	var result McpDiscoverResult
+	var result MCPDiscoverResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-type ServerMcpConfigApi serverApi
+type ServerMCPConfigAPI serverAPI
 
 // Adds an MCP server to user configuration.
 //
 // RPC method: mcp.config.add.
 //
 // Parameters: MCP server name and configuration to add to user configuration.
-func (a *ServerMcpConfigApi) Add(ctx context.Context, params *McpConfigAddRequest) (*McpConfigAddResult, error) {
+func (a *ServerMCPConfigAPI) Add(ctx context.Context, params *MCPConfigAddRequest) (*MCPConfigAddResult, error) {
 	raw, err := a.client.Request("mcp.config.add", params)
 	if err != nil {
 		return nil, err
 	}
-	var result McpConfigAddResult
+	var result MCPConfigAddResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -6929,12 +8385,12 @@ func (a *ServerMcpConfigApi) Add(ctx context.Context, params *McpConfigAddReques
 // RPC method: mcp.config.disable.
 //
 // Parameters: MCP server names to disable for new sessions.
-func (a *ServerMcpConfigApi) Disable(ctx context.Context, params *McpConfigDisableRequest) (*McpConfigDisableResult, error) {
+func (a *ServerMCPConfigAPI) Disable(ctx context.Context, params *MCPConfigDisableRequest) (*MCPConfigDisableResult, error) {
 	raw, err := a.client.Request("mcp.config.disable", params)
 	if err != nil {
 		return nil, err
 	}
-	var result McpConfigDisableResult
+	var result MCPConfigDisableResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -6946,12 +8402,12 @@ func (a *ServerMcpConfigApi) Disable(ctx context.Context, params *McpConfigDisab
 // RPC method: mcp.config.enable.
 //
 // Parameters: MCP server names to enable for new sessions.
-func (a *ServerMcpConfigApi) Enable(ctx context.Context, params *McpConfigEnableRequest) (*McpConfigEnableResult, error) {
+func (a *ServerMCPConfigAPI) Enable(ctx context.Context, params *MCPConfigEnableRequest) (*MCPConfigEnableResult, error) {
 	raw, err := a.client.Request("mcp.config.enable", params)
 	if err != nil {
 		return nil, err
 	}
-	var result McpConfigEnableResult
+	var result MCPConfigEnableResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -6963,12 +8419,28 @@ func (a *ServerMcpConfigApi) Enable(ctx context.Context, params *McpConfigEnable
 // RPC method: mcp.config.list.
 //
 // Returns: User-configured MCP servers, keyed by server name.
-func (a *ServerMcpConfigApi) List(ctx context.Context) (*McpConfigList, error) {
+func (a *ServerMCPConfigAPI) List(ctx context.Context) (*MCPConfigList, error) {
 	raw, err := a.client.Request("mcp.config.list", nil)
 	if err != nil {
 		return nil, err
 	}
-	var result McpConfigList
+	var result MCPConfigList
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Reload drops this runtime process's in-memory MCP server-definition cache so the next MCP
+// config read observes disk.
+//
+// RPC method: mcp.config.reload.
+func (a *ServerMCPConfigAPI) Reload(ctx context.Context) (*MCPConfigReloadResult, error) {
+	raw, err := a.client.Request("mcp.config.reload", nil)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPConfigReloadResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -6980,12 +8452,12 @@ func (a *ServerMcpConfigApi) List(ctx context.Context) (*McpConfigList, error) {
 // RPC method: mcp.config.remove.
 //
 // Parameters: MCP server name to remove from user configuration.
-func (a *ServerMcpConfigApi) Remove(ctx context.Context, params *McpConfigRemoveRequest) (*McpConfigRemoveResult, error) {
+func (a *ServerMCPConfigAPI) Remove(ctx context.Context, params *MCPConfigRemoveRequest) (*MCPConfigRemoveResult, error) {
 	raw, err := a.client.Request("mcp.config.remove", params)
 	if err != nil {
 		return nil, err
 	}
-	var result McpConfigRemoveResult
+	var result MCPConfigRemoveResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -6997,23 +8469,23 @@ func (a *ServerMcpConfigApi) Remove(ctx context.Context, params *McpConfigRemove
 // RPC method: mcp.config.update.
 //
 // Parameters: MCP server name and replacement configuration to write to user configuration.
-func (a *ServerMcpConfigApi) Update(ctx context.Context, params *McpConfigUpdateRequest) (*McpConfigUpdateResult, error) {
+func (a *ServerMCPConfigAPI) Update(ctx context.Context, params *MCPConfigUpdateRequest) (*MCPConfigUpdateResult, error) {
 	raw, err := a.client.Request("mcp.config.update", params)
 	if err != nil {
 		return nil, err
 	}
-	var result McpConfigUpdateResult
+	var result MCPConfigUpdateResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-func (s *ServerMcpApi) Config() *ServerMcpConfigApi {
-	return (*ServerMcpConfigApi)(s)
+func (s *ServerMCPAPI) Config() *ServerMCPConfigAPI {
+	return (*ServerMCPConfigAPI)(s)
 }
 
-type ServerModelsApi serverApi
+type ServerModelsAPI serverAPI
 
 // Lists Copilot models available to the authenticated user.
 //
@@ -7024,7 +8496,7 @@ type ServerModelsApi serverApi
 //
 // Returns: List of Copilot models available to the resolved user, including capabilities
 // and billing metadata.
-func (a *ServerModelsApi) List(ctx context.Context, params *ModelsListRequest) (*ModelList, error) {
+func (a *ServerModelsAPI) List(ctx context.Context, params *ModelsListRequest) (*ModelList, error) {
 	raw, err := a.client.Request("models.list", params)
 	if err != nil {
 		return nil, err
@@ -7036,7 +8508,47 @@ func (a *ServerModelsApi) List(ctx context.Context, params *ModelsListRequest) (
 	return &result, nil
 }
 
-type ServerSessionFsApi serverApi
+type ServerRuntimeAPI serverAPI
+
+// Shutdown gracefully shuts down an SDK-owned runtime. The response is sent only after
+// cleanup completes; callers may then terminate the owned runtime process.
+//
+// RPC method: runtime.shutdown.
+func (a *ServerRuntimeAPI) Shutdown(ctx context.Context) (*RuntimeShutdownResult, error) {
+	raw, err := a.client.Request("runtime.shutdown", nil)
+	if err != nil {
+		return nil, err
+	}
+	var result RuntimeShutdownResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+type ServerSecretsAPI serverAPI
+
+// AddFilterValues registers secret values for redaction in session logs and exports. The
+// SDK calls this to inject dynamically generated secret values (e.g., OIDC tokens).
+//
+// RPC method: secrets.addFilterValues.
+//
+// Parameters: Secret values to add to the redaction filter.
+//
+// Returns: Confirmation that the secret values were registered.
+func (a *ServerSecretsAPI) AddFilterValues(ctx context.Context, params *SecretsAddFilterValuesRequest) (*SecretsAddFilterValuesResult, error) {
+	raw, err := a.client.Request("secrets.addFilterValues", params)
+	if err != nil {
+		return nil, err
+	}
+	var result SecretsAddFilterValuesResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+type ServerSessionFSAPI serverAPI
 
 // SetProvider registers an SDK client as the session filesystem provider.
 //
@@ -7047,20 +8559,20 @@ type ServerSessionFsApi serverApi
 //
 // Returns: Indicates whether the calling client was registered as the session filesystem
 // provider.
-func (a *ServerSessionFsApi) SetProvider(ctx context.Context, params *SessionFsSetProviderRequest) (*SessionFsSetProviderResult, error) {
+func (a *ServerSessionFSAPI) SetProvider(ctx context.Context, params *SessionFSSetProviderRequest) (*SessionFSSetProviderResult, error) {
 	raw, err := a.client.Request("sessionFs.setProvider", params)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionFsSetProviderResult
+	var result SessionFSSetProviderResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-// Experimental: ServerSessionsApi contains experimental APIs that may change or be removed.
-type ServerSessionsApi serverApi
+// Experimental: ServerSessionsAPI contains experimental APIs that may change or be removed.
+type ServerSessionsAPI serverAPI
 
 // BulkDelete closes, deactivates, and deletes a set of sessions, returning the bytes freed
 // per session.
@@ -7070,7 +8582,7 @@ type ServerSessionsApi serverApi
 // Parameters: Session IDs to close, deactivate, and delete from disk.
 //
 // Returns: Map of sessionId -> bytes freed by removing the session's workspace directory.
-func (a *ServerSessionsApi) BulkDelete(ctx context.Context, params *SessionsBulkDeleteRequest) (*SessionBulkDeleteResult, error) {
+func (a *ServerSessionsAPI) BulkDelete(ctx context.Context, params *SessionsBulkDeleteRequest) (*SessionBulkDeleteResult, error) {
 	raw, err := a.client.Request("sessions.bulkDelete", params)
 	if err != nil {
 		return nil, err
@@ -7090,7 +8602,7 @@ func (a *ServerSessionsApi) BulkDelete(ctx context.Context, params *SessionsBulk
 // Parameters: Session IDs to test for live in-use locks.
 //
 // Returns: Session IDs from the input set that are currently in use by another process.
-func (a *ServerSessionsApi) CheckInUse(ctx context.Context, params *SessionsCheckInUseRequest) (*SessionsCheckInUseResult, error) {
+func (a *ServerSessionsAPI) CheckInUse(ctx context.Context, params *SessionsCheckInUseRequest) (*SessionsCheckInUseResult, error) {
 	raw, err := a.client.Request("sessions.checkInUse", params)
 	if err != nil {
 		return nil, err
@@ -7112,7 +8624,7 @@ func (a *ServerSessionsApi) CheckInUse(ctx context.Context, params *SessionsChec
 // Returns: Closes a session: emits shutdown, flushes pending events to disk, releases the
 // in-use lock, disposes the active session. Idempotent: succeeds even if the session is not
 // currently active.
-func (a *ServerSessionsApi) Close(ctx context.Context, params *SessionsCloseRequest) (*SessionsCloseResult, error) {
+func (a *ServerSessionsAPI) Close(ctx context.Context, params *SessionsCloseRequest) (*SessionsCloseResult, error) {
 	raw, err := a.client.Request("sessions.close", params)
 	if err != nil {
 		return nil, err
@@ -7131,7 +8643,7 @@ func (a *ServerSessionsApi) Close(ctx context.Context, params *SessionsCloseRequ
 // Parameters: Remote session connection parameters.
 //
 // Returns: Remote session connection result.
-func (a *ServerSessionsApi) Connect(ctx context.Context, params *ConnectRemoteSessionParams) (*RemoteSessionConnectionResult, error) {
+func (a *ServerSessionsAPI) Connect(ctx context.Context, params *ConnectRemoteSessionParams) (*RemoteSessionConnectionResult, error) {
 	raw, err := a.client.Request("sessions.connect", params)
 	if err != nil {
 		return nil, err
@@ -7150,9 +8662,9 @@ func (a *ServerSessionsApi) Connect(ctx context.Context, params *ConnectRemoteSe
 //
 // Parameters: Session metadata records to enrich with summary and context information.
 //
-// Returns: The same metadata records, with summary and context fields backfilled where
-// available.
-func (a *ServerSessionsApi) EnrichMetadata(ctx context.Context, params *SessionsEnrichMetadataRequest) (*SessionEnrichMetadataResult, error) {
+// Returns: The enriched metadata records, with summary and context fields backfilled where
+// available. Sessions confirmed empty and unnamed are omitted.
+func (a *ServerSessionsAPI) EnrichMetadata(ctx context.Context, params *SessionsEnrichMetadataRequest) (*SessionEnrichMetadataResult, error) {
 	raw, err := a.client.Request("sessions.enrichMetadata", params)
 	if err != nil {
 		return nil, err
@@ -7172,7 +8684,7 @@ func (a *ServerSessionsApi) EnrichMetadata(ctx context.Context, params *Sessions
 // Parameters: UUID prefix to resolve to a unique session ID.
 //
 // Returns: Session ID matching the prefix, omitted when no unique match exists.
-func (a *ServerSessionsApi) FindByPrefix(ctx context.Context, params *SessionsFindByPrefixRequest) (*SessionsFindByPrefixResult, error) {
+func (a *ServerSessionsAPI) FindByPrefix(ctx context.Context, params *SessionsFindByPrefixRequest) (*SessionsFindByPrefixResult, error) {
 	raw, err := a.client.Request("sessions.findByPrefix", params)
 	if err != nil {
 		return nil, err
@@ -7191,7 +8703,7 @@ func (a *ServerSessionsApi) FindByPrefix(ctx context.Context, params *SessionsFi
 // Parameters: GitHub task ID to look up.
 //
 // Returns: ID of the local session bound to the given GitHub task, or omitted when none.
-func (a *ServerSessionsApi) FindByTaskId(ctx context.Context, params *SessionsFindByTaskIDRequest) (*SessionsFindByTaskIDResult, error) {
+func (a *ServerSessionsAPI) FindByTaskId(ctx context.Context, params *SessionsFindByTaskIDRequest) (*SessionsFindByTaskIDResult, error) {
 	raw, err := a.client.Request("sessions.findByTaskId", params)
 	if err != nil {
 		return nil, err
@@ -7211,7 +8723,7 @@ func (a *ServerSessionsApi) FindByTaskId(ctx context.Context, params *SessionsFi
 // optional friendly name for the new session.
 //
 // Returns: Identifier and optional friendly name assigned to the newly forked session.
-func (a *ServerSessionsApi) Fork(ctx context.Context, params *SessionsForkRequest) (*SessionsForkResult, error) {
+func (a *ServerSessionsAPI) Fork(ctx context.Context, params *SessionsForkRequest) (*SessionsForkResult, error) {
 	raw, err := a.client.Request("sessions.fork", params)
 	if err != nil {
 		return nil, err
@@ -7230,7 +8742,7 @@ func (a *ServerSessionsApi) Fork(ctx context.Context, params *SessionsForkReques
 // Parameters: Session ID whose event-log file path to compute.
 //
 // Returns: Absolute path to the session's events.jsonl file on disk.
-func (a *ServerSessionsApi) GetEventFilePath(ctx context.Context, params *SessionsGetEventFilePathRequest) (*SessionsGetEventFilePathResult, error) {
+func (a *ServerSessionsAPI) GetEventFilePath(ctx context.Context, params *SessionsGetEventFilePathRequest) (*SessionsGetEventFilePathResult, error) {
 	raw, err := a.client.Request("sessions.getEventFilePath", params)
 	if err != nil {
 		return nil, err
@@ -7251,7 +8763,7 @@ func (a *ServerSessionsApi) GetEventFilePath(ctx context.Context, params *Sessio
 //
 // Returns: Most-relevant session ID for the supplied context, or omitted when no sessions
 // exist.
-func (a *ServerSessionsApi) GetLastForContext(ctx context.Context, params *SessionsGetLastForContextRequest) (*SessionsGetLastForContextResult, error) {
+func (a *ServerSessionsAPI) GetLastForContext(ctx context.Context, params *SessionsGetLastForContextRequest) (*SessionsGetLastForContextResult, error) {
 	raw, err := a.client.Request("sessions.getLastForContext", params)
 	if err != nil {
 		return nil, err
@@ -7272,7 +8784,7 @@ func (a *ServerSessionsApi) GetLastForContext(ctx context.Context, params *Sessi
 //
 // Returns: The session's persisted remote-steerable flag, or omitted when no value has been
 // persisted.
-func (a *ServerSessionsApi) GetPersistedRemoteSteerable(ctx context.Context, params *SessionsGetPersistedRemoteSteerableRequest) (*SessionsGetPersistedRemoteSteerableResult, error) {
+func (a *ServerSessionsAPI) GetPersistedRemoteSteerable(ctx context.Context, params *SessionsGetPersistedRemoteSteerableRequest) (*SessionsGetPersistedRemoteSteerableResult, error) {
 	raw, err := a.client.Request("sessions.getPersistedRemoteSteerable", params)
 	if err != nil {
 		return nil, err
@@ -7289,7 +8801,7 @@ func (a *ServerSessionsApi) GetPersistedRemoteSteerable(ctx context.Context, par
 // RPC method: sessions.getSizes.
 //
 // Returns: Map of sessionId -> on-disk size in bytes for each session's workspace directory.
-func (a *ServerSessionsApi) GetSizes(ctx context.Context) (*SessionSizes, error) {
+func (a *ServerSessionsAPI) GetSizes(ctx context.Context) (*SessionSizes, error) {
 	raw, err := a.client.Request("sessions.getSizes", nil)
 	if err != nil {
 		return nil, err
@@ -7305,11 +8817,10 @@ func (a *ServerSessionsApi) GetSizes(ctx context.Context) (*SessionSizes, error)
 //
 // RPC method: sessions.list.
 //
-// Parameters: Optional metadata-load limit and context filter applied to the returned
-// sessions.
+// Parameters: Optional metadata-load limit and filters applied to the returned sessions.
 //
 // Returns: Persisted sessions matching the filter, ordered most-recently-modified first.
-func (a *ServerSessionsApi) List(ctx context.Context, params *SessionsListRequest) (*SessionList, error) {
+func (a *ServerSessionsAPI) List(ctx context.Context, params *SessionsListRequest) (*SessionList, error) {
 	raw, err := a.client.Request("sessions.list", params)
 	if err != nil {
 		return nil, err
@@ -7329,7 +8840,7 @@ func (a *ServerSessionsApi) List(ctx context.Context, params *SessionsListReques
 // Parameters: Active session ID whose deferred repo-level hooks should be loaded.
 //
 // Returns: Queued repo-level startup prompts and the total hook command count after loading.
-func (a *ServerSessionsApi) LoadDeferredRepoHooks(ctx context.Context, params *SessionsLoadDeferredRepoHooksRequest) (*SessionLoadDeferredRepoHooksResult, error) {
+func (a *ServerSessionsAPI) LoadDeferredRepoHooks(ctx context.Context, params *SessionsLoadDeferredRepoHooksRequest) (*SessionLoadDeferredRepoHooksResult, error) {
 	raw, err := a.client.Request("sessions.loadDeferredRepoHooks", params)
 	if err != nil {
 		return nil, err
@@ -7351,7 +8862,7 @@ func (a *ServerSessionsApi) LoadDeferredRepoHooks(ctx context.Context, params *S
 //
 // Returns: Outcome of the prune operation: deleted IDs, dry-run candidates, skipped IDs,
 // total bytes freed, and the dry-run flag.
-func (a *ServerSessionsApi) PruneOld(ctx context.Context, params *SessionsPruneOldRequest) (*SessionPruneResult, error) {
+func (a *ServerSessionsAPI) PruneOld(ctx context.Context, params *SessionsPruneOldRequest) (*SessionPruneResult, error) {
 	raw, err := a.client.Request("sessions.pruneOld", params)
 	if err != nil {
 		return nil, err
@@ -7371,7 +8882,7 @@ func (a *ServerSessionsApi) PruneOld(ctx context.Context, params *SessionsPruneO
 //
 // Returns: Release the in-use lock held by this process for the given session. No-op when
 // this process does not currently hold a lock for the session.
-func (a *ServerSessionsApi) ReleaseLock(ctx context.Context, params *SessionsReleaseLockRequest) (*SessionsReleaseLockResult, error) {
+func (a *ServerSessionsAPI) ReleaseLock(ctx context.Context, params *SessionsReleaseLockRequest) (*SessionsReleaseLockResult, error) {
 	raw, err := a.client.Request("sessions.releaseLock", params)
 	if err != nil {
 		return nil, err
@@ -7393,7 +8904,7 @@ func (a *ServerSessionsApi) ReleaseLock(ctx context.Context, params *SessionsRel
 // Returns: Reload all hooks (user, plugin, optionally repo) and apply them to the active
 // session. Call after installing or removing plugins so their hooks take effect
 // immediately. No-op when no active session matches the given sessionId.
-func (a *ServerSessionsApi) ReloadPluginHooks(ctx context.Context, params *SessionsReloadPluginHooksRequest) (*SessionsReloadPluginHooksResult, error) {
+func (a *ServerSessionsAPI) ReloadPluginHooks(ctx context.Context, params *SessionsReloadPluginHooksRequest) (*SessionsReloadPluginHooksResult, error) {
 	raw, err := a.client.Request("sessions.reloadPluginHooks", params)
 	if err != nil {
 		return nil, err
@@ -7413,7 +8924,7 @@ func (a *ServerSessionsApi) ReloadPluginHooks(ctx context.Context, params *Sessi
 //
 // Returns: Flush a session's pending events to disk. No-op when no writer exists for the
 // session (e.g., already closed).
-func (a *ServerSessionsApi) Save(ctx context.Context, params *SessionsSaveRequest) (*SessionsSaveResult, error) {
+func (a *ServerSessionsAPI) Save(ctx context.Context, params *SessionsSaveRequest) (*SessionsSaveResult, error) {
 	raw, err := a.client.Request("sessions.save", params)
 	if err != nil {
 		return nil, err
@@ -7436,7 +8947,7 @@ func (a *ServerSessionsApi) Save(ctx context.Context, params *SessionsSaveReques
 // Returns: Replace the manager-wide additional plugins. New session creations and
 // subsequent hook reloads see the new set; already-running sessions keep their existing
 // hook installation until the next reload.
-func (a *ServerSessionsApi) SetAdditionalPlugins(ctx context.Context, params *SessionsSetAdditionalPluginsRequest) (*SessionsSetAdditionalPluginsResult, error) {
+func (a *ServerSessionsAPI) SetAdditionalPlugins(ctx context.Context, params *SessionsSetAdditionalPluginsRequest) (*SessionsSetAdditionalPluginsResult, error) {
 	raw, err := a.client.Request("sessions.setAdditionalPlugins", params)
 	if err != nil {
 		return nil, err
@@ -7448,7 +8959,7 @@ func (a *ServerSessionsApi) SetAdditionalPlugins(ctx context.Context, params *Se
 	return &result, nil
 }
 
-type ServerSkillsApi serverApi
+type ServerSkillsAPI serverAPI
 
 // Discovers skills across global and project sources.
 //
@@ -7458,7 +8969,7 @@ type ServerSkillsApi serverApi
 // discovery.
 //
 // Returns: Skills discovered across global and project sources.
-func (a *ServerSkillsApi) Discover(ctx context.Context, params *SkillsDiscoverRequest) (*ServerSkillList, error) {
+func (a *ServerSkillsAPI) Discover(ctx context.Context, params *SkillsDiscoverRequest) (*ServerSkillList, error) {
 	raw, err := a.client.Request("skills.discover", params)
 	if err != nil {
 		return nil, err
@@ -7470,7 +8981,7 @@ func (a *ServerSkillsApi) Discover(ctx context.Context, params *SkillsDiscoverRe
 	return &result, nil
 }
 
-type ServerSkillsConfigApi serverApi
+type ServerSkillsConfigAPI serverAPI
 
 // SetDisabledSkills replaces the global list of disabled skills.
 //
@@ -7478,7 +8989,7 @@ type ServerSkillsConfigApi serverApi
 //
 // Parameters: Skill names to mark as disabled in global configuration, replacing any
 // previous list.
-func (a *ServerSkillsConfigApi) SetDisabledSkills(ctx context.Context, params *SkillsConfigSetDisabledSkillsRequest) (*SkillsConfigSetDisabledSkillsResult, error) {
+func (a *ServerSkillsConfigAPI) SetDisabledSkills(ctx context.Context, params *SkillsConfigSetDisabledSkillsRequest) (*SkillsConfigSetDisabledSkillsResult, error) {
 	raw, err := a.client.Request("skills.config.setDisabledSkills", params)
 	if err != nil {
 		return nil, err
@@ -7490,11 +9001,11 @@ func (a *ServerSkillsConfigApi) SetDisabledSkills(ctx context.Context, params *S
 	return &result, nil
 }
 
-func (s *ServerSkillsApi) Config() *ServerSkillsConfigApi {
-	return (*ServerSkillsConfigApi)(s)
+func (s *ServerSkillsAPI) Config() *ServerSkillsConfigAPI {
+	return (*ServerSkillsConfigAPI)(s)
 }
 
-type ServerToolsApi serverApi
+type ServerToolsAPI serverAPI
 
 // Lists built-in tools available for a model.
 //
@@ -7505,7 +9016,7 @@ type ServerToolsApi serverApi
 //
 // Returns: Built-in tools available for the requested model, with their parameters and
 // instructions.
-func (a *ServerToolsApi) List(ctx context.Context, params *ToolsListRequest) (*ToolList, error) {
+func (a *ServerToolsAPI) List(ctx context.Context, params *ToolsListRequest) (*ToolList, error) {
 	raw, err := a.client.Request("tools.list", params)
 	if err != nil {
 		return nil, err
@@ -7517,18 +9028,46 @@ func (a *ServerToolsApi) List(ctx context.Context, params *ToolsListRequest) (*T
 	return &result, nil
 }
 
-// ServerRpc provides typed server-scoped RPC methods.
-type ServerRpc struct {
-	// Reuse a single struct instead of allocating one for each service on the heap.
-	common serverApi
+type ServerUserAPI serverAPI
 
-	Account   *ServerAccountApi
-	Mcp       *ServerMcpApi
-	Models    *ServerModelsApi
-	SessionFs *ServerSessionFsApi
-	Sessions  *ServerSessionsApi
-	Skills    *ServerSkillsApi
-	Tools     *ServerToolsApi
+type ServerUserSettingsAPI serverAPI
+
+// Reload drops this runtime process's in-memory user settings cache so the next settings
+// read observes disk.
+//
+// RPC method: user.settings.reload.
+func (a *ServerUserSettingsAPI) Reload(ctx context.Context) (*UserSettingsReloadResult, error) {
+	raw, err := a.client.Request("user.settings.reload", nil)
+	if err != nil {
+		return nil, err
+	}
+	var result UserSettingsReloadResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (s *ServerUserAPI) Settings() *ServerUserSettingsAPI {
+	return (*ServerUserSettingsAPI)(s)
+}
+
+// ServerRPC provides typed server-scoped RPC methods.
+type ServerRPC struct {
+	// Reuse a single struct instead of allocating one for each service on the heap.
+	common serverAPI
+
+	Account       *ServerAccountAPI
+	AgentRegistry *ServerAgentRegistryAPI
+	MCP           *ServerMCPAPI
+	Models        *ServerModelsAPI
+	Runtime       *ServerRuntimeAPI
+	Secrets       *ServerSecretsAPI
+	SessionFS     *ServerSessionFSAPI
+	Sessions      *ServerSessionsAPI
+	Skills        *ServerSkillsAPI
+	Tools         *ServerToolsAPI
+	User          *ServerUserAPI
 }
 
 // Ping checks server responsiveness and returns protocol information.
@@ -7539,7 +9078,7 @@ type ServerRpc struct {
 //
 // Returns: Server liveness response, including the echoed message, current server
 // timestamp, and protocol version.
-func (a *ServerRpc) Ping(ctx context.Context, params *PingRequest) (*PingResult, error) {
+func (a *ServerRPC) Ping(ctx context.Context, params *PingRequest) (*PingResult, error) {
 	raw, err := a.common.client.Request("ping", params)
 	if err != nil {
 		return nil, err
@@ -7551,28 +9090,32 @@ func (a *ServerRpc) Ping(ctx context.Context, params *PingRequest) (*PingResult,
 	return &result, nil
 }
 
-func NewServerRpc(client *jsonrpc2.Client) *ServerRpc {
-	r := &ServerRpc{}
-	r.common = serverApi{client: client}
-	r.Account = (*ServerAccountApi)(&r.common)
-	r.Mcp = (*ServerMcpApi)(&r.common)
-	r.Models = (*ServerModelsApi)(&r.common)
-	r.SessionFs = (*ServerSessionFsApi)(&r.common)
-	r.Sessions = (*ServerSessionsApi)(&r.common)
-	r.Skills = (*ServerSkillsApi)(&r.common)
-	r.Tools = (*ServerToolsApi)(&r.common)
+func NewServerRPC(client *jsonrpc2.Client) *ServerRPC {
+	r := &ServerRPC{}
+	r.common = serverAPI{client: client}
+	r.Account = (*ServerAccountAPI)(&r.common)
+	r.AgentRegistry = (*ServerAgentRegistryAPI)(&r.common)
+	r.MCP = (*ServerMCPAPI)(&r.common)
+	r.Models = (*ServerModelsAPI)(&r.common)
+	r.Runtime = (*ServerRuntimeAPI)(&r.common)
+	r.Secrets = (*ServerSecretsAPI)(&r.common)
+	r.SessionFS = (*ServerSessionFSAPI)(&r.common)
+	r.Sessions = (*ServerSessionsAPI)(&r.common)
+	r.Skills = (*ServerSkillsAPI)(&r.common)
+	r.Tools = (*ServerToolsAPI)(&r.common)
+	r.User = (*ServerUserAPI)(&r.common)
 	return r
 }
 
-type internalServerApi struct {
+type internalServerAPI struct {
 	client *jsonrpc2.Client
 }
 
-// InternalServerRpc provides internal SDK server-scoped RPC methods (handshake helpers
+// InternalServerRPC provides internal SDK server-scoped RPC methods (handshake helpers
 // etc.). Not part of the public API.
-type InternalServerRpc struct {
+type InternalServerRPC struct {
 	// Reuse a single struct instead of allocating one for each service on the heap.
-	common internalServerApi
+	common internalServerAPI
 }
 
 // Connect performs the SDK server connection handshake and validates the optional
@@ -7586,7 +9129,7 @@ type InternalServerRpc struct {
 // success.
 // Internal: Connect is part of the SDK's internal handshake/plumbing; external callers
 // should not use it.
-func (a *InternalServerRpc) Connect(ctx context.Context, params *ConnectRequest) (*ConnectResult, error) {
+func (a *InternalServerRPC) Connect(ctx context.Context, params *ConnectRequest) (*ConnectResult, error) {
 	raw, err := a.common.client.Request("connect", params)
 	if err != nil {
 		return nil, err
@@ -7598,24 +9141,24 @@ func (a *InternalServerRpc) Connect(ctx context.Context, params *ConnectRequest)
 	return &result, nil
 }
 
-func NewInternalServerRpc(client *jsonrpc2.Client) *InternalServerRpc {
-	r := &InternalServerRpc{}
-	r.common = internalServerApi{client: client}
+func NewInternalServerRPC(client *jsonrpc2.Client) *InternalServerRPC {
+	r := &InternalServerRPC{}
+	r.common = internalServerAPI{client: client}
 	return r
 }
 
-type sessionApi struct {
+type sessionAPI struct {
 	client    *jsonrpc2.Client
 	sessionID string
 }
 
-// Experimental: AgentApi contains experimental APIs that may change or be removed.
-type AgentApi sessionApi
+// Experimental: AgentAPI contains experimental APIs that may change or be removed.
+type AgentAPI sessionAPI
 
 // Deselect clears the selected custom agent and returns the session to the default agent.
 //
 // RPC method: session.agent.deselect.
-func (a *AgentApi) Deselect(ctx context.Context) (*SessionAgentDeselectResult, error) {
+func (a *AgentAPI) Deselect(ctx context.Context) (*SessionAgentDeselectResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.agent.deselect", req)
 	if err != nil {
@@ -7633,7 +9176,7 @@ func (a *AgentApi) Deselect(ctx context.Context) (*SessionAgentDeselectResult, e
 // RPC method: session.agent.getCurrent.
 //
 // Returns: The currently selected custom agent, or null when using the default agent.
-func (a *AgentApi) GetCurrent(ctx context.Context) (*AgentGetCurrentResult, error) {
+func (a *AgentAPI) GetCurrent(ctx context.Context) (*AgentGetCurrentResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.agent.getCurrent", req)
 	if err != nil {
@@ -7651,7 +9194,7 @@ func (a *AgentApi) GetCurrent(ctx context.Context) (*AgentGetCurrentResult, erro
 // RPC method: session.agent.list.
 //
 // Returns: Custom agents available to the session.
-func (a *AgentApi) List(ctx context.Context) (*AgentList, error) {
+func (a *AgentAPI) List(ctx context.Context) (*AgentList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.agent.list", req)
 	if err != nil {
@@ -7669,7 +9212,7 @@ func (a *AgentApi) List(ctx context.Context) (*AgentList, error) {
 // RPC method: session.agent.reload.
 //
 // Returns: Custom agents available to the session after reloading definitions from disk.
-func (a *AgentApi) Reload(ctx context.Context) (*AgentReloadResult, error) {
+func (a *AgentAPI) Reload(ctx context.Context) (*AgentReloadResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.agent.reload", req)
 	if err != nil {
@@ -7689,7 +9232,7 @@ func (a *AgentApi) Reload(ctx context.Context) (*AgentReloadResult, error) {
 // Parameters: Name of the custom agent to select for subsequent turns.
 //
 // Returns: The newly selected custom agent.
-func (a *AgentApi) Select(ctx context.Context, params *AgentSelectRequest) (*AgentSelectResult, error) {
+func (a *AgentAPI) Select(ctx context.Context, params *AgentSelectRequest) (*AgentSelectResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["name"] = params.Name
@@ -7705,15 +9248,15 @@ func (a *AgentApi) Select(ctx context.Context, params *AgentSelectRequest) (*Age
 	return &result, nil
 }
 
-// Experimental: AuthApi contains experimental APIs that may change or be removed.
-type AuthApi sessionApi
+// Experimental: AuthAPI contains experimental APIs that may change or be removed.
+type AuthAPI sessionAPI
 
 // GetStatus gets authentication status and account metadata for the session.
 //
 // RPC method: session.auth.getStatus.
 //
 // Returns: Authentication status and account metadata for the session.
-func (a *AuthApi) GetStatus(ctx context.Context) (*SessionAuthStatus, error) {
+func (a *AuthAPI) GetStatus(ctx context.Context) (*SessionAuthStatus, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.auth.getStatus", req)
 	if err != nil {
@@ -7735,7 +9278,7 @@ func (a *AuthApi) GetStatus(ctx context.Context) (*SessionAuthStatus, error) {
 // unchanged.
 //
 // Returns: Indicates whether the credential update succeeded.
-func (a *AuthApi) SetCredentials(ctx context.Context, params *SessionSetCredentialsParams) (*SessionSetCredentialsResult, error) {
+func (a *AuthAPI) SetCredentials(ctx context.Context, params *SessionSetCredentialsParams) (*SessionSetCredentialsResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Credentials != nil {
@@ -7753,8 +9296,133 @@ func (a *AuthApi) SetCredentials(ctx context.Context, params *SessionSetCredenti
 	return &result, nil
 }
 
-// Experimental: CommandsApi contains experimental APIs that may change or be removed.
-type CommandsApi sessionApi
+// Experimental: CanvasAPI contains experimental APIs that may change or be removed.
+type CanvasAPI sessionAPI
+
+// Closes an open canvas instance.
+//
+// RPC method: session.canvas.close.
+//
+// Parameters: Canvas close parameters.
+func (a *CanvasAPI) Close(ctx context.Context, params *CanvasCloseRequest) (*SessionCanvasCloseResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["instanceId"] = params.InstanceID
+	}
+	raw, err := a.client.Request("session.canvas.close", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionCanvasCloseResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Lists canvases declared for the session.
+//
+// RPC method: session.canvas.list.
+//
+// Returns: Declared canvases available in this session.
+func (a *CanvasAPI) List(ctx context.Context) (*CanvasList, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.canvas.list", req)
+	if err != nil {
+		return nil, err
+	}
+	var result CanvasList
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListOpen lists currently open canvas instances for the live session.
+//
+// RPC method: session.canvas.listOpen.
+//
+// Returns: Live open-canvas snapshot.
+func (a *CanvasAPI) ListOpen(ctx context.Context) (*CanvasListOpenResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.canvas.listOpen", req)
+	if err != nil {
+		return nil, err
+	}
+	var result CanvasListOpenResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Opens or focuses a canvas instance.
+//
+// RPC method: session.canvas.open.
+//
+// Parameters: Canvas open parameters.
+//
+// Returns: Open canvas instance snapshot.
+func (a *CanvasAPI) Open(ctx context.Context, params *CanvasOpenRequest) (*OpenCanvasInstance, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["canvasId"] = params.CanvasID
+		if params.ExtensionID != nil {
+			req["extensionId"] = *params.ExtensionID
+		}
+		if params.Input != nil {
+			req["input"] = params.Input
+		}
+		req["instanceId"] = params.InstanceID
+	}
+	raw, err := a.client.Request("session.canvas.open", req)
+	if err != nil {
+		return nil, err
+	}
+	var result OpenCanvasInstance
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: CanvasActionAPI contains experimental APIs that may change or be removed.
+type CanvasActionAPI sessionAPI
+
+// Invokes an action on an open canvas instance.
+//
+// RPC method: session.canvas.action.invoke.
+//
+// Parameters: Canvas action invocation parameters.
+//
+// Returns: Canvas action invocation result.
+func (a *CanvasActionAPI) Invoke(ctx context.Context, params *CanvasActionInvokeRequest) (*CanvasActionInvokeResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["actionName"] = params.ActionName
+		if params.Input != nil {
+			req["input"] = params.Input
+		}
+		req["instanceId"] = params.InstanceID
+	}
+	raw, err := a.client.Request("session.canvas.action.invoke", req)
+	if err != nil {
+		return nil, err
+	}
+	var result CanvasActionInvokeResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: Action returns experimental APIs that may change or be removed.
+func (s *CanvasAPI) Action() *CanvasActionAPI {
+	return (*CanvasActionAPI)(s)
+}
+
+// Experimental: CommandsAPI contains experimental APIs that may change or be removed.
+type CommandsAPI sessionAPI
 
 // Enqueues a slash command for FIFO processing on the local session.
 //
@@ -7763,7 +9431,7 @@ type CommandsApi sessionApi
 // Parameters: Slash-prefixed command string to enqueue for FIFO processing.
 //
 // Returns: Indicates whether the command was accepted into the local execution queue.
-func (a *CommandsApi) Enqueue(ctx context.Context, params *EnqueueCommandParams) (*EnqueueCommandResult, error) {
+func (a *CommandsAPI) Enqueue(ctx context.Context, params *EnqueueCommandParams) (*EnqueueCommandResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["command"] = params.Command
@@ -7786,7 +9454,7 @@ func (a *CommandsApi) Enqueue(ctx context.Context, params *EnqueueCommandParams)
 // Parameters: Slash command name and argument string to execute synchronously.
 //
 // Returns: Error message produced while executing the command, if any.
-func (a *CommandsApi) Execute(ctx context.Context, params *ExecuteCommandParams) (*ExecuteCommandResult, error) {
+func (a *CommandsAPI) Execute(ctx context.Context, params *ExecuteCommandParams) (*ExecuteCommandResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["args"] = params.Args
@@ -7810,7 +9478,7 @@ func (a *CommandsApi) Execute(ctx context.Context, params *ExecuteCommandParams)
 // Parameters: Pending command request ID and an optional error if the client handler failed.
 //
 // Returns: Indicates whether the pending client-handled command was completed successfully.
-func (a *CommandsApi) HandlePendingCommand(ctx context.Context, params *CommandsHandlePendingCommandRequest) (*CommandsHandlePendingCommandResult, error) {
+func (a *CommandsAPI) HandlePendingCommand(ctx context.Context, params *CommandsHandlePendingCommandRequest) (*CommandsHandlePendingCommandResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Error != nil {
@@ -7837,7 +9505,7 @@ func (a *CommandsApi) HandlePendingCommand(ctx context.Context, params *Commands
 //
 // Returns: Result of invoking the slash command (text output, prompt to send to the agent,
 // or completion).
-func (a *CommandsApi) Invoke(ctx context.Context, params *CommandsInvokeRequest) (SlashCommandInvocationResult, error) {
+func (a *CommandsAPI) Invoke(ctx context.Context, params *CommandsInvokeRequest) (SlashCommandInvocationResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Input != nil {
@@ -7864,7 +9532,7 @@ func (a *CommandsApi) Invoke(ctx context.Context, params *CommandsInvokeRequest)
 //
 // Returns: Slash commands available in the session, after applying any include/exclude
 // filters.
-func (a *CommandsApi) List(ctx context.Context, params ...*CommandsListRequest) (*CommandList, error) {
+func (a *CommandsAPI) List(ctx context.Context, params ...*CommandsListRequest) (*CommandList, error) {
 	var requestParams *CommandsListRequest
 	if len(params) > 0 {
 		requestParams = params[0]
@@ -7901,7 +9569,7 @@ func (a *CommandsApi) List(ctx context.Context, params ...*CommandsListRequest) 
 // it (and whether to stop processing further queued commands).
 //
 // Returns: Indicates whether the queued-command response was matched to a pending request.
-func (a *CommandsApi) RespondToQueuedCommand(ctx context.Context, params *CommandsRespondToQueuedCommandRequest) (*CommandsRespondToQueuedCommandResult, error) {
+func (a *CommandsAPI) RespondToQueuedCommand(ctx context.Context, params *CommandsRespondToQueuedCommandRequest) (*CommandsRespondToQueuedCommandResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
@@ -7918,8 +9586,8 @@ func (a *CommandsApi) RespondToQueuedCommand(ctx context.Context, params *Comman
 	return &result, nil
 }
 
-// Experimental: EventLogApi contains experimental APIs that may change or be removed.
-type EventLogApi sessionApi
+// Experimental: EventLogAPI contains experimental APIs that may change or be removed.
+type EventLogAPI sessionAPI
 
 // Reads a batch of session events from a cursor, optionally waiting for new events.
 //
@@ -7930,7 +9598,7 @@ type EventLogApi sessionApi
 //
 // Returns: Batch of session events returned by a read, with cursor and continuation
 // metadata.
-func (a *EventLogApi) Read(ctx context.Context, params *EventLogReadRequest) (*EventsReadResult, error) {
+func (a *EventLogAPI) Read(ctx context.Context, params *EventLogReadRequest) (*EventsReadResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.AgentScope != nil {
@@ -7967,7 +9635,7 @@ func (a *EventLogApi) Read(ctx context.Context, params *EventLogReadRequest) (*E
 // Parameters: Event type to register consumer interest for, used by runtime gating logic.
 //
 // Returns: Opaque handle representing an event-type interest registration.
-func (a *EventLogApi) RegisterInterest(ctx context.Context, params *RegisterEventInterestParams) (*RegisterEventInterestResult, error) {
+func (a *EventLogAPI) RegisterInterest(ctx context.Context, params *RegisterEventInterestParams) (*RegisterEventInterestResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["eventType"] = params.EventType
@@ -7990,7 +9658,7 @@ func (a *EventLogApi) RegisterInterest(ctx context.Context, params *RegisterEven
 // Parameters: Opaque handle previously returned by `registerInterest` to release.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *EventLogApi) ReleaseInterest(ctx context.Context, params *ReleaseEventInterestParams) (*EventLogReleaseInterestResult, error) {
+func (a *EventLogAPI) ReleaseInterest(ctx context.Context, params *ReleaseEventInterestParams) (*EventLogReleaseInterestResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["handle"] = params.Handle
@@ -8014,7 +9682,7 @@ func (a *EventLogApi) ReleaseInterest(ctx context.Context, params *ReleaseEventI
 // a consumer wants to subscribe to live events going forward without first paginating
 // through the entire persisted history (which would happen if `read` were called without a
 // cursor on a long-lived session).
-func (a *EventLogApi) Tail(ctx context.Context) (*EventLogTailResult, error) {
+func (a *EventLogAPI) Tail(ctx context.Context) (*EventLogTailResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.eventLog.tail", req)
 	if err != nil {
@@ -8027,15 +9695,15 @@ func (a *EventLogApi) Tail(ctx context.Context) (*EventLogTailResult, error) {
 	return &result, nil
 }
 
-// Experimental: ExtensionsApi contains experimental APIs that may change or be removed.
-type ExtensionsApi sessionApi
+// Experimental: ExtensionsAPI contains experimental APIs that may change or be removed.
+type ExtensionsAPI sessionAPI
 
 // Disables an extension for the session.
 //
 // RPC method: session.extensions.disable.
 //
 // Parameters: Source-qualified extension identifier to disable for the session.
-func (a *ExtensionsApi) Disable(ctx context.Context, params *ExtensionsDisableRequest) (*SessionExtensionsDisableResult, error) {
+func (a *ExtensionsAPI) Disable(ctx context.Context, params *ExtensionsDisableRequest) (*SessionExtensionsDisableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["id"] = params.ID
@@ -8056,7 +9724,7 @@ func (a *ExtensionsApi) Disable(ctx context.Context, params *ExtensionsDisableRe
 // RPC method: session.extensions.enable.
 //
 // Parameters: Source-qualified extension identifier to enable for the session.
-func (a *ExtensionsApi) Enable(ctx context.Context, params *ExtensionsEnableRequest) (*SessionExtensionsEnableResult, error) {
+func (a *ExtensionsAPI) Enable(ctx context.Context, params *ExtensionsEnableRequest) (*SessionExtensionsEnableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["id"] = params.ID
@@ -8077,7 +9745,7 @@ func (a *ExtensionsApi) Enable(ctx context.Context, params *ExtensionsEnableRequ
 // RPC method: session.extensions.list.
 //
 // Returns: Extensions discovered for the session, with their current status.
-func (a *ExtensionsApi) List(ctx context.Context) (*ExtensionList, error) {
+func (a *ExtensionsAPI) List(ctx context.Context) (*ExtensionList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.extensions.list", req)
 	if err != nil {
@@ -8093,7 +9761,7 @@ func (a *ExtensionsApi) List(ctx context.Context) (*ExtensionList, error) {
 // Reloads extension definitions and processes for the session.
 //
 // RPC method: session.extensions.reload.
-func (a *ExtensionsApi) Reload(ctx context.Context) (*SessionExtensionsReloadResult, error) {
+func (a *ExtensionsAPI) Reload(ctx context.Context) (*SessionExtensionsReloadResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.extensions.reload", req)
 	if err != nil {
@@ -8106,8 +9774,34 @@ func (a *ExtensionsApi) Reload(ctx context.Context) (*SessionExtensionsReloadRes
 	return &result, nil
 }
 
-// Experimental: FleetApi contains experimental APIs that may change or be removed.
-type FleetApi sessionApi
+// SendAttachmentsToMessage push attachments into the next user-message turn from an
+// extension. The host should surface them as composer pills and forward them via the next
+// session.send call. Callable only by extension-owned connections.
+//
+// RPC method: session.extensions.sendAttachmentsToMessage.
+//
+// Parameters: Parameters for session.extensions.sendAttachmentsToMessage.
+func (a *ExtensionsAPI) SendAttachmentsToMessage(ctx context.Context, params *SendAttachmentsToMessageParams) (*SessionExtensionsSendAttachmentsToMessageResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["attachments"] = params.Attachments
+		if params.InstanceID != nil {
+			req["instanceId"] = *params.InstanceID
+		}
+	}
+	raw, err := a.client.Request("session.extensions.sendAttachmentsToMessage", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionExtensionsSendAttachmentsToMessageResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: FleetAPI contains experimental APIs that may change or be removed.
+type FleetAPI sessionAPI
 
 // Starts fleet mode by submitting the fleet orchestration prompt to the session.
 //
@@ -8116,7 +9810,7 @@ type FleetApi sessionApi
 // Parameters: Optional user prompt to combine with the fleet orchestration instructions.
 //
 // Returns: Indicates whether fleet mode was successfully activated.
-func (a *FleetApi) Start(ctx context.Context, params *FleetStartRequest) (*FleetStartResult, error) {
+func (a *FleetAPI) Start(ctx context.Context, params *FleetStartRequest) (*FleetStartResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Prompt != nil {
@@ -8134,15 +9828,15 @@ func (a *FleetApi) Start(ctx context.Context, params *FleetStartRequest) (*Fleet
 	return &result, nil
 }
 
-// Experimental: HistoryApi contains experimental APIs that may change or be removed.
-type HistoryApi sessionApi
+// Experimental: HistoryAPI contains experimental APIs that may change or be removed.
+type HistoryAPI sessionAPI
 
 // AbortManualCompaction aborts any in-progress manual compaction on a local session.
 //
 // RPC method: session.history.abortManualCompaction.
 //
 // Returns: Indicates whether an in-progress manual compaction was aborted.
-func (a *HistoryApi) AbortManualCompaction(ctx context.Context) (*HistoryAbortManualCompactionResult, error) {
+func (a *HistoryAPI) AbortManualCompaction(ctx context.Context) (*HistoryAbortManualCompactionResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.history.abortManualCompaction", req)
 	if err != nil {
@@ -8161,7 +9855,7 @@ func (a *HistoryApi) AbortManualCompaction(ctx context.Context) (*HistoryAbortMa
 // RPC method: session.history.cancelBackgroundCompaction.
 //
 // Returns: Indicates whether an in-progress background compaction was cancelled.
-func (a *HistoryApi) CancelBackgroundCompaction(ctx context.Context) (*HistoryCancelBackgroundCompactionResult, error) {
+func (a *HistoryAPI) CancelBackgroundCompaction(ctx context.Context) (*HistoryCancelBackgroundCompactionResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.history.cancelBackgroundCompaction", req)
 	if err != nil {
@@ -8178,10 +9872,21 @@ func (a *HistoryApi) CancelBackgroundCompaction(ctx context.Context) (*HistoryCa
 //
 // RPC method: session.history.compact.
 //
+// Parameters: Optional compaction parameters.
+//
 // Returns: Compaction outcome with the number of tokens and messages removed, summary text,
 // and the resulting context window breakdown.
-func (a *HistoryApi) Compact(ctx context.Context) (*HistoryCompactResult, error) {
+func (a *HistoryAPI) Compact(ctx context.Context, params ...*HistoryCompactRequest) (*HistoryCompactResult, error) {
+	var requestParams *HistoryCompactRequest
+	if len(params) > 0 {
+		requestParams = params[0]
+	}
 	req := map[string]any{"sessionId": a.sessionID}
+	if requestParams != nil {
+		if requestParams.CustomInstructions != nil {
+			req["customInstructions"] = *requestParams.CustomInstructions
+		}
+	}
 	raw, err := a.client.Request("session.history.compact", req)
 	if err != nil {
 		return nil, err
@@ -8199,7 +9904,7 @@ func (a *HistoryApi) Compact(ctx context.Context) (*HistoryCompactResult, error)
 // RPC method: session.history.summarizeForHandoff.
 //
 // Returns: Markdown summary of the conversation context (empty when not available).
-func (a *HistoryApi) SummarizeForHandoff(ctx context.Context) (*HistorySummarizeForHandoffResult, error) {
+func (a *HistoryAPI) SummarizeForHandoff(ctx context.Context) (*HistorySummarizeForHandoffResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.history.summarizeForHandoff", req)
 	if err != nil {
@@ -8220,7 +9925,7 @@ func (a *HistoryApi) SummarizeForHandoff(ctx context.Context) (*HistorySummarize
 // removed.
 //
 // Returns: Number of events that were removed by the truncation.
-func (a *HistoryApi) Truncate(ctx context.Context, params *HistoryTruncateRequest) (*HistoryTruncateResult, error) {
+func (a *HistoryAPI) Truncate(ctx context.Context, params *HistoryTruncateRequest) (*HistoryTruncateResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["eventId"] = params.EventID
@@ -8236,15 +9941,15 @@ func (a *HistoryApi) Truncate(ctx context.Context, params *HistoryTruncateReques
 	return &result, nil
 }
 
-// Experimental: InstructionsApi contains experimental APIs that may change or be removed.
-type InstructionsApi sessionApi
+// Experimental: InstructionsAPI contains experimental APIs that may change or be removed.
+type InstructionsAPI sessionAPI
 
 // GetSources gets instruction sources loaded for the session.
 //
 // RPC method: session.instructions.getSources.
 //
 // Returns: Instruction sources loaded for the session, in merge order.
-func (a *InstructionsApi) GetSources(ctx context.Context) (*InstructionsGetSourcesResult, error) {
+func (a *InstructionsAPI) GetSources(ctx context.Context) (*InstructionsGetSourcesResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.instructions.getSources", req)
 	if err != nil {
@@ -8257,15 +9962,15 @@ func (a *InstructionsApi) GetSources(ctx context.Context) (*InstructionsGetSourc
 	return &result, nil
 }
 
-// Experimental: LspApi contains experimental APIs that may change or be removed.
-type LspApi sessionApi
+// Experimental: LspAPI contains experimental APIs that may change or be removed.
+type LspAPI sessionAPI
 
 // Initialize loads the merged LSP configuration set for the session's working directory.
 //
 // RPC method: session.lsp.initialize.
 //
 // Parameters: Parameters for (re)loading the merged LSP configuration set.
-func (a *LspApi) Initialize(ctx context.Context, params *LspInitializeRequest) (*SessionLspInitializeResult, error) {
+func (a *LspAPI) Initialize(ctx context.Context, params *LspInitializeRequest) (*SessionLspInitializeResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Force != nil {
@@ -8289,8 +9994,8 @@ func (a *LspApi) Initialize(ctx context.Context, params *LspInitializeRequest) (
 	return &result, nil
 }
 
-// Experimental: McpApi contains experimental APIs that may change or be removed.
-type McpApi sessionApi
+// Experimental: MCPAPI contains experimental APIs that may change or be removed.
+type MCPAPI sessionAPI
 
 // CancelSamplingExecution cancels an in-flight MCP sampling execution by request ID.
 //
@@ -8300,7 +10005,7 @@ type McpApi sessionApi
 //
 // Returns: Indicates whether an in-flight sampling execution with the given requestId was
 // found and cancelled.
-func (a *McpApi) CancelSamplingExecution(ctx context.Context, params *McpCancelSamplingExecutionParams) (*McpCancelSamplingExecutionResult, error) {
+func (a *MCPAPI) CancelSamplingExecution(ctx context.Context, params *MCPCancelSamplingExecutionParams) (*MCPCancelSamplingExecutionResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
@@ -8309,7 +10014,7 @@ func (a *McpApi) CancelSamplingExecution(ctx context.Context, params *McpCancelS
 	if err != nil {
 		return nil, err
 	}
-	var result McpCancelSamplingExecutionResult
+	var result MCPCancelSamplingExecutionResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8321,7 +10026,7 @@ func (a *McpApi) CancelSamplingExecution(ctx context.Context, params *McpCancelS
 // RPC method: session.mcp.disable.
 //
 // Parameters: Name of the MCP server to disable for the session.
-func (a *McpApi) Disable(ctx context.Context, params *McpDisableRequest) (*SessionMcpDisableResult, error) {
+func (a *MCPAPI) Disable(ctx context.Context, params *MCPDisableRequest) (*SessionMCPDisableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["serverName"] = params.ServerName
@@ -8330,7 +10035,7 @@ func (a *McpApi) Disable(ctx context.Context, params *McpDisableRequest) (*Sessi
 	if err != nil {
 		return nil, err
 	}
-	var result SessionMcpDisableResult
+	var result SessionMCPDisableResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8342,7 +10047,7 @@ func (a *McpApi) Disable(ctx context.Context, params *McpDisableRequest) (*Sessi
 // RPC method: session.mcp.enable.
 //
 // Parameters: Name of the MCP server to enable for the session.
-func (a *McpApi) Enable(ctx context.Context, params *McpEnableRequest) (*SessionMcpEnableResult, error) {
+func (a *MCPAPI) Enable(ctx context.Context, params *MCPEnableRequest) (*SessionMCPEnableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["serverName"] = params.ServerName
@@ -8351,7 +10056,7 @@ func (a *McpApi) Enable(ctx context.Context, params *McpEnableRequest) (*Session
 	if err != nil {
 		return nil, err
 	}
-	var result SessionMcpEnableResult
+	var result SessionMCPEnableResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8367,10 +10072,10 @@ func (a *McpApi) Enable(ctx context.Context, params *McpEnableRequest) (*Session
 //
 // Returns: Outcome of an MCP sampling execution: success result, failure error, or
 // cancellation.
-func (a *McpApi) ExecuteSampling(ctx context.Context, params *McpExecuteSamplingParams) (*McpSamplingExecutionResult, error) {
+func (a *MCPAPI) ExecuteSampling(ctx context.Context, params *MCPExecuteSamplingParams) (*MCPSamplingExecutionResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
-		req["mcpRequestId"] = params.McpRequestID
+		req["mcpRequestId"] = params.MCPRequestID
 		req["request"] = params.Request
 		req["requestId"] = params.RequestID
 		req["serverName"] = params.ServerName
@@ -8379,7 +10084,7 @@ func (a *McpApi) ExecuteSampling(ctx context.Context, params *McpExecuteSampling
 	if err != nil {
 		return nil, err
 	}
-	var result McpSamplingExecutionResult
+	var result MCPSamplingExecutionResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8391,13 +10096,13 @@ func (a *McpApi) ExecuteSampling(ctx context.Context, params *McpExecuteSampling
 // RPC method: session.mcp.list.
 //
 // Returns: MCP servers configured for the session, with their connection status.
-func (a *McpApi) List(ctx context.Context) (*McpServerList, error) {
+func (a *MCPAPI) List(ctx context.Context) (*MCPServerList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.mcp.list", req)
 	if err != nil {
 		return nil, err
 	}
-	var result McpServerList
+	var result MCPServerList
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8407,13 +10112,13 @@ func (a *McpApi) List(ctx context.Context) (*McpServerList, error) {
 // Reloads MCP server connections for the session.
 //
 // RPC method: session.mcp.reload.
-func (a *McpApi) Reload(ctx context.Context) (*SessionMcpReloadResult, error) {
+func (a *MCPAPI) Reload(ctx context.Context) (*SessionMCPReloadResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.mcp.reload", req)
 	if err != nil {
 		return nil, err
 	}
-	var result SessionMcpReloadResult
+	var result SessionMCPReloadResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8426,13 +10131,13 @@ func (a *McpApi) Reload(ctx context.Context) (*SessionMcpReloadResult, error) {
 //
 // Returns: Indicates whether the auto-managed `github` MCP server was removed (false when
 // nothing to remove).
-func (a *McpApi) RemoveGitHub(ctx context.Context) (*McpRemoveGitHubResult, error) {
+func (a *MCPAPI) RemoveGitHub(ctx context.Context) (*MCPRemoveGitHubResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.mcp.removeGitHub", req)
 	if err != nil {
 		return nil, err
 	}
-	var result McpRemoveGitHubResult
+	var result MCPRemoveGitHubResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8448,7 +10153,7 @@ func (a *McpApi) RemoveGitHub(ctx context.Context) (*McpRemoveGitHubResult, erro
 // `indirect`).
 //
 // Returns: Env-value mode recorded on the session after the update.
-func (a *McpApi) SetEnvValueMode(ctx context.Context, params *McpSetEnvValueModeParams) (*McpSetEnvValueModeResult, error) {
+func (a *MCPAPI) SetEnvValueMode(ctx context.Context, params *MCPSetEnvValueModeParams) (*MCPSetEnvValueModeResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["mode"] = params.Mode
@@ -8457,15 +10162,168 @@ func (a *McpApi) SetEnvValueMode(ctx context.Context, params *McpSetEnvValueMode
 	if err != nil {
 		return nil, err
 	}
-	var result McpSetEnvValueModeResult
+	var result MCPSetEnvValueModeResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-// Experimental: McpOauthApi contains experimental APIs that may change or be removed.
-type McpOauthApi sessionApi
+// Experimental: MCPAppsAPI contains experimental APIs that may change or be removed.
+type MCPAppsAPI sessionAPI
+
+// CallTool call an MCP tool from an MCP App view (SEP-1865). Enforces the visibility check
+// that prevents an app iframe from invoking model-only tools. Returns the standard MCP
+// `CallToolResult`.
+//
+// RPC method: session.mcp.apps.callTool.
+//
+// Parameters: MCP server, tool name, and arguments to invoke from an MCP App view.
+//
+// Returns: Standard MCP CallToolResult
+func (a *MCPAppsAPI) CallTool(ctx context.Context, params *MCPAppsCallToolRequest) (*SessionMCPAppsCallToolResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		if params.Arguments != nil {
+			req["arguments"] = params.Arguments
+		}
+		req["originServerName"] = params.OriginServerName
+		req["serverName"] = params.ServerName
+		req["toolName"] = params.ToolName
+	}
+	raw, err := a.client.Request("session.mcp.apps.callTool", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionMCPAppsCallToolResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Diagnose MCP Apps wiring for a specific MCP server. Reports the session capability,
+// feature-flag state, advertised extension, and how many tools have `_meta.ui` populated.
+//
+// RPC method: session.mcp.apps.diagnose.
+//
+// Parameters: MCP server to diagnose MCP Apps wiring for.
+//
+// Returns: Diagnostic snapshot of MCP Apps wiring for the named server.
+func (a *MCPAppsAPI) Diagnose(ctx context.Context, params *MCPAppsDiagnoseRequest) (*MCPAppsDiagnoseResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["serverName"] = params.ServerName
+	}
+	raw, err := a.client.Request("session.mcp.apps.diagnose", req)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPAppsDiagnoseResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetHostContext read the current host context advertised to MCP App guests.
+//
+// RPC method: session.mcp.apps.getHostContext.
+//
+// Returns: Current host context advertised to MCP App guests.
+func (a *MCPAppsAPI) GetHostContext(ctx context.Context) (*MCPAppsHostContext, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.mcp.apps.getHostContext", req)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPAppsHostContext
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ListTools list tools that an MCP App view is allowed to call (SEP-1865 visibility
+// filter). Returns tools whose `_meta.ui.visibility` is unset (default `["model","app"]`)
+// or includes `"app"`.
+//
+// RPC method: session.mcp.apps.listTools.
+//
+// Parameters: MCP server to list app-callable tools for.
+//
+// Returns: App-callable tools from the named MCP server.
+func (a *MCPAppsAPI) ListTools(ctx context.Context, params *MCPAppsListToolsRequest) (*MCPAppsListToolsResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["originServerName"] = params.OriginServerName
+		req["serverName"] = params.ServerName
+	}
+	raw, err := a.client.Request("session.mcp.apps.listTools", req)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPAppsListToolsResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ReadResource fetch an MCP resource (typically a `ui://` MCP App bundle, per SEP-1865)
+// from a connected server. Requires the `mcp-apps` session capability.
+//
+// RPC method: session.mcp.apps.readResource.
+//
+// Parameters: MCP server and resource URI to fetch.
+//
+// Returns: Resource contents returned by the MCP server.
+func (a *MCPAppsAPI) ReadResource(ctx context.Context, params *MCPAppsReadResourceRequest) (*MCPAppsReadResourceResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["serverName"] = params.ServerName
+		req["uri"] = params.URI
+	}
+	raw, err := a.client.Request("session.mcp.apps.readResource", req)
+	if err != nil {
+		return nil, err
+	}
+	var result MCPAppsReadResourceResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// SetHostContext replace the host context returned to MCP App guests on `ui/initialize`.
+// Hosts use this to advertise theme, locale, or other metadata to the guest UI.
+//
+// RPC method: session.mcp.apps.setHostContext.
+//
+// Parameters: Host context to advertise to MCP App guests.
+func (a *MCPAppsAPI) SetHostContext(ctx context.Context, params *MCPAppsSetHostContextRequest) (*SessionMCPAppsSetHostContextResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["context"] = params.Context
+	}
+	raw, err := a.client.Request("session.mcp.apps.setHostContext", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionMCPAppsSetHostContextResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Experimental: Apps returns experimental APIs that may change or be removed.
+func (s *MCPAPI) Apps() *MCPAppsAPI {
+	return (*MCPAppsAPI)(s)
+}
+
+// Experimental: MCPOauthAPI contains experimental APIs that may change or be removed.
+type MCPOauthAPI sessionAPI
 
 // Login starts OAuth authentication for a remote MCP server.
 //
@@ -8476,7 +10334,7 @@ type McpOauthApi sessionApi
 //
 // Returns: OAuth authorization URL the caller should open, or empty when cached tokens
 // already authenticated the server.
-func (a *McpOauthApi) Login(ctx context.Context, params *McpOauthLoginRequest) (*McpOauthLoginResult, error) {
+func (a *MCPOauthAPI) Login(ctx context.Context, params *MCPOauthLoginRequest) (*MCPOauthLoginResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.CallbackSuccessMessage != nil {
@@ -8494,7 +10352,7 @@ func (a *McpOauthApi) Login(ctx context.Context, params *McpOauthLoginRequest) (
 	if err != nil {
 		return nil, err
 	}
-	var result McpOauthLoginResult
+	var result MCPOauthLoginResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8502,12 +10360,12 @@ func (a *McpOauthApi) Login(ctx context.Context, params *McpOauthLoginRequest) (
 }
 
 // Experimental: Oauth returns experimental APIs that may change or be removed.
-func (s *McpApi) Oauth() *McpOauthApi {
-	return (*McpOauthApi)(s)
+func (s *MCPAPI) Oauth() *MCPOauthAPI {
+	return (*MCPOauthAPI)(s)
 }
 
-// Experimental: MetadataApi contains experimental APIs that may change or be removed.
-type MetadataApi sessionApi
+// Experimental: MetadataAPI contains experimental APIs that may change or be removed.
+type MetadataAPI sessionAPI
 
 // ContextInfo returns the token breakdown for the session's current context window for a
 // given model.
@@ -8518,7 +10376,7 @@ type MetadataApi sessionApi
 //
 // Returns: Token breakdown for the session's current context window, or null if
 // uninitialized.
-func (a *MetadataApi) ContextInfo(ctx context.Context, params *MetadataContextInfoRequest) (*MetadataContextInfoResult, error) {
+func (a *MetadataAPI) ContextInfo(ctx context.Context, params *MetadataContextInfoRequest) (*MetadataContextInfoResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["outputTokenLimit"] = params.OutputTokenLimit
@@ -8545,7 +10403,7 @@ func (a *MetadataApi) ContextInfo(ctx context.Context, params *MetadataContextIn
 //
 // Returns: Indicates whether the local session is currently processing a turn or background
 // continuation.
-func (a *MetadataApi) IsProcessing(ctx context.Context) (*MetadataIsProcessingResult, error) {
+func (a *MetadataAPI) IsProcessing(ctx context.Context) (*MetadataIsProcessingResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.metadata.isProcessing", req)
 	if err != nil {
@@ -8569,7 +10427,7 @@ func (a *MetadataApi) IsProcessing(ctx context.Context) (*MetadataIsProcessingRe
 // token totals. Useful for hosts that want an initial estimate of context usage on session
 // resume, before the next agent turn fires `session.context_info_changed` events. Returns
 // zeros for an empty session.
-func (a *MetadataApi) RecomputeContextTokens(ctx context.Context, params *MetadataRecomputeContextTokensRequest) (*MetadataRecomputeContextTokensResult, error) {
+func (a *MetadataAPI) RecomputeContextTokens(ctx context.Context, params *MetadataRecomputeContextTokensRequest) (*MetadataRecomputeContextTokensResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["modelId"] = params.ModelID
@@ -8596,7 +10454,7 @@ func (a *MetadataApi) RecomputeContextTokens(ctx context.Context, params *Metada
 // `session.context_changed` event so consumers (telemetry, OTel tracker, ACP, the timeline
 // UI) can react. Use this when the host has detected a cwd/branch/repo change outside the
 // session's normal lifecycle (e.g., after a shell command in interactive mode).
-func (a *MetadataApi) RecordContextChange(ctx context.Context, params *MetadataRecordContextChangeRequest) (*MetadataRecordContextChangeResult, error) {
+func (a *MetadataAPI) RecordContextChange(ctx context.Context, params *MetadataRecordContextChangeRequest) (*MetadataRecordContextChangeResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["context"] = params.Context
@@ -8622,7 +10480,7 @@ func (a *MetadataApi) RecordContextChange(ctx context.Context, params *MetadataR
 // explicitly changes cwd (e.g., the `/cd` slash command). The host is responsible for
 // `process.chdir` and any related side-effects (file index, etc.); this method only updates
 // the session's own recorded path.
-func (a *MetadataApi) SetWorkingDirectory(ctx context.Context, params *MetadataSetWorkingDirectoryRequest) (*MetadataSetWorkingDirectoryResult, error) {
+func (a *MetadataAPI) SetWorkingDirectory(ctx context.Context, params *MetadataSetWorkingDirectoryRequest) (*MetadataSetWorkingDirectoryResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["workingDirectory"] = params.WorkingDirectory
@@ -8644,7 +10502,7 @@ func (a *MetadataApi) SetWorkingDirectory(ctx context.Context, params *MetadataS
 // RPC method: session.metadata.snapshot.
 //
 // Returns: Point-in-time snapshot of slow-changing session identifier and state fields
-func (a *MetadataApi) Snapshot(ctx context.Context) (*SessionMetadataSnapshot, error) {
+func (a *MetadataAPI) Snapshot(ctx context.Context) (*SessionMetadataSnapshot, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.metadata.snapshot", req)
 	if err != nil {
@@ -8657,15 +10515,15 @@ func (a *MetadataApi) Snapshot(ctx context.Context) (*SessionMetadataSnapshot, e
 	return &result, nil
 }
 
-// Experimental: ModeApi contains experimental APIs that may change or be removed.
-type ModeApi sessionApi
+// Experimental: ModeAPI contains experimental APIs that may change or be removed.
+type ModeAPI sessionAPI
 
 // Gets the current agent interaction mode.
 //
 // RPC method: session.mode.get.
 //
 // Returns: The session mode the agent is operating in
-func (a *ModeApi) Get(ctx context.Context) (*SessionMode, error) {
+func (a *ModeAPI) Get(ctx context.Context) (*SessionMode, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.mode.get", req)
 	if err != nil {
@@ -8683,7 +10541,7 @@ func (a *ModeApi) Get(ctx context.Context) (*SessionMode, error) {
 // RPC method: session.mode.set.
 //
 // Parameters: Agent interaction mode to apply to the session.
-func (a *ModeApi) Set(ctx context.Context, params *ModeSetRequest) (*SessionModeSetResult, error) {
+func (a *ModeAPI) Set(ctx context.Context, params *ModeSetRequest) (*SessionModeSetResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["mode"] = params.Mode
@@ -8699,21 +10557,54 @@ func (a *ModeApi) Set(ctx context.Context, params *ModeSetRequest) (*SessionMode
 	return &result, nil
 }
 
-// Experimental: ModelApi contains experimental APIs that may change or be removed.
-type ModelApi sessionApi
+// Experimental: ModelAPI contains experimental APIs that may change or be removed.
+type ModelAPI sessionAPI
 
 // GetCurrent gets the currently selected model for the session.
 //
 // RPC method: session.model.getCurrent.
 //
-// Returns: The currently selected model and reasoning effort for the session.
-func (a *ModelApi) GetCurrent(ctx context.Context) (*CurrentModel, error) {
+// Returns: The currently selected model, reasoning effort, and context tier for the
+// session. The context tier reflects `Session.getContextTier()`, restored from the session
+// journal on resume.
+func (a *ModelAPI) GetCurrent(ctx context.Context) (*CurrentModel, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.model.getCurrent", req)
 	if err != nil {
 		return nil, err
 	}
 	var result CurrentModel
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// Lists models available to this session using its own auth and integration context.
+// Connected hosts (CLI TUI, GitHub App) should call this through the session client so
+// remote sessions return the remote CLI's available models rather than the caller's.
+//
+// RPC method: session.model.list.
+//
+// Parameters: Optional listing options.
+//
+// Returns: The list of models available to this session.
+func (a *ModelAPI) List(ctx context.Context, params ...*ModelListRequest) (*SessionModelList, error) {
+	var requestParams *ModelListRequest
+	if len(params) > 0 {
+		requestParams = params[0]
+	}
+	req := map[string]any{"sessionId": a.sessionID}
+	if requestParams != nil {
+		if requestParams.SkipCache != nil {
+			req["skipCache"] = *requestParams.SkipCache
+		}
+	}
+	raw, err := a.client.Request("session.model.list", req)
+	if err != nil {
+		return nil, err
+	}
+	var result SessionModelList
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -8730,7 +10621,7 @@ func (a *ModelApi) GetCurrent(ctx context.Context) (*CurrentModel, error) {
 // Returns: Update the session's reasoning effort without changing the selected model. Use
 // `switchTo` instead when you also need to change the model. The runtime stores the effort
 // on the session and applies it to subsequent turns.
-func (a *ModelApi) SetReasoningEffort(ctx context.Context, params *ModelSetReasoningEffortRequest) (*ModelSetReasoningEffortResult, error) {
+func (a *ModelAPI) SetReasoningEffort(ctx context.Context, params *ModelSetReasoningEffortRequest) (*ModelSetReasoningEffortResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["reasoningEffort"] = params.ReasoningEffort
@@ -8750,13 +10641,16 @@ func (a *ModelApi) SetReasoningEffort(ctx context.Context, params *ModelSetReaso
 //
 // RPC method: session.model.switchTo.
 //
-// Parameters: Target model identifier and optional reasoning effort, summary, and
-// capability overrides.
+// Parameters: Target model identifier and optional reasoning effort, summary, capability
+// overrides, and context tier.
 //
 // Returns: The model identifier active on the session after the switch.
-func (a *ModelApi) SwitchTo(ctx context.Context, params *ModelSwitchToRequest) (*ModelSwitchToResult, error) {
+func (a *ModelAPI) SwitchTo(ctx context.Context, params *ModelSwitchToRequest) (*ModelSwitchToResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
+		if params.ContextTier != nil {
+			req["contextTier"] = *params.ContextTier
+		}
 		if params.ModelCapabilities != nil {
 			req["modelCapabilities"] = *params.ModelCapabilities
 		}
@@ -8779,15 +10673,15 @@ func (a *ModelApi) SwitchTo(ctx context.Context, params *ModelSwitchToRequest) (
 	return &result, nil
 }
 
-// Experimental: NameApi contains experimental APIs that may change or be removed.
-type NameApi sessionApi
+// Experimental: NameAPI contains experimental APIs that may change or be removed.
+type NameAPI sessionAPI
 
 // Gets the session's friendly name.
 //
 // RPC method: session.name.get.
 //
 // Returns: The session's friendly name, or null when not yet set.
-func (a *NameApi) Get(ctx context.Context) (*NameGetResult, error) {
+func (a *NameAPI) Get(ctx context.Context) (*NameGetResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.name.get", req)
 	if err != nil {
@@ -8805,7 +10699,7 @@ func (a *NameApi) Get(ctx context.Context) (*NameGetResult, error) {
 // RPC method: session.name.set.
 //
 // Parameters: New friendly name to apply to the session.
-func (a *NameApi) Set(ctx context.Context, params *NameSetRequest) (*SessionNameSetResult, error) {
+func (a *NameAPI) Set(ctx context.Context, params *NameSetRequest) (*SessionNameSetResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["name"] = params.Name
@@ -8830,7 +10724,7 @@ func (a *NameApi) Set(ctx context.Context, params *NameSetRequest) (*SessionName
 // user-set name exists.
 //
 // Returns: Indicates whether the auto-generated summary was applied as the session's name.
-func (a *NameApi) SetAuto(ctx context.Context, params *NameSetAutoRequest) (*NameSetAutoResult, error) {
+func (a *NameAPI) SetAuto(ctx context.Context, params *NameSetAutoRequest) (*NameSetAutoResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["summary"] = params.Summary
@@ -8846,8 +10740,8 @@ func (a *NameApi) SetAuto(ctx context.Context, params *NameSetAutoRequest) (*Nam
 	return &result, nil
 }
 
-// Experimental: OptionsApi contains experimental APIs that may change or be removed.
-type OptionsApi sessionApi
+// Experimental: OptionsAPI contains experimental APIs that may change or be removed.
+type OptionsAPI sessionAPI
 
 // Update patches the genuinely-mutable subset of session options.
 //
@@ -8856,7 +10750,7 @@ type OptionsApi sessionApi
 // Parameters: Patch of mutable session options to apply to the running session.
 //
 // Returns: Indicates whether the session options patch was applied successfully.
-func (a *OptionsApi) Update(ctx context.Context, params *SessionUpdateOptionsParams) (*SessionUpdateOptionsResult, error) {
+func (a *OptionsAPI) Update(ctx context.Context, params *SessionUpdateOptionsParams) (*SessionUpdateOptionsResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.AdditionalContentExclusionPolicies != nil {
@@ -8892,6 +10786,12 @@ func (a *OptionsApi) Update(ctx context.Context, params *SessionUpdateOptionsPar
 		if params.DisabledSkills != nil {
 			req["disabledSkills"] = params.DisabledSkills
 		}
+		if params.EnableFileHooks != nil {
+			req["enableFileHooks"] = *params.EnableFileHooks
+		}
+		if params.EnableHostGitOperations != nil {
+			req["enableHostGitOperations"] = *params.EnableHostGitOperations
+		}
 		if params.EnableOnDemandInstructionDiscovery != nil {
 			req["enableOnDemandInstructionDiscovery"] = *params.EnableOnDemandInstructionDiscovery
 		}
@@ -8900,6 +10800,12 @@ func (a *OptionsApi) Update(ctx context.Context, params *SessionUpdateOptionsPar
 		}
 		if params.EnableScriptSafety != nil {
 			req["enableScriptSafety"] = *params.EnableScriptSafety
+		}
+		if params.EnableSessionStore != nil {
+			req["enableSessionStore"] = *params.EnableSessionStore
+		}
+		if params.EnableSkills != nil {
+			req["enableSkills"] = *params.EnableSkills
 		}
 		if params.EnableStreaming != nil {
 			req["enableStreaming"] = *params.EnableStreaming
@@ -8937,6 +10843,9 @@ func (a *OptionsApi) Update(ctx context.Context, params *SessionUpdateOptionsPar
 		if params.Model != nil {
 			req["model"] = *params.Model
 		}
+		if params.OrganizationCustomInstructions != nil {
+			req["organizationCustomInstructions"] = *params.OrganizationCustomInstructions
+		}
 		if params.Provider != nil {
 			req["provider"] = params.Provider
 		}
@@ -8961,6 +10870,15 @@ func (a *OptionsApi) Update(ctx context.Context, params *SessionUpdateOptionsPar
 		if params.SkipCustomInstructions != nil {
 			req["skipCustomInstructions"] = *params.SkipCustomInstructions
 		}
+		if params.SkipEmbeddingRetrieval != nil {
+			req["skipEmbeddingRetrieval"] = *params.SkipEmbeddingRetrieval
+		}
+		if params.SuppressCustomAgentPrompt != nil {
+			req["suppressCustomAgentPrompt"] = *params.SuppressCustomAgentPrompt
+		}
+		if params.ToolFilterPrecedence != nil {
+			req["toolFilterPrecedence"] = *params.ToolFilterPrecedence
+		}
 		if params.TrajectoryFile != nil {
 			req["trajectoryFile"] = *params.TrajectoryFile
 		}
@@ -8979,8 +10897,8 @@ func (a *OptionsApi) Update(ctx context.Context, params *SessionUpdateOptionsPar
 	return &result, nil
 }
 
-// Experimental: PermissionsApi contains experimental APIs that may change or be removed.
-type PermissionsApi sessionApi
+// Experimental: PermissionsAPI contains experimental APIs that may change or be removed.
+type PermissionsAPI sessionAPI
 
 // Configure replaces selected permission policy fields (rules, paths, URLs, exclusions,
 // allow-all flags) on the session.
@@ -8991,7 +10909,7 @@ type PermissionsApi sessionApi
 // unchanged).
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsApi) Configure(ctx context.Context, params *PermissionsConfigureParams) (*PermissionsConfigureResult, error) {
+func (a *PermissionsAPI) Configure(ctx context.Context, params *PermissionsConfigureParams) (*PermissionsConfigureResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.AdditionalContentExclusionPolicies != nil {
@@ -9009,8 +10927,8 @@ func (a *PermissionsApi) Configure(ctx context.Context, params *PermissionsConfi
 		if params.Rules != nil {
 			req["rules"] = *params.Rules
 		}
-		if params.Urls != nil {
-			req["urls"] = *params.Urls
+		if params.URLs != nil {
+			req["urls"] = *params.URLs
 		}
 	}
 	raw, err := a.client.Request("session.permissions.configure", req)
@@ -9018,6 +10936,25 @@ func (a *PermissionsApi) Configure(ctx context.Context, params *PermissionsConfi
 		return nil, err
 	}
 	var result PermissionsConfigureResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetAllowAll returns whether full allow-all permissions are currently active for the
+// session.
+//
+// RPC method: session.permissions.getAllowAll.
+//
+// Returns: Current full allow-all permission state.
+func (a *PermissionsAPI) GetAllowAll(ctx context.Context) (*AllowAllPermissionState, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.permissions.getAllowAll", req)
+	if err != nil {
+		return nil, err
+	}
+	var result AllowAllPermissionState
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -9033,7 +10970,7 @@ func (a *PermissionsApi) Configure(ctx context.Context, params *PermissionsConfi
 //
 // Returns: Indicates whether the permission decision was applied; false when the request
 // was already resolved.
-func (a *PermissionsApi) HandlePendingPermissionRequest(ctx context.Context, params *PermissionDecisionRequest) (*PermissionRequestResult, error) {
+func (a *PermissionsAPI) HandlePendingPermissionRequest(ctx context.Context, params *PermissionDecisionRequest) (*PermissionRequestResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
@@ -9058,7 +10995,7 @@ func (a *PermissionsApi) HandlePendingPermissionRequest(ctx context.Context, par
 // permission rules.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsApi) ModifyRules(ctx context.Context, params *PermissionsModifyRulesParams) (*PermissionsModifyRulesResult, error) {
+func (a *PermissionsAPI) ModifyRules(ctx context.Context, params *PermissionsModifyRulesParams) (*PermissionsModifyRulesResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Add != nil {
@@ -9092,7 +11029,7 @@ func (a *PermissionsApi) ModifyRules(ctx context.Context, params *PermissionsMod
 // rendered.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsApi) NotifyPromptShown(ctx context.Context, params *PermissionPromptShownNotification) (*PermissionsNotifyPromptShownResult, error) {
+func (a *PermissionsAPI) NotifyPromptShown(ctx context.Context, params *PermissionPromptShownNotification) (*PermissionsNotifyPromptShownResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["message"] = params.Message
@@ -9114,7 +11051,7 @@ func (a *PermissionsApi) NotifyPromptShown(ctx context.Context, params *Permissi
 // RPC method: session.permissions.pendingRequests.
 //
 // Returns: List of pending permission requests reconstructed from event history.
-func (a *PermissionsApi) PendingRequests(ctx context.Context) (*PendingPermissionRequestList, error) {
+func (a *PermissionsAPI) PendingRequests(ctx context.Context) (*PendingPermissionRequestList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.permissions.pendingRequests", req)
 	if err != nil {
@@ -9132,13 +11069,45 @@ func (a *PermissionsApi) PendingRequests(ctx context.Context) (*PendingPermissio
 // RPC method: session.permissions.resetSessionApprovals.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsApi) ResetSessionApprovals(ctx context.Context) (*PermissionsResetSessionApprovalsResult, error) {
+func (a *PermissionsAPI) ResetSessionApprovals(ctx context.Context) (*PermissionsResetSessionApprovalsResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.permissions.resetSessionApprovals", req)
 	if err != nil {
 		return nil, err
 	}
 	var result PermissionsResetSessionApprovalsResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// SetAllowAll enables or disables full allow-all permissions (tools, paths, and URLs) for
+// the session. Used by attach-mode clients (e.g. LocalRpcSession's `/allow-all` forwarder)
+// to flip the target session's permission state. Unlike `setApproveAll`, this swaps in the
+// unrestricted path and URL managers and emits `session.permissions_changed` on transition.
+// The result returns the authoritative post-mutation state so callers can update their
+// local mirrors without racing the `session.permissions_changed` notification on the same
+// wire.
+//
+// RPC method: session.permissions.setAllowAll.
+//
+// Parameters: Whether to enable full allow-all permissions for the session.
+//
+// Returns: Indicates whether the operation succeeded and reports the post-mutation state.
+func (a *PermissionsAPI) SetAllowAll(ctx context.Context, params *PermissionsSetAllowAllRequest) (*AllowAllPermissionSetResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["enabled"] = params.Enabled
+		if params.Source != nil {
+			req["source"] = *params.Source
+		}
+	}
+	raw, err := a.client.Request("session.permissions.setAllowAll", req)
+	if err != nil {
+		return nil, err
+	}
+	var result AllowAllPermissionSetResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -9154,7 +11123,7 @@ func (a *PermissionsApi) ResetSessionApprovals(ctx context.Context) (*Permission
 // source.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsApi) SetApproveAll(ctx context.Context, params *PermissionsSetApproveAllRequest) (*PermissionsSetApproveAllResult, error) {
+func (a *PermissionsAPI) SetApproveAll(ctx context.Context, params *PermissionsSetApproveAllRequest) (*PermissionsSetApproveAllResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["enabled"] = params.Enabled
@@ -9181,7 +11150,7 @@ func (a *PermissionsApi) SetApproveAll(ctx context.Context, params *PermissionsS
 // this client.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsApi) SetRequired(ctx context.Context, params *PermissionsSetRequiredRequest) (*PermissionsSetRequiredResult, error) {
+func (a *PermissionsAPI) SetRequired(ctx context.Context, params *PermissionsSetRequiredRequest) (*PermissionsSetRequiredResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["required"] = params.Required
@@ -9197,9 +11166,9 @@ func (a *PermissionsApi) SetRequired(ctx context.Context, params *PermissionsSet
 	return &result, nil
 }
 
-// Experimental: PermissionsFolderTrustApi contains experimental APIs that may change or be
+// Experimental: PermissionsFolderTrustAPI contains experimental APIs that may change or be
 // removed.
-type PermissionsFolderTrustApi sessionApi
+type PermissionsFolderTrustAPI sessionAPI
 
 // AddTrusted adds a folder to the user's trusted folders list.
 //
@@ -9208,7 +11177,7 @@ type PermissionsFolderTrustApi sessionApi
 // Parameters: Folder path to add to trusted folders.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsFolderTrustApi) AddTrusted(ctx context.Context, params *FolderTrustAddParams) (*PermissionsFolderTrustAddTrustedResult, error) {
+func (a *PermissionsFolderTrustAPI) AddTrusted(ctx context.Context, params *FolderTrustAddParams) (*PermissionsFolderTrustAddTrustedResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
@@ -9231,7 +11200,7 @@ func (a *PermissionsFolderTrustApi) AddTrusted(ctx context.Context, params *Fold
 // Parameters: Folder path to check for trust.
 //
 // Returns: Folder trust check result.
-func (a *PermissionsFolderTrustApi) IsTrusted(ctx context.Context, params *FolderTrustCheckParams) (*FolderTrustCheckResult, error) {
+func (a *PermissionsFolderTrustAPI) IsTrusted(ctx context.Context, params *FolderTrustCheckParams) (*FolderTrustCheckResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
@@ -9248,13 +11217,13 @@ func (a *PermissionsFolderTrustApi) IsTrusted(ctx context.Context, params *Folde
 }
 
 // Experimental: FolderTrust returns experimental APIs that may change or be removed.
-func (s *PermissionsApi) FolderTrust() *PermissionsFolderTrustApi {
-	return (*PermissionsFolderTrustApi)(s)
+func (s *PermissionsAPI) FolderTrust() *PermissionsFolderTrustAPI {
+	return (*PermissionsFolderTrustAPI)(s)
 }
 
-// Experimental: PermissionsLocationsApi contains experimental APIs that may change or be
+// Experimental: PermissionsLocationsAPI contains experimental APIs that may change or be
 // removed.
-type PermissionsLocationsApi sessionApi
+type PermissionsLocationsAPI sessionAPI
 
 // AddToolApproval persists a tool approval for a permission location and applies its rules
 // to this session's live permission service.
@@ -9264,7 +11233,7 @@ type PermissionsLocationsApi sessionApi
 // Parameters: Location-scoped tool approval to persist.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsLocationsApi) AddToolApproval(ctx context.Context, params *PermissionLocationAddToolApprovalParams) (*PermissionsLocationsAddToolApprovalResult, error) {
+func (a *PermissionsLocationsAPI) AddToolApproval(ctx context.Context, params *PermissionLocationAddToolApprovalParams) (*PermissionsLocationsAddToolApprovalResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["approval"] = params.Approval
@@ -9289,7 +11258,7 @@ func (a *PermissionsLocationsApi) AddToolApproval(ctx context.Context, params *P
 // Parameters: Working directory to load persisted location permissions for.
 //
 // Returns: Summary of persisted location permissions applied to the session.
-func (a *PermissionsLocationsApi) Apply(ctx context.Context, params *PermissionLocationApplyParams) (*PermissionLocationApplyResult, error) {
+func (a *PermissionsLocationsAPI) Apply(ctx context.Context, params *PermissionLocationApplyParams) (*PermissionLocationApplyResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["workingDirectory"] = params.WorkingDirectory
@@ -9312,7 +11281,7 @@ func (a *PermissionsLocationsApi) Apply(ctx context.Context, params *PermissionL
 // Parameters: Working directory to resolve into a location-permissions key.
 //
 // Returns: Resolved location-permissions key and type.
-func (a *PermissionsLocationsApi) Resolve(ctx context.Context, params *PermissionLocationResolveParams) (*PermissionLocationResolveResult, error) {
+func (a *PermissionsLocationsAPI) Resolve(ctx context.Context, params *PermissionLocationResolveParams) (*PermissionLocationResolveResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["workingDirectory"] = params.WorkingDirectory
@@ -9329,13 +11298,13 @@ func (a *PermissionsLocationsApi) Resolve(ctx context.Context, params *Permissio
 }
 
 // Experimental: Locations returns experimental APIs that may change or be removed.
-func (s *PermissionsApi) Locations() *PermissionsLocationsApi {
-	return (*PermissionsLocationsApi)(s)
+func (s *PermissionsAPI) Locations() *PermissionsLocationsAPI {
+	return (*PermissionsLocationsAPI)(s)
 }
 
-// Experimental: PermissionsPathsApi contains experimental APIs that may change or be
+// Experimental: PermissionsPathsAPI contains experimental APIs that may change or be
 // removed.
-type PermissionsPathsApi sessionApi
+type PermissionsPathsAPI sessionAPI
 
 // Adds a directory to the session's allow-list.
 //
@@ -9344,7 +11313,7 @@ type PermissionsPathsApi sessionApi
 // Parameters: Directory path to add to the session's allowed directories.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsPathsApi) Add(ctx context.Context, params *PermissionPathsAddParams) (*PermissionsPathsAddResult, error) {
+func (a *PermissionsPathsAPI) Add(ctx context.Context, params *PermissionPathsAddParams) (*PermissionsPathsAddResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
@@ -9368,7 +11337,7 @@ func (a *PermissionsPathsApi) Add(ctx context.Context, params *PermissionPathsAd
 // Parameters: Path to evaluate against the session's allowed directories.
 //
 // Returns: Indicates whether the supplied path is within the session's allowed directories.
-func (a *PermissionsPathsApi) IsPathWithinAllowedDirectories(ctx context.Context, params *PermissionPathsAllowedCheckParams) (*PermissionPathsAllowedCheckResult, error) {
+func (a *PermissionsPathsAPI) IsPathWithinAllowedDirectories(ctx context.Context, params *PermissionPathsAllowedCheckParams) (*PermissionPathsAllowedCheckResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
@@ -9392,7 +11361,7 @@ func (a *PermissionsPathsApi) IsPathWithinAllowedDirectories(ctx context.Context
 // Parameters: Path to evaluate against the session's workspace (primary) directory.
 //
 // Returns: Indicates whether the supplied path is within the session's workspace directory.
-func (a *PermissionsPathsApi) IsPathWithinWorkspace(ctx context.Context, params *PermissionPathsWorkspaceCheckParams) (*PermissionPathsWorkspaceCheckResult, error) {
+func (a *PermissionsPathsAPI) IsPathWithinWorkspace(ctx context.Context, params *PermissionPathsWorkspaceCheckParams) (*PermissionPathsWorkspaceCheckResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
@@ -9413,7 +11382,7 @@ func (a *PermissionsPathsApi) IsPathWithinWorkspace(ctx context.Context, params 
 // RPC method: session.permissions.paths.list.
 //
 // Returns: Snapshot of the session's allow-listed directories and primary working directory.
-func (a *PermissionsPathsApi) List(ctx context.Context) (*PermissionPathsList, error) {
+func (a *PermissionsPathsAPI) List(ctx context.Context) (*PermissionPathsList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.permissions.paths.list", req)
 	if err != nil {
@@ -9434,7 +11403,7 @@ func (a *PermissionsPathsApi) List(ctx context.Context) (*PermissionPathsList, e
 // Parameters: Directory path to set as the session's new primary working directory.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsPathsApi) UpdatePrimary(ctx context.Context, params *PermissionPathsUpdatePrimaryParams) (*PermissionsPathsUpdatePrimaryResult, error) {
+func (a *PermissionsPathsAPI) UpdatePrimary(ctx context.Context, params *PermissionPathsUpdatePrimaryParams) (*PermissionsPathsUpdatePrimaryResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
@@ -9451,12 +11420,12 @@ func (a *PermissionsPathsApi) UpdatePrimary(ctx context.Context, params *Permiss
 }
 
 // Experimental: Paths returns experimental APIs that may change or be removed.
-func (s *PermissionsApi) Paths() *PermissionsPathsApi {
-	return (*PermissionsPathsApi)(s)
+func (s *PermissionsAPI) Paths() *PermissionsPathsAPI {
+	return (*PermissionsPathsAPI)(s)
 }
 
-// Experimental: PermissionsUrlsApi contains experimental APIs that may change or be removed.
-type PermissionsUrlsApi sessionApi
+// Experimental: PermissionsURLsAPI contains experimental APIs that may change or be removed.
+type PermissionsURLsAPI sessionAPI
 
 // SetUnrestrictedMode toggles the runtime's URL-permission policy between unrestricted and
 // restricted modes.
@@ -9466,7 +11435,7 @@ type PermissionsUrlsApi sessionApi
 // Parameters: Whether the URL-permission policy should run in unrestricted mode.
 //
 // Returns: Indicates whether the operation succeeded.
-func (a *PermissionsUrlsApi) SetUnrestrictedMode(ctx context.Context, params *PermissionUrlsSetUnrestrictedModeParams) (*PermissionsUrlsSetUnrestrictedModeResult, error) {
+func (a *PermissionsURLsAPI) SetUnrestrictedMode(ctx context.Context, params *PermissionURLsSetUnrestrictedModeParams) (*PermissionsURLsSetUnrestrictedModeResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["enabled"] = params.Enabled
@@ -9475,25 +11444,25 @@ func (a *PermissionsUrlsApi) SetUnrestrictedMode(ctx context.Context, params *Pe
 	if err != nil {
 		return nil, err
 	}
-	var result PermissionsUrlsSetUnrestrictedModeResult
+	var result PermissionsURLsSetUnrestrictedModeResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
 }
 
-// Experimental: Urls returns experimental APIs that may change or be removed.
-func (s *PermissionsApi) Urls() *PermissionsUrlsApi {
-	return (*PermissionsUrlsApi)(s)
+// Experimental: URLs returns experimental APIs that may change or be removed.
+func (s *PermissionsAPI) URLs() *PermissionsURLsAPI {
+	return (*PermissionsURLsAPI)(s)
 }
 
-// Experimental: PlanApi contains experimental APIs that may change or be removed.
-type PlanApi sessionApi
+// Experimental: PlanAPI contains experimental APIs that may change or be removed.
+type PlanAPI sessionAPI
 
 // Deletes the session plan file from the workspace.
 //
 // RPC method: session.plan.delete.
-func (a *PlanApi) Delete(ctx context.Context) (*SessionPlanDeleteResult, error) {
+func (a *PlanAPI) Delete(ctx context.Context) (*SessionPlanDeleteResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.plan.delete", req)
 	if err != nil {
@@ -9511,7 +11480,7 @@ func (a *PlanApi) Delete(ctx context.Context) (*SessionPlanDeleteResult, error) 
 // RPC method: session.plan.read.
 //
 // Returns: Existence, contents, and resolved path of the session plan file.
-func (a *PlanApi) Read(ctx context.Context) (*PlanReadResult, error) {
+func (a *PlanAPI) Read(ctx context.Context) (*PlanReadResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.plan.read", req)
 	if err != nil {
@@ -9529,7 +11498,7 @@ func (a *PlanApi) Read(ctx context.Context) (*PlanReadResult, error) {
 // RPC method: session.plan.update.
 //
 // Parameters: Replacement contents to write to the session plan file.
-func (a *PlanApi) Update(ctx context.Context, params *PlanUpdateRequest) (*SessionPlanUpdateResult, error) {
+func (a *PlanAPI) Update(ctx context.Context, params *PlanUpdateRequest) (*SessionPlanUpdateResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["content"] = params.Content
@@ -9545,15 +11514,15 @@ func (a *PlanApi) Update(ctx context.Context, params *PlanUpdateRequest) (*Sessi
 	return &result, nil
 }
 
-// Experimental: PluginsApi contains experimental APIs that may change or be removed.
-type PluginsApi sessionApi
+// Experimental: PluginsAPI contains experimental APIs that may change or be removed.
+type PluginsAPI sessionAPI
 
 // Lists plugins installed for the session.
 //
 // RPC method: session.plugins.list.
 //
 // Returns: Plugins installed for the session, with their enabled state and version metadata.
-func (a *PluginsApi) List(ctx context.Context) (*PluginList, error) {
+func (a *PluginsAPI) List(ctx context.Context) (*PluginList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.plugins.list", req)
 	if err != nil {
@@ -9566,13 +11535,13 @@ func (a *PluginsApi) List(ctx context.Context) (*PluginList, error) {
 	return &result, nil
 }
 
-// Experimental: QueueApi contains experimental APIs that may change or be removed.
-type QueueApi sessionApi
+// Experimental: QueueAPI contains experimental APIs that may change or be removed.
+type QueueAPI sessionAPI
 
 // Clears all pending queued items on the local session.
 //
 // RPC method: session.queue.clear.
-func (a *QueueApi) Clear(ctx context.Context) (*SessionQueueClearResult, error) {
+func (a *QueueAPI) Clear(ctx context.Context) (*SessionQueueClearResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.queue.clear", req)
 	if err != nil {
@@ -9591,7 +11560,7 @@ func (a *QueueApi) Clear(ctx context.Context) (*SessionQueueClearResult, error) 
 // RPC method: session.queue.pendingItems.
 //
 // Returns: Snapshot of the session's pending queued items and immediate-steering messages.
-func (a *QueueApi) PendingItems(ctx context.Context) (*QueuePendingItemsResult, error) {
+func (a *QueueAPI) PendingItems(ctx context.Context) (*QueuePendingItemsResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.queue.pendingItems", req)
 	if err != nil {
@@ -9609,7 +11578,7 @@ func (a *QueueApi) PendingItems(ctx context.Context) (*QueuePendingItemsResult, 
 // RPC method: session.queue.removeMostRecent.
 //
 // Returns: Indicates whether a user-facing pending item was removed.
-func (a *QueueApi) RemoveMostRecent(ctx context.Context) (*QueueRemoveMostRecentResult, error) {
+func (a *QueueAPI) RemoveMostRecent(ctx context.Context) (*QueueRemoveMostRecentResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.queue.removeMostRecent", req)
 	if err != nil {
@@ -9622,13 +11591,13 @@ func (a *QueueApi) RemoveMostRecent(ctx context.Context) (*QueueRemoveMostRecent
 	return &result, nil
 }
 
-// Experimental: RemoteApi contains experimental APIs that may change or be removed.
-type RemoteApi sessionApi
+// Experimental: RemoteAPI contains experimental APIs that may change or be removed.
+type RemoteAPI sessionAPI
 
 // Disables remote session export and steering.
 //
 // RPC method: session.remote.disable.
-func (a *RemoteApi) Disable(ctx context.Context) (*SessionRemoteDisableResult, error) {
+func (a *RemoteAPI) Disable(ctx context.Context) (*SessionRemoteDisableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.remote.disable", req)
 	if err != nil {
@@ -9650,7 +11619,7 @@ func (a *RemoteApi) Disable(ctx context.Context) (*SessionRemoteDisableResult, e
 //
 // Returns: GitHub URL for the session and a flag indicating whether remote steering is
 // enabled.
-func (a *RemoteApi) Enable(ctx context.Context, params *RemoteEnableRequest) (*RemoteEnableResult, error) {
+func (a *RemoteAPI) Enable(ctx context.Context, params *RemoteEnableRequest) (*RemoteEnableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Mode != nil {
@@ -9679,7 +11648,7 @@ func (a *RemoteApi) Enable(ctx context.Context, params *RemoteEnableRequest) (*R
 // Returns: Persist a steerability change as a `session.remote_steerable_changed` event.
 // Used by the host (CLI / SDK consumer) when it has just finished enabling or disabling
 // steering on a remote exporter that the runtime does not directly own.
-func (a *RemoteApi) NotifySteerableChanged(ctx context.Context, params *RemoteNotifySteerableChangedRequest) (*RemoteNotifySteerableChangedResult, error) {
+func (a *RemoteAPI) NotifySteerableChanged(ctx context.Context, params *RemoteNotifySteerableChangedRequest) (*RemoteNotifySteerableChangedResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["remoteSteerable"] = params.RemoteSteerable
@@ -9695,15 +11664,15 @@ func (a *RemoteApi) NotifySteerableChanged(ctx context.Context, params *RemoteNo
 	return &result, nil
 }
 
-// Experimental: ScheduleApi contains experimental APIs that may change or be removed.
-type ScheduleApi sessionApi
+// Experimental: ScheduleAPI contains experimental APIs that may change or be removed.
+type ScheduleAPI sessionAPI
 
 // Lists the session's currently active scheduled prompts.
 //
 // RPC method: session.schedule.list.
 //
 // Returns: Snapshot of the currently active recurring prompts for this session.
-func (a *ScheduleApi) List(ctx context.Context) (*ScheduleList, error) {
+func (a *ScheduleAPI) List(ctx context.Context) (*ScheduleList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.schedule.list", req)
 	if err != nil {
@@ -9724,7 +11693,7 @@ func (a *ScheduleApi) List(ctx context.Context) (*ScheduleList, error) {
 //
 // Returns: Remove a scheduled prompt by id. The result entry is omitted if the id was
 // unknown.
-func (a *ScheduleApi) Stop(ctx context.Context, params *ScheduleStopRequest) (*ScheduleStopResult, error) {
+func (a *ScheduleAPI) Stop(ctx context.Context, params *ScheduleStopRequest) (*ScheduleStopResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["id"] = params.ID
@@ -9740,8 +11709,8 @@ func (a *ScheduleApi) Stop(ctx context.Context, params *ScheduleStopRequest) (*S
 	return &result, nil
 }
 
-// Experimental: ShellApi contains experimental APIs that may change or be removed.
-type ShellApi sessionApi
+// Experimental: ShellAPI contains experimental APIs that may change or be removed.
+type ShellAPI sessionAPI
 
 // Exec starts a shell command and streams output through session notifications.
 //
@@ -9752,7 +11721,7 @@ type ShellApi sessionApi
 //
 // Returns: Identifier of the spawned process, used to correlate streamed output and exit
 // notifications.
-func (a *ShellApi) Exec(ctx context.Context, params *ShellExecRequest) (*ShellExecResult, error) {
+func (a *ShellAPI) Exec(ctx context.Context, params *ShellExecRequest) (*ShellExecResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["command"] = params.Command
@@ -9783,7 +11752,7 @@ func (a *ShellApi) Exec(ctx context.Context, params *ShellExecRequest) (*ShellEx
 //
 // Returns: Indicates whether the signal was delivered; false if the process was unknown or
 // already exited.
-func (a *ShellApi) Kill(ctx context.Context, params *ShellKillRequest) (*ShellKillResult, error) {
+func (a *ShellAPI) Kill(ctx context.Context, params *ShellKillRequest) (*ShellKillResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["processId"] = params.ProcessID
@@ -9802,15 +11771,15 @@ func (a *ShellApi) Kill(ctx context.Context, params *ShellKillRequest) (*ShellKi
 	return &result, nil
 }
 
-// Experimental: SkillsApi contains experimental APIs that may change or be removed.
-type SkillsApi sessionApi
+// Experimental: SkillsAPI contains experimental APIs that may change or be removed.
+type SkillsAPI sessionAPI
 
 // Disables a skill for the session.
 //
 // RPC method: session.skills.disable.
 //
 // Parameters: Name of the skill to disable for the session.
-func (a *SkillsApi) Disable(ctx context.Context, params *SkillsDisableRequest) (*SessionSkillsDisableResult, error) {
+func (a *SkillsAPI) Disable(ctx context.Context, params *SkillsDisableRequest) (*SessionSkillsDisableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["name"] = params.Name
@@ -9831,7 +11800,7 @@ func (a *SkillsApi) Disable(ctx context.Context, params *SkillsDisableRequest) (
 // RPC method: session.skills.enable.
 //
 // Parameters: Name of the skill to enable for the session.
-func (a *SkillsApi) Enable(ctx context.Context, params *SkillsEnableRequest) (*SessionSkillsEnableResult, error) {
+func (a *SkillsAPI) Enable(ctx context.Context, params *SkillsEnableRequest) (*SessionSkillsEnableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["name"] = params.Name
@@ -9850,7 +11819,7 @@ func (a *SkillsApi) Enable(ctx context.Context, params *SkillsEnableRequest) (*S
 // EnsureLoaded ensures the session's skill definitions have been loaded from disk.
 //
 // RPC method: session.skills.ensureLoaded.
-func (a *SkillsApi) EnsureLoaded(ctx context.Context) (*SessionSkillsEnsureLoadedResult, error) {
+func (a *SkillsAPI) EnsureLoaded(ctx context.Context) (*SessionSkillsEnsureLoadedResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.skills.ensureLoaded", req)
 	if err != nil {
@@ -9869,7 +11838,7 @@ func (a *SkillsApi) EnsureLoaded(ctx context.Context) (*SessionSkillsEnsureLoade
 //
 // Returns: Skills invoked during this session, ordered by invocation time (most recent
 // last).
-func (a *SkillsApi) GetInvoked(ctx context.Context) (*SkillsGetInvokedResult, error) {
+func (a *SkillsAPI) GetInvoked(ctx context.Context) (*SkillsGetInvokedResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.skills.getInvoked", req)
 	if err != nil {
@@ -9887,7 +11856,7 @@ func (a *SkillsApi) GetInvoked(ctx context.Context) (*SkillsGetInvokedResult, er
 // RPC method: session.skills.list.
 //
 // Returns: Skills available to the session, with their enabled state.
-func (a *SkillsApi) List(ctx context.Context) (*SkillList, error) {
+func (a *SkillsAPI) List(ctx context.Context) (*SkillList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.skills.list", req)
 	if err != nil {
@@ -9906,7 +11875,7 @@ func (a *SkillsApi) List(ctx context.Context) (*SkillList, error) {
 //
 // Returns: Diagnostics from reloading skill definitions, with warnings and errors as
 // separate lists.
-func (a *SkillsApi) Reload(ctx context.Context) (*SkillsLoadDiagnostics, error) {
+func (a *SkillsAPI) Reload(ctx context.Context) (*SkillsLoadDiagnostics, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.skills.reload", req)
 	if err != nil {
@@ -9919,8 +11888,8 @@ func (a *SkillsApi) Reload(ctx context.Context) (*SkillsLoadDiagnostics, error) 
 	return &result, nil
 }
 
-// Experimental: TasksApi contains experimental APIs that may change or be removed.
-type TasksApi sessionApi
+// Experimental: TasksAPI contains experimental APIs that may change or be removed.
+type TasksAPI sessionAPI
 
 // Cancels a background task.
 //
@@ -9929,7 +11898,7 @@ type TasksApi sessionApi
 // Parameters: Identifier of the background task to cancel.
 //
 // Returns: Indicates whether the background task was successfully cancelled.
-func (a *TasksApi) Cancel(ctx context.Context, params *TasksCancelRequest) (*TasksCancelResult, error) {
+func (a *TasksAPI) Cancel(ctx context.Context, params *TasksCancelRequest) (*TasksCancelResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["id"] = params.ID
@@ -9951,7 +11920,7 @@ func (a *TasksApi) Cancel(ctx context.Context, params *TasksCancelRequest) (*Tas
 // RPC method: session.tasks.getCurrentPromotable.
 //
 // Returns: The first sync-waiting task that can currently be promoted to background mode.
-func (a *TasksApi) GetCurrentPromotable(ctx context.Context) (*TasksGetCurrentPromotableResult, error) {
+func (a *TasksAPI) GetCurrentPromotable(ctx context.Context) (*TasksGetCurrentPromotableResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.tasks.getCurrentPromotable", req)
 	if err != nil {
@@ -9971,7 +11940,7 @@ func (a *TasksApi) GetCurrentPromotable(ctx context.Context) (*TasksGetCurrentPr
 // Parameters: Identifier of the background task to fetch progress for.
 //
 // Returns: Progress information for the task, or null when no task with that ID is tracked.
-func (a *TasksApi) GetProgress(ctx context.Context, params *TasksGetProgressRequest) (*TasksGetProgressResult, error) {
+func (a *TasksAPI) GetProgress(ctx context.Context, params *TasksGetProgressRequest) (*TasksGetProgressResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["id"] = params.ID
@@ -9992,7 +11961,7 @@ func (a *TasksApi) GetProgress(ctx context.Context, params *TasksGetProgressRequ
 // RPC method: session.tasks.list.
 //
 // Returns: Background tasks currently tracked by the session.
-func (a *TasksApi) List(ctx context.Context) (*TaskList, error) {
+func (a *TasksAPI) List(ctx context.Context) (*TaskList, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.tasks.list", req)
 	if err != nil {
@@ -10012,7 +11981,7 @@ func (a *TasksApi) List(ctx context.Context) (*TaskList, error) {
 //
 // Returns: The promoted task as it now exists in background mode, omitted if no promotable
 // task was waiting.
-func (a *TasksApi) PromoteCurrentToBackground(ctx context.Context) (*TasksPromoteCurrentToBackgroundResult, error) {
+func (a *TasksAPI) PromoteCurrentToBackground(ctx context.Context) (*TasksPromoteCurrentToBackgroundResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.tasks.promoteCurrentToBackground", req)
 	if err != nil {
@@ -10033,7 +12002,7 @@ func (a *TasksApi) PromoteCurrentToBackground(ctx context.Context) (*TasksPromot
 // Parameters: Identifier of the task to promote to background mode.
 //
 // Returns: Indicates whether the task was successfully promoted to background mode.
-func (a *TasksApi) PromoteToBackground(ctx context.Context, params *TasksPromoteToBackgroundRequest) (*TasksPromoteToBackgroundResult, error) {
+func (a *TasksAPI) PromoteToBackground(ctx context.Context, params *TasksPromoteToBackgroundRequest) (*TasksPromoteToBackgroundResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["id"] = params.ID
@@ -10055,7 +12024,7 @@ func (a *TasksApi) PromoteToBackground(ctx context.Context, params *TasksPromote
 //
 // Returns: Refresh metadata for any detached background shells the runtime knows about. Use
 // after a long pause to pick up exit/output state for shells running outside the agent loop.
-func (a *TasksApi) Refresh(ctx context.Context) (*TasksRefreshResult, error) {
+func (a *TasksAPI) Refresh(ctx context.Context) (*TasksRefreshResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.tasks.refresh", req)
 	if err != nil {
@@ -10076,7 +12045,7 @@ func (a *TasksApi) Refresh(ctx context.Context) (*TasksRefreshResult, error) {
 //
 // Returns: Indicates whether the task was removed. False when the task does not exist or is
 // still running/idle.
-func (a *TasksApi) Remove(ctx context.Context, params *TasksRemoveRequest) (*TasksRemoveResult, error) {
+func (a *TasksAPI) Remove(ctx context.Context, params *TasksRemoveRequest) (*TasksRemoveResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["id"] = params.ID
@@ -10101,7 +12070,7 @@ func (a *TasksApi) Remove(ctx context.Context, params *TasksRemoveRequest) (*Tas
 //
 // Returns: Indicates whether the message was delivered, with an error message when delivery
 // failed.
-func (a *TasksApi) SendMessage(ctx context.Context, params *TasksSendMessageRequest) (*TasksSendMessageResult, error) {
+func (a *TasksAPI) SendMessage(ctx context.Context, params *TasksSendMessageRequest) (*TasksSendMessageResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.FromAgentID != nil {
@@ -10129,7 +12098,7 @@ func (a *TasksApi) SendMessage(ctx context.Context, params *TasksSendMessageRequ
 // new task.
 //
 // Returns: Identifier assigned to the newly started background agent task.
-func (a *TasksApi) StartAgent(ctx context.Context, params *TasksStartAgentRequest) (*TasksStartAgentResult, error) {
+func (a *TasksAPI) StartAgent(ctx context.Context, params *TasksStartAgentRequest) (*TasksStartAgentResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["agentType"] = params.AgentType
@@ -10161,7 +12130,7 @@ func (a *TasksApi) StartAgent(ctx context.Context, params *TasksStartAgentReques
 // turns scheduled by their completions have settled. Returns when the runtime is fully
 // drained or after an internal timeout (default 10 minutes; configurable via
 // COPILOT_TASK_WAIT_TIMEOUT_SECONDS).
-func (a *TasksApi) WaitForPending(ctx context.Context) (*TasksWaitForPendingResult, error) {
+func (a *TasksAPI) WaitForPending(ctx context.Context) (*TasksWaitForPendingResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.tasks.waitForPending", req)
 	if err != nil {
@@ -10174,8 +12143,8 @@ func (a *TasksApi) WaitForPending(ctx context.Context) (*TasksWaitForPendingResu
 	return &result, nil
 }
 
-// Experimental: TelemetryApi contains experimental APIs that may change or be removed.
-type TelemetryApi sessionApi
+// Experimental: TelemetryAPI contains experimental APIs that may change or be removed.
+type TelemetryAPI sessionAPI
 
 // SetFeatureOverrides sets feature override key/value pairs to attach to subsequent
 // telemetry events for the session.
@@ -10184,7 +12153,7 @@ type TelemetryApi sessionApi
 //
 // Parameters: Feature override key/value pairs to attach to subsequent telemetry events
 // from this session.
-func (a *TelemetryApi) SetFeatureOverrides(ctx context.Context, params *TelemetrySetFeatureOverridesRequest) (*SessionTelemetrySetFeatureOverridesResult, error) {
+func (a *TelemetryAPI) SetFeatureOverrides(ctx context.Context, params *TelemetrySetFeatureOverridesRequest) (*SessionTelemetrySetFeatureOverridesResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["features"] = params.Features
@@ -10200,8 +12169,27 @@ func (a *TelemetryApi) SetFeatureOverrides(ctx context.Context, params *Telemetr
 	return &result, nil
 }
 
-// Experimental: ToolsApi contains experimental APIs that may change or be removed.
-type ToolsApi sessionApi
+// Experimental: ToolsAPI contains experimental APIs that may change or be removed.
+type ToolsAPI sessionAPI
+
+// GetCurrentMetadata returns lightweight metadata for the session's currently initialized
+// tools.
+//
+// RPC method: session.tools.getCurrentMetadata.
+//
+// Returns: Current lightweight tool metadata snapshot for the session.
+func (a *ToolsAPI) GetCurrentMetadata(ctx context.Context) (*ToolsGetCurrentMetadataResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	raw, err := a.client.Request("session.tools.getCurrentMetadata", req)
+	if err != nil {
+		return nil, err
+	}
+	var result ToolsGetCurrentMetadataResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
 
 // HandlePendingToolCall provides the result for a pending external tool call.
 //
@@ -10211,7 +12199,7 @@ type ToolsApi sessionApi
 // describing why it failed.
 //
 // Returns: Indicates whether the external tool call result was handled successfully.
-func (a *ToolsApi) HandlePendingToolCall(ctx context.Context, params *HandlePendingToolCallRequest) (*HandlePendingToolCallResult, error) {
+func (a *ToolsAPI) HandlePendingToolCall(ctx context.Context, params *HandlePendingToolCallRequest) (*HandlePendingToolCallResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		if params.Error != nil {
@@ -10242,7 +12230,7 @@ func (a *ToolsApi) HandlePendingToolCall(ctx context.Context, params *HandlePend
 // sessions and consumer flows that need an initialized tool set before `send` invoke this.
 // Default base-class implementation is a no-op for sessions that don't support tool
 // validation.
-func (a *ToolsApi) InitializeAndValidate(ctx context.Context) (*ToolsInitializeAndValidateResult, error) {
+func (a *ToolsAPI) InitializeAndValidate(ctx context.Context) (*ToolsInitializeAndValidateResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.tools.initializeAndValidate", req)
 	if err != nil {
@@ -10255,8 +12243,8 @@ func (a *ToolsApi) InitializeAndValidate(ctx context.Context) (*ToolsInitializeA
 	return &result, nil
 }
 
-// Experimental: UIApi contains experimental APIs that may change or be removed.
-type UIApi sessionApi
+// Experimental: UIAPI contains experimental APIs that may change or be removed.
+type UIAPI sessionAPI
 
 // Elicitation requests structured input from a UI-capable client.
 //
@@ -10266,7 +12254,7 @@ type UIApi sessionApi
 // user.
 //
 // Returns: The elicitation response (accept with form values, decline, or cancel)
-func (a *UIApi) Elicitation(ctx context.Context, params *UIElicitationRequest) (*UIElicitationResponse, error) {
+func (a *UIAPI) Elicitation(ctx context.Context, params *UIElicitationRequest) (*UIElicitationResponse, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["message"] = params.Message
@@ -10292,7 +12280,7 @@ func (a *UIApi) Elicitation(ctx context.Context, params *UIElicitationRequest) (
 // response.
 //
 // Returns: Indicates whether the pending UI request was resolved by this call.
-func (a *UIApi) HandlePendingAutoModeSwitch(ctx context.Context, params *UIHandlePendingAutoModeSwitchRequest) (*UIHandlePendingResult, error) {
+func (a *UIAPI) HandlePendingAutoModeSwitch(ctx context.Context, params *UIHandlePendingAutoModeSwitchRequest) (*UIHandlePendingResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
@@ -10318,7 +12306,7 @@ func (a *UIApi) HandlePendingAutoModeSwitch(ctx context.Context, params *UIHandl
 //
 // Returns: Indicates whether the elicitation response was accepted; false if it was already
 // resolved by another client.
-func (a *UIApi) HandlePendingElicitation(ctx context.Context, params *UIHandlePendingElicitationRequest) (*UIElicitationResult, error) {
+func (a *UIAPI) HandlePendingElicitation(ctx context.Context, params *UIHandlePendingElicitationRequest) (*UIElicitationResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
@@ -10344,7 +12332,7 @@ func (a *UIApi) HandlePendingElicitation(ctx context.Context, params *UIHandlePe
 // response.
 //
 // Returns: Indicates whether the pending UI request was resolved by this call.
-func (a *UIApi) HandlePendingExitPlanMode(ctx context.Context, params *UIHandlePendingExitPlanModeRequest) (*UIHandlePendingResult, error) {
+func (a *UIAPI) HandlePendingExitPlanMode(ctx context.Context, params *UIHandlePendingExitPlanModeRequest) (*UIHandlePendingResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
@@ -10370,7 +12358,7 @@ func (a *UIApi) HandlePendingExitPlanMode(ctx context.Context, params *UIHandleP
 // result payload (omit to reject).
 //
 // Returns: Indicates whether the pending UI request was resolved by this call.
-func (a *UIApi) HandlePendingSampling(ctx context.Context, params *UIHandlePendingSamplingRequest) (*UIHandlePendingResult, error) {
+func (a *UIAPI) HandlePendingSampling(ctx context.Context, params *UIHandlePendingSamplingRequest) (*UIHandlePendingResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
@@ -10397,7 +12385,7 @@ func (a *UIApi) HandlePendingSampling(ctx context.Context, params *UIHandlePendi
 // Parameters: Request ID of a pending `user_input.requested` event and the user's response.
 //
 // Returns: Indicates whether the pending UI request was resolved by this call.
-func (a *UIApi) HandlePendingUserInput(ctx context.Context, params *UIHandlePendingUserInputRequest) (*UIHandlePendingResult, error) {
+func (a *UIAPI) HandlePendingUserInput(ctx context.Context, params *UIHandlePendingUserInputRequest) (*UIHandlePendingResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["requestId"] = params.RequestID
@@ -10423,7 +12411,7 @@ func (a *UIApi) HandlePendingUserInput(ctx context.Context, params *UIHandlePend
 // caller still attaches the actual listener via the standard event-subscription mechanism;
 // this registration solely tells the server bridge to skip its own dispatch (so a remote
 // client doesn't race the in-process handler for the same requestId).
-func (a *UIApi) RegisterDirectAutoModeSwitchHandler(ctx context.Context) (*UIRegisterDirectAutoModeSwitchHandlerResult, error) {
+func (a *UIAPI) RegisterDirectAutoModeSwitchHandler(ctx context.Context) (*UIRegisterDirectAutoModeSwitchHandlerResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.ui.registerDirectAutoModeSwitchHandler", req)
 	if err != nil {
@@ -10446,7 +12434,7 @@ func (a *UIApi) RegisterDirectAutoModeSwitchHandler(ctx context.Context) (*UIReg
 //
 // Returns: Indicates whether the handle was active and the registration count was
 // decremented.
-func (a *UIApi) UnregisterDirectAutoModeSwitchHandler(ctx context.Context, params *UIUnregisterDirectAutoModeSwitchHandlerRequest) (*UIUnregisterDirectAutoModeSwitchHandlerResult, error) {
+func (a *UIAPI) UnregisterDirectAutoModeSwitchHandler(ctx context.Context, params *UIUnregisterDirectAutoModeSwitchHandlerRequest) (*UIUnregisterDirectAutoModeSwitchHandlerResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["handle"] = params.Handle
@@ -10462,8 +12450,8 @@ func (a *UIApi) UnregisterDirectAutoModeSwitchHandler(ctx context.Context, param
 	return &result, nil
 }
 
-// Experimental: UsageApi contains experimental APIs that may change or be removed.
-type UsageApi sessionApi
+// Experimental: UsageAPI contains experimental APIs that may change or be removed.
+type UsageAPI sessionAPI
 
 // GetMetrics gets accumulated usage metrics for the session.
 //
@@ -10471,7 +12459,7 @@ type UsageApi sessionApi
 //
 // Returns: Accumulated session usage metrics, including premium request cost, token counts,
 // model breakdown, and code-change totals.
-func (a *UsageApi) GetMetrics(ctx context.Context) (*UsageGetMetricsResult, error) {
+func (a *UsageAPI) GetMetrics(ctx context.Context) (*UsageGetMetricsResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.usage.getMetrics", req)
 	if err != nil {
@@ -10484,15 +12472,15 @@ func (a *UsageApi) GetMetrics(ctx context.Context) (*UsageGetMetricsResult, erro
 	return &result, nil
 }
 
-// Experimental: WorkspacesApi contains experimental APIs that may change or be removed.
-type WorkspacesApi sessionApi
+// Experimental: WorkspacesAPI contains experimental APIs that may change or be removed.
+type WorkspacesAPI sessionAPI
 
 // CreateFile creates or overwrites a file in the session workspace files directory.
 //
 // RPC method: session.workspaces.createFile.
 //
 // Parameters: Relative path and UTF-8 content for the workspace file to create or overwrite.
-func (a *WorkspacesApi) CreateFile(ctx context.Context, params *WorkspacesCreateFileRequest) (*SessionWorkspacesCreateFileResult, error) {
+func (a *WorkspacesAPI) CreateFile(ctx context.Context, params *WorkspacesCreateFileRequest) (*SessionWorkspacesCreateFileResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["content"] = params.Content
@@ -10509,13 +12497,36 @@ func (a *WorkspacesApi) CreateFile(ctx context.Context, params *WorkspacesCreate
 	return &result, nil
 }
 
+// Diff computes a diff for the session workspace.
+//
+// RPC method: session.workspaces.diff.
+//
+// Parameters: Parameters for computing a workspace diff.
+//
+// Returns: Workspace diff result for the requested mode.
+func (a *WorkspacesAPI) Diff(ctx context.Context, params *WorkspacesDiffRequest) (*WorkspaceDiffResult, error) {
+	req := map[string]any{"sessionId": a.sessionID}
+	if params != nil {
+		req["mode"] = params.Mode
+	}
+	raw, err := a.client.Request("session.workspaces.diff", req)
+	if err != nil {
+		return nil, err
+	}
+	var result WorkspaceDiffResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // GetWorkspace gets current workspace metadata for the session.
 //
 // RPC method: session.workspaces.getWorkspace.
 //
 // Returns: Current workspace metadata for the session, including its absolute filesystem
 // path when available.
-func (a *WorkspacesApi) GetWorkspace(ctx context.Context) (*WorkspacesGetWorkspaceResult, error) {
+func (a *WorkspacesAPI) GetWorkspace(ctx context.Context) (*WorkspacesGetWorkspaceResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.workspaces.getWorkspace", req)
 	if err != nil {
@@ -10534,7 +12545,7 @@ func (a *WorkspacesApi) GetWorkspace(ctx context.Context) (*WorkspacesGetWorkspa
 //
 // Returns: Workspace checkpoints in chronological order; empty when the workspace is not
 // enabled.
-func (a *WorkspacesApi) ListCheckpoints(ctx context.Context) (*WorkspacesListCheckpointsResult, error) {
+func (a *WorkspacesAPI) ListCheckpoints(ctx context.Context) (*WorkspacesListCheckpointsResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.workspaces.listCheckpoints", req)
 	if err != nil {
@@ -10552,7 +12563,7 @@ func (a *WorkspacesApi) ListCheckpoints(ctx context.Context) (*WorkspacesListChe
 // RPC method: session.workspaces.listFiles.
 //
 // Returns: Relative paths of files stored in the session workspace files directory.
-func (a *WorkspacesApi) ListFiles(ctx context.Context) (*WorkspacesListFilesResult, error) {
+func (a *WorkspacesAPI) ListFiles(ctx context.Context) (*WorkspacesListFilesResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	raw, err := a.client.Request("session.workspaces.listFiles", req)
 	if err != nil {
@@ -10573,7 +12584,7 @@ func (a *WorkspacesApi) ListFiles(ctx context.Context) (*WorkspacesListFilesResu
 //
 // Returns: Checkpoint content as a UTF-8 string, or null when the checkpoint or workspace
 // is missing.
-func (a *WorkspacesApi) ReadCheckpoint(ctx context.Context, params *WorkspacesReadCheckpointRequest) (*WorkspacesReadCheckpointResult, error) {
+func (a *WorkspacesAPI) ReadCheckpoint(ctx context.Context, params *WorkspacesReadCheckpointRequest) (*WorkspacesReadCheckpointResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["number"] = params.Number
@@ -10596,7 +12607,7 @@ func (a *WorkspacesApi) ReadCheckpoint(ctx context.Context, params *WorkspacesRe
 // Parameters: Relative path of the workspace file to read.
 //
 // Returns: Contents of the requested workspace file as a UTF-8 string.
-func (a *WorkspacesApi) ReadFile(ctx context.Context, params *WorkspacesReadFileRequest) (*WorkspacesReadFileResult, error) {
+func (a *WorkspacesAPI) ReadFile(ctx context.Context, params *WorkspacesReadFileRequest) (*WorkspacesReadFileResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["path"] = params.Path
@@ -10619,7 +12630,7 @@ func (a *WorkspacesApi) ReadFile(ctx context.Context, params *WorkspacesReadFile
 // Parameters: Pasted content to save as a UTF-8 file in the session workspace.
 //
 // Returns: Descriptor for the saved paste file, or null when the workspace is unavailable.
-func (a *WorkspacesApi) SaveLargePaste(ctx context.Context, params *WorkspacesSaveLargePasteRequest) (*WorkspacesSaveLargePasteResult, error) {
+func (a *WorkspacesAPI) SaveLargePaste(ctx context.Context, params *WorkspacesSaveLargePasteRequest) (*WorkspacesSaveLargePasteResult, error) {
 	req := map[string]any{"sessionId": a.sessionID}
 	if params != nil {
 		req["content"] = params.Content
@@ -10635,40 +12646,41 @@ func (a *WorkspacesApi) SaveLargePaste(ctx context.Context, params *WorkspacesSa
 	return &result, nil
 }
 
-// SessionRpc provides typed session-scoped RPC methods.
-type SessionRpc struct {
+// SessionRPC provides typed session-scoped RPC methods.
+type SessionRPC struct {
 	// Reuse a single struct instead of allocating one for each service on the heap.
-	common sessionApi
+	common sessionAPI
 
-	Agent        *AgentApi
-	Auth         *AuthApi
-	Commands     *CommandsApi
-	EventLog     *EventLogApi
-	Extensions   *ExtensionsApi
-	Fleet        *FleetApi
-	History      *HistoryApi
-	Instructions *InstructionsApi
-	Lsp          *LspApi
-	Mcp          *McpApi
-	Metadata     *MetadataApi
-	Mode         *ModeApi
-	Model        *ModelApi
-	Name         *NameApi
-	Options      *OptionsApi
-	Permissions  *PermissionsApi
-	Plan         *PlanApi
-	Plugins      *PluginsApi
-	Queue        *QueueApi
-	Remote       *RemoteApi
-	Schedule     *ScheduleApi
-	Shell        *ShellApi
-	Skills       *SkillsApi
-	Tasks        *TasksApi
-	Telemetry    *TelemetryApi
-	Tools        *ToolsApi
-	UI           *UIApi
-	Usage        *UsageApi
-	Workspaces   *WorkspacesApi
+	Agent        *AgentAPI
+	Auth         *AuthAPI
+	Canvas       *CanvasAPI
+	Commands     *CommandsAPI
+	EventLog     *EventLogAPI
+	Extensions   *ExtensionsAPI
+	Fleet        *FleetAPI
+	History      *HistoryAPI
+	Instructions *InstructionsAPI
+	Lsp          *LspAPI
+	MCP          *MCPAPI
+	Metadata     *MetadataAPI
+	Mode         *ModeAPI
+	Model        *ModelAPI
+	Name         *NameAPI
+	Options      *OptionsAPI
+	Permissions  *PermissionsAPI
+	Plan         *PlanAPI
+	Plugins      *PluginsAPI
+	Queue        *QueueAPI
+	Remote       *RemoteAPI
+	Schedule     *ScheduleAPI
+	Shell        *ShellAPI
+	Skills       *SkillsAPI
+	Tasks        *TasksAPI
+	Telemetry    *TelemetryAPI
+	Tools        *ToolsAPI
+	UI           *UIAPI
+	Usage        *UsageAPI
+	Workspaces   *WorkspacesAPI
 }
 
 // Aborts the current agent turn.
@@ -10680,7 +12692,7 @@ type SessionRpc struct {
 // Returns: Result of aborting the current turn
 // Experimental: Abort is an experimental API and may change or be removed in future
 // versions.
-func (a *SessionRpc) Abort(ctx context.Context, params *AbortRequest) (*AbortResult, error) {
+func (a *SessionRPC) Abort(ctx context.Context, params *AbortRequest) (*AbortResult, error) {
 	req := map[string]any{"sessionId": a.common.sessionID}
 	if params != nil {
 		if params.Reason != nil {
@@ -10707,7 +12719,7 @@ func (a *SessionRpc) Abort(ctx context.Context, params *AbortRequest) (*AbortRes
 //
 // Returns: Identifier of the session event that was emitted for the log message.
 // Experimental: Log is an experimental API and may change or be removed in future versions.
-func (a *SessionRpc) Log(ctx context.Context, params *LogRequest) (*LogResult, error) {
+func (a *SessionRPC) Log(ctx context.Context, params *LogRequest) (*LogResult, error) {
 	req := map[string]any{"sessionId": a.common.sessionID}
 	if params != nil {
 		if params.Ephemeral != nil {
@@ -10746,7 +12758,7 @@ func (a *SessionRpc) Log(ctx context.Context, params *LogRequest) (*LogResult, e
 //
 // Returns: Result of sending a user message
 // Experimental: Send is an experimental API and may change or be removed in future versions.
-func (a *SessionRpc) Send(ctx context.Context, params *SendRequest) (*SendResult, error) {
+func (a *SessionRPC) Send(ctx context.Context, params *SendRequest) (*SendResult, error) {
 	req := map[string]any{"sessionId": a.common.sessionID}
 	if params != nil {
 		if params.AgentMode != nil {
@@ -10807,7 +12819,7 @@ func (a *SessionRpc) Send(ctx context.Context, params *SendRequest) (*SendResult
 // Parameters: Parameters for shutting down the session
 // Experimental: Shutdown is an experimental API and may change or be removed in future
 // versions.
-func (a *SessionRpc) Shutdown(ctx context.Context, params *ShutdownRequest) (*SessionShutdownResult, error) {
+func (a *SessionRPC) Shutdown(ctx context.Context, params *ShutdownRequest) (*SessionShutdownResult, error) {
 	req := map[string]any{"sessionId": a.common.sessionID}
 	if params != nil {
 		if params.Reason != nil {
@@ -10833,7 +12845,7 @@ func (a *SessionRpc) Shutdown(ctx context.Context, params *ShutdownRequest) (*Se
 // RPC method: session.suspend.
 // Experimental: Suspend is an experimental API and may change or be removed in future
 // versions.
-func (a *SessionRpc) Suspend(ctx context.Context) (*SessionSuspendResult, error) {
+func (a *SessionRPC) Suspend(ctx context.Context) (*SessionSuspendResult, error) {
 	req := map[string]any{"sessionId": a.common.sessionID}
 	raw, err := a.common.client.Request("session.suspend", req)
 	if err != nil {
@@ -10846,42 +12858,70 @@ func (a *SessionRpc) Suspend(ctx context.Context) (*SessionSuspendResult, error)
 	return &result, nil
 }
 
-func NewSessionRpc(client *jsonrpc2.Client, sessionID string) *SessionRpc {
-	r := &SessionRpc{}
-	r.common = sessionApi{client: client, sessionID: sessionID}
-	r.Agent = (*AgentApi)(&r.common)
-	r.Auth = (*AuthApi)(&r.common)
-	r.Commands = (*CommandsApi)(&r.common)
-	r.EventLog = (*EventLogApi)(&r.common)
-	r.Extensions = (*ExtensionsApi)(&r.common)
-	r.Fleet = (*FleetApi)(&r.common)
-	r.History = (*HistoryApi)(&r.common)
-	r.Instructions = (*InstructionsApi)(&r.common)
-	r.Lsp = (*LspApi)(&r.common)
-	r.Mcp = (*McpApi)(&r.common)
-	r.Metadata = (*MetadataApi)(&r.common)
-	r.Mode = (*ModeApi)(&r.common)
-	r.Model = (*ModelApi)(&r.common)
-	r.Name = (*NameApi)(&r.common)
-	r.Options = (*OptionsApi)(&r.common)
-	r.Permissions = (*PermissionsApi)(&r.common)
-	r.Plan = (*PlanApi)(&r.common)
-	r.Plugins = (*PluginsApi)(&r.common)
-	r.Queue = (*QueueApi)(&r.common)
-	r.Remote = (*RemoteApi)(&r.common)
-	r.Schedule = (*ScheduleApi)(&r.common)
-	r.Shell = (*ShellApi)(&r.common)
-	r.Skills = (*SkillsApi)(&r.common)
-	r.Tasks = (*TasksApi)(&r.common)
-	r.Telemetry = (*TelemetryApi)(&r.common)
-	r.Tools = (*ToolsApi)(&r.common)
-	r.UI = (*UIApi)(&r.common)
-	r.Usage = (*UsageApi)(&r.common)
-	r.Workspaces = (*WorkspacesApi)(&r.common)
+func NewSessionRPC(client *jsonrpc2.Client, sessionID string) *SessionRPC {
+	r := &SessionRPC{}
+	r.common = sessionAPI{client: client, sessionID: sessionID}
+	r.Agent = (*AgentAPI)(&r.common)
+	r.Auth = (*AuthAPI)(&r.common)
+	r.Canvas = (*CanvasAPI)(&r.common)
+	r.Commands = (*CommandsAPI)(&r.common)
+	r.EventLog = (*EventLogAPI)(&r.common)
+	r.Extensions = (*ExtensionsAPI)(&r.common)
+	r.Fleet = (*FleetAPI)(&r.common)
+	r.History = (*HistoryAPI)(&r.common)
+	r.Instructions = (*InstructionsAPI)(&r.common)
+	r.Lsp = (*LspAPI)(&r.common)
+	r.MCP = (*MCPAPI)(&r.common)
+	r.Metadata = (*MetadataAPI)(&r.common)
+	r.Mode = (*ModeAPI)(&r.common)
+	r.Model = (*ModelAPI)(&r.common)
+	r.Name = (*NameAPI)(&r.common)
+	r.Options = (*OptionsAPI)(&r.common)
+	r.Permissions = (*PermissionsAPI)(&r.common)
+	r.Plan = (*PlanAPI)(&r.common)
+	r.Plugins = (*PluginsAPI)(&r.common)
+	r.Queue = (*QueueAPI)(&r.common)
+	r.Remote = (*RemoteAPI)(&r.common)
+	r.Schedule = (*ScheduleAPI)(&r.common)
+	r.Shell = (*ShellAPI)(&r.common)
+	r.Skills = (*SkillsAPI)(&r.common)
+	r.Tasks = (*TasksAPI)(&r.common)
+	r.Telemetry = (*TelemetryAPI)(&r.common)
+	r.Tools = (*ToolsAPI)(&r.common)
+	r.UI = (*UIAPI)(&r.common)
+	r.Usage = (*UsageAPI)(&r.common)
+	r.Workspaces = (*WorkspacesAPI)(&r.common)
 	return r
 }
 
-type SessionFsHandler interface {
+// Experimental: CanvasHandler contains experimental APIs that may change or be removed.
+type CanvasHandler interface {
+	// Closes a canvas instance on the provider.
+	//
+	// RPC method: canvas.close.
+	//
+	// Parameters: Canvas close parameters sent to the provider.
+	Close(request *CanvasProviderCloseRequest) (*CanvasCloseResult, error)
+	// Invokes an action on an open canvas instance via the provider.
+	//
+	// RPC method: canvas.action.invoke.
+	//
+	// Parameters: Canvas action invocation parameters sent to the provider.
+	//
+	// Returns: Provider-supplied action result.
+	Invoke(request *CanvasProviderInvokeActionRequest) (any, error)
+	// Opens a canvas instance on the provider.
+	//
+	// RPC method: canvas.open.
+	//
+	// Parameters: Canvas open parameters sent to the provider.
+	//
+	// Returns: Canvas open result returned by the provider.
+	Open(request *CanvasProviderOpenRequest) (*CanvasProviderOpenResult, error)
+}
+
+// Experimental: SessionFSHandler contains experimental APIs that may change or be removed.
+type SessionFSHandler interface {
 	// AppendFile appends content to a file in the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.appendFile.
@@ -10890,7 +12930,7 @@ type SessionFsHandler interface {
 	// session filesystem.
 	//
 	// Returns: Describes a filesystem error.
-	AppendFile(request *SessionFsAppendFileRequest) (*SessionFsError, error)
+	AppendFile(request *SessionFSAppendFileRequest) (*SessionFSError, error)
 	// Exists checks whether a path exists in the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.exists.
@@ -10899,7 +12939,7 @@ type SessionFsHandler interface {
 	//
 	// Returns: Indicates whether the requested path exists in the client-provided session
 	// filesystem.
-	Exists(request *SessionFsExistsRequest) (*SessionFsExistsResult, error)
+	Exists(request *SessionFSExistsRequest) (*SessionFSExistsResult, error)
 	// Mkdir creates a directory in the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.mkdir.
@@ -10908,7 +12948,7 @@ type SessionFsHandler interface {
 	// options for recursive creation and POSIX mode.
 	//
 	// Returns: Describes a filesystem error.
-	Mkdir(request *SessionFsMkdirRequest) (*SessionFsError, error)
+	Mkdir(request *SessionFSMkdirRequest) (*SessionFSError, error)
 	// Readdir lists entry names in a directory from the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.readdir.
@@ -10918,7 +12958,7 @@ type SessionFsHandler interface {
 	//
 	// Returns: Names of entries in the requested directory, or a filesystem error if the read
 	// failed.
-	Readdir(request *SessionFsReaddirRequest) (*SessionFsReaddirResult, error)
+	Readdir(request *SessionFSReaddirRequest) (*SessionFSReaddirResult, error)
 	// ReaddirWithTypes lists directory entries with type information from the client-provided
 	// session filesystem.
 	//
@@ -10929,7 +12969,7 @@ type SessionFsHandler interface {
 	//
 	// Returns: Entries in the requested directory paired with file/directory type information,
 	// or a filesystem error if the read failed.
-	ReaddirWithTypes(request *SessionFsReaddirWithTypesRequest) (*SessionFsReaddirWithTypesResult, error)
+	ReaddirWithTypes(request *SessionFSReaddirWithTypesRequest) (*SessionFSReaddirWithTypesResult, error)
 	// ReadFile reads a file from the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.readFile.
@@ -10937,7 +12977,7 @@ type SessionFsHandler interface {
 	// Parameters: Path of the file to read from the client-provided session filesystem.
 	//
 	// Returns: File content as a UTF-8 string, or a filesystem error if the read failed.
-	ReadFile(request *SessionFsReadFileRequest) (*SessionFsReadFileResult, error)
+	ReadFile(request *SessionFSReadFileRequest) (*SessionFSReadFileResult, error)
 	// Renames or moves a path in the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.rename.
@@ -10946,7 +12986,7 @@ type SessionFsHandler interface {
 	// client-provided session filesystem.
 	//
 	// Returns: Describes a filesystem error.
-	Rename(request *SessionFsRenameRequest) (*SessionFsError, error)
+	Rename(request *SessionFSRenameRequest) (*SessionFSError, error)
 	// Rm removes a file or directory from the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.rm.
@@ -10955,7 +12995,7 @@ type SessionFsHandler interface {
 	// recursive removal and force.
 	//
 	// Returns: Describes a filesystem error.
-	Rm(request *SessionFsRmRequest) (*SessionFsError, error)
+	Rm(request *SessionFSRmRequest) (*SessionFSError, error)
 	// SqliteExists checks whether the per-session SQLite database already exists, without
 	// creating it.
 	//
@@ -10964,7 +13004,7 @@ type SessionFsHandler interface {
 	// Parameters: Identifies the target session.
 	//
 	// Returns: Indicates whether the per-session SQLite database already exists.
-	SqliteExists(request *SessionFsSqliteExistsRequest) (*SessionFsSqliteExistsResult, error)
+	SqliteExists(request *SessionFSSqliteExistsRequest) (*SessionFSSqliteExistsResult, error)
 	// SqliteQuery executes a SQLite query against the per-session database.
 	//
 	// RPC method: sessionFs.sqliteQuery.
@@ -10974,7 +13014,7 @@ type SessionFsHandler interface {
 	//
 	// Returns: Query results including rows, columns, and rows affected, or a filesystem error
 	// if execution failed.
-	SqliteQuery(request *SessionFsSqliteQueryRequest) (*SessionFsSqliteQueryResult, error)
+	SqliteQuery(request *SessionFSSqliteQueryRequest) (*SessionFSSqliteQueryResult, error)
 	// Stat gets metadata for a path in the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.stat.
@@ -10984,7 +13024,7 @@ type SessionFsHandler interface {
 	//
 	// Returns: Filesystem metadata for the requested path, or a filesystem error if the stat
 	// failed.
-	Stat(request *SessionFsStatRequest) (*SessionFsStatResult, error)
+	Stat(request *SessionFSStatRequest) (*SessionFSStatResult, error)
 	// WriteFile writes a file in the client-provided session filesystem.
 	//
 	// RPC method: sessionFs.writeFile.
@@ -10993,12 +13033,13 @@ type SessionFsHandler interface {
 	// session filesystem.
 	//
 	// Returns: Describes a filesystem error.
-	WriteFile(request *SessionFsWriteFileRequest) (*SessionFsError, error)
+	WriteFile(request *SessionFSWriteFileRequest) (*SessionFSError, error)
 }
 
-// ClientSessionApiHandlers provides all client session API handler groups for a session.
-type ClientSessionApiHandlers struct {
-	SessionFs SessionFsHandler
+// ClientSessionAPIHandlers provides all client session API handler groups for a session.
+type ClientSessionAPIHandlers struct {
+	Canvas    CanvasHandler
+	SessionFS SessionFSHandler
 }
 
 func clientSessionHandlerError(err error) *jsonrpc2.Error {
@@ -11012,19 +13053,76 @@ func clientSessionHandlerError(err error) *jsonrpc2.Error {
 	return &jsonrpc2.Error{Code: -32603, Message: err.Error()}
 }
 
-// RegisterClientSessionApiHandlers registers handlers for server-to-client session API
+// RegisterClientSessionAPIHandlers registers handlers for server-to-client session API
 // calls.
-func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(sessionID string) *ClientSessionApiHandlers) {
-	client.SetRequestHandler("sessionFs.appendFile", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsAppendFileRequest
+func RegisterClientSessionAPIHandlers(client *jsonrpc2.Client, getHandlers func(sessionID string) *ClientSessionAPIHandlers) {
+	client.SetRequestHandler("canvas.close", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request CanvasProviderCloseRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.Canvas == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No canvas handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.Canvas.Close(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("canvas.action.invoke", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request CanvasProviderInvokeActionRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.Canvas == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No canvas handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.Canvas.Invoke(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("canvas.open", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request CanvasProviderOpenRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.Canvas == nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No canvas handler registered for session: %s", request.SessionID)}
+		}
+		result, err := handlers.Canvas.Open(&request)
+		if err != nil {
+			return nil, clientSessionHandlerError(err)
+		}
+		raw, err := json.Marshal(result)
+		if err != nil {
+			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("Failed to marshal response: %v", err)}
+		}
+		return raw, nil
+	})
+	client.SetRequestHandler("sessionFs.appendFile", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
+		var request SessionFSAppendFileRequest
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
+		}
+		handlers := getHandlers(request.SessionID)
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.AppendFile(&request)
+		result, err := handlers.SessionFS.AppendFile(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11035,15 +13133,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.exists", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsExistsRequest
+		var request SessionFSExistsRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.Exists(&request)
+		result, err := handlers.SessionFS.Exists(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11054,15 +13152,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.mkdir", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsMkdirRequest
+		var request SessionFSMkdirRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.Mkdir(&request)
+		result, err := handlers.SessionFS.Mkdir(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11073,15 +13171,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.readdir", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsReaddirRequest
+		var request SessionFSReaddirRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.Readdir(&request)
+		result, err := handlers.SessionFS.Readdir(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11092,15 +13190,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.readdirWithTypes", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsReaddirWithTypesRequest
+		var request SessionFSReaddirWithTypesRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.ReaddirWithTypes(&request)
+		result, err := handlers.SessionFS.ReaddirWithTypes(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11111,15 +13209,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.readFile", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsReadFileRequest
+		var request SessionFSReadFileRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.ReadFile(&request)
+		result, err := handlers.SessionFS.ReadFile(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11130,15 +13228,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.rename", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsRenameRequest
+		var request SessionFSRenameRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.Rename(&request)
+		result, err := handlers.SessionFS.Rename(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11149,15 +13247,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.rm", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsRmRequest
+		var request SessionFSRmRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.Rm(&request)
+		result, err := handlers.SessionFS.Rm(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11168,15 +13266,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.sqliteExists", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsSqliteExistsRequest
+		var request SessionFSSqliteExistsRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.SqliteExists(&request)
+		result, err := handlers.SessionFS.SqliteExists(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11187,15 +13285,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.sqliteQuery", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsSqliteQueryRequest
+		var request SessionFSSqliteQueryRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.SqliteQuery(&request)
+		result, err := handlers.SessionFS.SqliteQuery(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11206,15 +13304,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.stat", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsStatRequest
+		var request SessionFSStatRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.Stat(&request)
+		result, err := handlers.SessionFS.Stat(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
@@ -11225,15 +13323,15 @@ func RegisterClientSessionApiHandlers(client *jsonrpc2.Client, getHandlers func(
 		return raw, nil
 	})
 	client.SetRequestHandler("sessionFs.writeFile", func(params json.RawMessage) (json.RawMessage, *jsonrpc2.Error) {
-		var request SessionFsWriteFileRequest
+		var request SessionFSWriteFileRequest
 		if err := json.Unmarshal(params, &request); err != nil {
 			return nil, &jsonrpc2.Error{Code: -32602, Message: fmt.Sprintf("Invalid params: %v", err)}
 		}
 		handlers := getHandlers(request.SessionID)
-		if handlers == nil || handlers.SessionFs == nil {
+		if handlers == nil || handlers.SessionFS == nil {
 			return nil, &jsonrpc2.Error{Code: -32603, Message: fmt.Sprintf("No sessionFs handler registered for session: %s", request.SessionID)}
 		}
-		result, err := handlers.SessionFs.WriteFile(&request)
+		result, err := handlers.SessionFS.WriteFile(&request)
 		if err != nil {
 			return nil, clientSessionHandlerError(err)
 		}
