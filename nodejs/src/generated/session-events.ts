@@ -22,6 +22,7 @@ export type SessionEvent =
   | ModeChangedEvent
   | PermissionsChangedEvent
   | PlanChangedEvent
+  | TodosChangedEvent
   | WorkspaceFileChangedEvent
   | HandoffEvent
   | TruncationEvent
@@ -93,6 +94,7 @@ export type SessionEvent =
   | ExtensionsLoadedEvent
   | CanvasOpenedEvent
   | CanvasRegistryChangedEvent
+  | CanvasClosedEvent
   | ExtensionsAttachmentsPushedEvent
   | McpAppToolCallCompleteEvent;
 /**
@@ -259,6 +261,14 @@ export type AbortReason =
   | "remote_command"
   /** An MCP server delivered a user.abort notification. */
   | "user_abort";
+/**
+ * Allowed values for the `ToolExecutionStartToolDescriptionMetaUIVisibility` enumeration.
+ */
+export type ToolExecutionStartToolDescriptionMetaUIVisibility =
+  /** Tool is callable by the model (LLM tool surface) */
+  | "model"
+  /** Tool is callable by the MCP App view (iframe) via session.mcp.apps.callTool */
+  | "app";
 /**
  * A content block within a tool result, which may be text, terminal output, image, audio, or a resource
  */
@@ -526,7 +536,11 @@ export type ExtensionsLoadedExtensionSource =
   /** Extension discovered from the current project. */
   | "project"
   /** Extension discovered from the user's extension directory. */
-  | "user";
+  | "user"
+  /** Extension contributed by an installed plugin. */
+  | "plugin"
+  /** Extension discovered from the current session's state directory. */
+  | "session";
 /**
  * Current status: running, disabled, failed, or starting
  */
@@ -715,6 +729,10 @@ export interface ResumeData {
    */
   eventCount: number;
   /**
+   * On-disk byte size of the session's persisted events.jsonl file at resume time; omitted when the file does not exist or cannot be stat'd
+   */
+  eventsFileSizeBytes?: number;
+  /**
    * Reasoning effort level used for model calls, if applicable (e.g. "none", "low", "medium", "high", "xhigh", "max")
    */
   reasoningEffort?: string;
@@ -847,7 +865,7 @@ export interface ErrorData {
   url?: string;
 }
 /**
- * Session event "session.idle". Payload indicating the session is idle with no background agents in flight
+ * Session event "session.idle". Payload indicating the session is idle with no background agents or attached shell commands in flight
  */
 export interface IdleEvent {
   /**
@@ -877,7 +895,7 @@ export interface IdleEvent {
   type: "session.idle";
 }
 /**
- * Payload indicating the session is idle with no background agents in flight
+ * Payload indicating the session is idle with no background agents or attached shell commands in flight
  */
 export interface IdleData {
   /**
@@ -959,6 +977,14 @@ export interface ScheduleCreatedEvent {
  */
 export interface ScheduleCreatedData {
   /**
+   * Absolute fire time (epoch milliseconds) for a one-shot calendar schedule
+   */
+  at?: number;
+  /**
+   * 5-field cron expression for a recurring calendar schedule, evaluated in `tz`
+   */
+  cron?: string;
+  /**
    * Optional user-facing label shown in the timeline instead of the actual prompt (e.g. `/skill-name args` when the prompt is a skill invocation expansion)
    */
   displayPrompt?: string;
@@ -967,9 +993,9 @@ export interface ScheduleCreatedData {
    */
   id: number;
   /**
-   * Interval between ticks in milliseconds
+   * Interval between ticks in milliseconds (relative-interval schedules)
    */
-  intervalMs: number;
+  intervalMs?: number;
   /**
    * Prompt text that gets enqueued on every tick
    */
@@ -978,6 +1004,10 @@ export interface ScheduleCreatedData {
    * Whether the schedule re-arms after each tick (`/every`) or fires once (`/after`)
    */
   recurring?: boolean;
+  /**
+   * IANA timezone the `cron` expression is evaluated in
+   */
+  tz?: string;
 }
 /**
  * Session event "session.schedule_cancelled". Scheduled prompt cancelled from the schedule manager dialog
@@ -1335,6 +1365,40 @@ export interface PlanChangedData {
   operation: PlanChangedOperation;
 }
 /**
+ * Session event "session.todos_changed". Signal-only event: the agent's todos or todo_deps table was written to. No payload — clients should call session.plan.readSqlTodosWithDependencies() to fetch the current state. Events arrive in order; clients can debounce on arrival if needed.
+ */
+export interface TodosChangedEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: TodosChangedData;
+  /**
+   * Always true for events that are transient and not persisted to the session event log on disk.
+   */
+  ephemeral: true;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "session.todos_changed".
+   */
+  type: "session.todos_changed";
+}
+/**
+ * Signal-only event: the agent's todos or todo_deps table was written to. No payload — clients should call session.plan.readSqlTodosWithDependencies() to fetch the current state. Events arrive in order; clients can debounce on arrival if needed.
+ */
+export interface TodosChangedData {}
+/**
  * Session event "session.workspace_file_changed". Workspace file change details including path and operation type
  */
 export interface WorkspaceFileChangedEvent {
@@ -1609,6 +1673,10 @@ export interface ShutdownData {
    * Error description when shutdownType is "error"
    */
   errorReason?: string;
+  /**
+   * On-disk byte size of the session's persisted events.jsonl file at shutdown time; omitted when the file does not exist or cannot be stat'd
+   */
+  eventsFileSizeBytes?: number;
   /**
    * Per-model usage breakdown, keyed by model identifier
    */
@@ -2633,17 +2701,9 @@ export interface AssistantMessageEvent {
  */
 export interface AssistantMessageData {
   /**
-   * Raw Anthropic content array with advisor blocks (server_tool_use, advisor_tool_result) for verbatim round-tripping
-   *
-   * @experimental
+   * Provider's completion / response identifier; shared across all chunks of a single API call. Used to group multi-chunk assistant utterances.
    */
-  anthropicAdvisorBlocks?: unknown[];
-  /**
-   * Anthropic advisor model ID used for this response, for timeline display on replay
-   *
-   * @experimental
-   */
-  anthropicAdvisorModel?: string;
+  apiCallId?: string;
   /**
    * The assistant's text response content
    */
@@ -2689,6 +2749,7 @@ export interface AssistantMessageData {
    * GitHub request tracing ID (x-github-request-id header) for correlating with server-side logs
    */
   requestId?: string;
+  serverTools?: AssistantMessageServerTools;
   /**
    * Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
    */
@@ -2701,6 +2762,19 @@ export interface AssistantMessageData {
    * Identifier for the agent loop turn that produced this message, matching the corresponding assistant.turn_start event
    */
   turnId?: string;
+}
+/**
+ * Neutral provider-tagged server-side tool-use payload (tool search, advisor) for verbatim round-tripping
+ */
+/** @experimental */
+export interface AssistantMessageServerTools {
+  advisorModel?: string;
+  functionCallNamespaces?: {
+    [k: string]: string | undefined;
+  };
+  items?: unknown[];
+  provider: string;
+  rawContentBlocks?: unknown[];
 }
 /**
  * A tool invocation request from the assistant
@@ -3292,6 +3366,7 @@ export interface ToolExecutionStartData {
    * Unique identifier for this tool call
    */
   toolCallId: string;
+  toolDescription?: ToolExecutionStartToolDescription;
   /**
    * Name of the tool being executed
    */
@@ -3300,6 +3375,39 @@ export interface ToolExecutionStartData {
    * Identifier for the agent loop turn this tool was invoked in, matching the corresponding assistant.turn_start event
    */
   turnId?: string;
+}
+/**
+ * Tool definition metadata, present for MCP tools with MCP Apps support
+ */
+export interface ToolExecutionStartToolDescription {
+  _meta?: ToolExecutionStartToolDescriptionMeta;
+  /**
+   * Tool description
+   */
+  description?: string;
+  /**
+   * Tool name
+   */
+  name: string;
+}
+/**
+ * MCP Apps metadata for UI resource association
+ */
+export interface ToolExecutionStartToolDescriptionMeta {
+  ui?: ToolExecutionStartToolDescriptionMetaUI;
+}
+/**
+ * Schema for the `ToolExecutionStartToolDescriptionMetaUI` type.
+ */
+export interface ToolExecutionStartToolDescriptionMetaUI {
+  /**
+   * URI of the UI resource
+   */
+  resourceUri?: string;
+  /**
+   * Who can access this tool
+   */
+  visibility?: ToolExecutionStartToolDescriptionMetaUIVisibility[];
 }
 /**
  * Session event "tool.execution_partial_result". Streaming tool execution output for incremental result display
@@ -3837,7 +3945,7 @@ export interface SkillInvokedData {
    */
   pluginVersion?: string;
   /**
-   * Source identifier for where the skill was discovered. Known values include: project (workspace skill), inherited (parent-directory skill), personal-copilot (~/.copilot/skills), personal-agents (~/.agents/skills), personal-claude (~/.claude/skills), custom (configured directory), plugin (installed plugin), builtin (bundled runtime skill), and remote (org/enterprise skill)
+   * Source identifier for where the skill was discovered. Known values include: project (workspace skill), inherited (parent-directory skill), personal-copilot (~/.copilot/skills), personal-agents (~/.agents/skills), custom (configured directory), plugin (installed plugin), builtin (bundled runtime skill), and remote (org/enterprise skill)
    */
   source?: string;
   trigger?: SkillInvokedTrigger;
@@ -3889,7 +3997,7 @@ export interface SubagentStartedData {
    */
   agentName: string;
   /**
-   * Model the sub-agent will run with, when known at start. Surfaced in the timeline for auto-selected sub-agents (e.g. rubber-duck).
+   * Model the sub-agent will run with, when known at start.
    */
   model?: string;
   /**
@@ -4011,7 +4119,7 @@ export interface SubagentFailedData {
    */
   error: string;
   /**
-   * Model used by the sub-agent (if any model calls succeeded before failure)
+   * Model selected for the sub-agent, when known
    */
   model?: string;
   /**
@@ -4220,6 +4328,10 @@ export interface HookEndError {
    */
   message: string;
   /**
+   * Source label of the hook that errored (e.g. the plugin it was loaded from), when known
+   */
+  source?: string;
+  /**
    * Error stack trace, when available
    */
   stack?: string;
@@ -4262,6 +4374,10 @@ export interface HookProgressData {
    * Human-readable progress message from the hook process
    */
   message: string;
+  /**
+   * When true, this status message replaces the previous temporary one instead of accumulating
+   */
+  temporary?: boolean;
 }
 /**
  * Session event "system.message". System/developer instruction content with role and optional template metadata
@@ -6779,7 +6895,7 @@ export interface ExtensionsLoadedData {
  */
 export interface ExtensionsLoadedExtension {
   /**
-   * Source-qualified extension ID (e.g., 'project:my-ext', 'user:auth-helper')
+   * Source-qualified extension ID (e.g., 'project:my-ext', 'user:auth-helper', 'plugin:my-plugin:my-ext')
    */
   id: string;
   /**
@@ -6955,6 +7071,53 @@ export interface CanvasRegistryChangedCanvasAction {
    * Action name
    */
   name: string;
+}
+/**
+ * Session event "session.canvas.closed".
+ */
+export interface CanvasClosedEvent {
+  /**
+   * Sub-agent instance identifier. Absent for events from the root/main agent and session-level events.
+   */
+  agentId?: string;
+  data: CanvasClosedData;
+  /**
+   * Always true for events that are transient and not persisted to the session event log on disk.
+   */
+  ephemeral: true;
+  /**
+   * Unique event identifier (UUID v4), generated when the event is emitted
+   */
+  id: string;
+  /**
+   * ID of the chronologically preceding event in the session, forming a linked chain. Null for the first event.
+   */
+  parentId: string | null;
+  /**
+   * ISO 8601 timestamp when the event was created
+   */
+  timestamp: string;
+  /**
+   * Type discriminator. Always "session.canvas.closed".
+   */
+  type: "session.canvas.closed";
+}
+/**
+ * Schema for the `CanvasClosedData` type.
+ */
+export interface CanvasClosedData {
+  /**
+   * Provider-local canvas identifier
+   */
+  canvasId: string;
+  /**
+   * Owning provider identifier
+   */
+  extensionId: string;
+  /**
+   * Stable caller-supplied identifier of the canvas instance that was closed
+   */
+  instanceId: string;
 }
 /**
  * Session event "session.extensions.attachments_pushed".

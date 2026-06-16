@@ -62,6 +62,7 @@ namespace GitHub.Copilot;
 [JsonDerivedType(typeof(SamplingRequestedEvent), "sampling.requested")]
 [JsonDerivedType(typeof(SessionAutopilotObjectiveChangedEvent), "session.autopilot_objective_changed")]
 [JsonDerivedType(typeof(SessionBackgroundTasksChangedEvent), "session.background_tasks_changed")]
+[JsonDerivedType(typeof(SessionCanvasClosedEvent), "session.canvas.closed")]
 [JsonDerivedType(typeof(SessionCanvasOpenedEvent), "session.canvas.opened")]
 [JsonDerivedType(typeof(SessionCanvasRegistryChangedEvent), "session.canvas.registry_changed")]
 [JsonDerivedType(typeof(SessionCompactionCompleteEvent), "session.compaction_complete")]
@@ -91,6 +92,7 @@ namespace GitHub.Copilot;
 [JsonDerivedType(typeof(SessionStartEvent), "session.start")]
 [JsonDerivedType(typeof(SessionTaskCompleteEvent), "session.task_complete")]
 [JsonDerivedType(typeof(SessionTitleChangedEvent), "session.title_changed")]
+[JsonDerivedType(typeof(SessionTodosChangedEvent), "session.todos_changed")]
 [JsonDerivedType(typeof(SessionToolsUpdatedEvent), "session.tools_updated")]
 [JsonDerivedType(typeof(SessionTruncationEvent), "session.truncation")]
 [JsonDerivedType(typeof(SessionUsageInfoEvent), "session.usage_info")]
@@ -206,7 +208,7 @@ public sealed partial class SessionErrorEvent : SessionEvent
     public required SessionErrorData Data { get; set; }
 }
 
-/// <summary>Payload indicating the session is idle with no background agents in flight.</summary>
+/// <summary>Payload indicating the session is idle with no background agents or attached shell commands in flight.</summary>
 /// <remarks>Represents the <c>session.idle</c> event.</remarks>
 public sealed partial class SessionIdleEvent : SessionEvent
 {
@@ -347,6 +349,19 @@ public sealed partial class SessionPlanChangedEvent : SessionEvent
     /// <summary>The <c>session.plan_changed</c> event payload.</summary>
     [JsonPropertyName("data")]
     public required SessionPlanChangedData Data { get; set; }
+}
+
+/// <summary>Signal-only event: the agent's todos or todo_deps table was written to. No payload — clients should call session.plan.readSqlTodosWithDependencies() to fetch the current state. Events arrive in order; clients can debounce on arrival if needed.</summary>
+/// <remarks>Represents the <c>session.todos_changed</c> event.</remarks>
+public sealed partial class SessionTodosChangedEvent : SessionEvent
+{
+    /// <inheritdoc />
+    [JsonIgnore]
+    public override string Type => "session.todos_changed";
+
+    /// <summary>The <c>session.todos_changed</c> event payload.</summary>
+    [JsonPropertyName("data")]
+    public required SessionTodosChangedData Data { get; set; }
 }
 
 /// <summary>Workspace file change details including path and operation type.</summary>
@@ -1272,6 +1287,19 @@ public sealed partial class SessionCanvasRegistryChangedEvent : SessionEvent
     public required SessionCanvasRegistryChangedData Data { get; set; }
 }
 
+/// <summary>Schema for the `CanvasClosedData` type.</summary>
+/// <remarks>Represents the <c>session.canvas.closed</c> event.</remarks>
+public sealed partial class SessionCanvasClosedEvent : SessionEvent
+{
+    /// <inheritdoc />
+    [JsonIgnore]
+    public override string Type => "session.canvas.closed";
+
+    /// <summary>The <c>session.canvas.closed</c> event payload.</summary>
+    [JsonPropertyName("data")]
+    public required SessionCanvasClosedData Data { get; set; }
+}
+
 /// <summary>Schema for the `ExtensionsAttachmentsPushedData` type.</summary>
 /// <remarks>Represents the <c>session.extensions.attachments_pushed</c> event.</remarks>
 public sealed partial class SessionExtensionsAttachmentsPushedEvent : SessionEvent
@@ -1389,6 +1417,11 @@ public sealed partial class SessionResumeData
     [JsonPropertyName("eventCount")]
     public required long EventCount { get; set; }
 
+    /// <summary>On-disk byte size of the session's persisted events.jsonl file at resume time; omitted when the file does not exist or cannot be stat'd.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("eventsFileSizeBytes")]
+    public long? EventsFileSizeBytes { get; set; }
+
     /// <summary>Reasoning effort level used for model calls, if applicable (e.g. "none", "low", "medium", "high", "xhigh", "max").</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("reasoningEffort")]
@@ -1474,7 +1507,7 @@ public sealed partial class SessionErrorData
     public string? Url { get; set; }
 }
 
-/// <summary>Payload indicating the session is idle with no background agents in flight.</summary>
+/// <summary>Payload indicating the session is idle with no background agents or attached shell commands in flight.</summary>
 public sealed partial class SessionIdleData
 {
     /// <summary>True when the preceding agentic loop was cancelled via abort signal.</summary>
@@ -1494,6 +1527,16 @@ public sealed partial class SessionTitleChangedData
 /// <summary>Scheduled prompt registered via /every or /after.</summary>
 public sealed partial class SessionScheduleCreatedData
 {
+    /// <summary>Absolute fire time (epoch milliseconds) for a one-shot calendar schedule.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("at")]
+    public long? At { get; set; }
+
+    /// <summary>5-field cron expression for a recurring calendar schedule, evaluated in `tz`.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("cron")]
+    public string? Cron { get; set; }
+
     /// <summary>Optional user-facing label shown in the timeline instead of the actual prompt (e.g. `/skill-name args` when the prompt is a skill invocation expansion).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("displayPrompt")]
@@ -1503,10 +1546,11 @@ public sealed partial class SessionScheduleCreatedData
     [JsonPropertyName("id")]
     public required long Id { get; set; }
 
-    /// <summary>Interval between ticks in milliseconds.</summary>
+    /// <summary>Interval between ticks in milliseconds (relative-interval schedules).</summary>
     [JsonConverter(typeof(MillisecondsTimeSpanConverter))]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("intervalMs")]
-    public required TimeSpan Interval { get; set; }
+    public TimeSpan? Interval { get; set; }
 
     /// <summary>Prompt text that gets enqueued on every tick.</summary>
     [JsonPropertyName("prompt")]
@@ -1516,6 +1560,11 @@ public sealed partial class SessionScheduleCreatedData
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("recurring")]
     public bool? Recurring { get; set; }
+
+    /// <summary>IANA timezone the `cron` expression is evaluated in.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("tz")]
+    public string? Tz { get; set; }
 }
 
 /// <summary>Scheduled prompt cancelled from the schedule manager dialog.</summary>
@@ -1658,6 +1707,11 @@ public sealed partial class SessionPlanChangedData
     public required PlanChangedOperation Operation { get; set; }
 }
 
+/// <summary>Signal-only event: the agent's todos or todo_deps table was written to. No payload — clients should call session.plan.readSqlTodosWithDependencies() to fetch the current state. Events arrive in order; clients can debounce on arrival if needed.</summary>
+public sealed partial class SessionTodosChangedData
+{
+}
+
 /// <summary>Workspace file change details including path and operation type.</summary>
 public sealed partial class SessionWorkspaceFileChangedData
 {
@@ -1781,6 +1835,11 @@ public sealed partial class SessionShutdownData
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("errorReason")]
     public string? ErrorReason { get; set; }
+
+    /// <summary>On-disk byte size of the session's persisted events.jsonl file at shutdown time; omitted when the file does not exist or cannot be stat'd.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("eventsFileSizeBytes")]
+    public long? EventsFileSizeBytes { get; set; }
 
     /// <summary>Per-model usage breakdown, keyed by model identifier.</summary>
     [JsonPropertyName("modelMetrics")]
@@ -2141,17 +2200,10 @@ public sealed partial class AssistantStreamingDeltaData
 /// <summary>Assistant response containing text content, optional tool requests, and interaction metadata.</summary>
 public sealed partial class AssistantMessageData
 {
-    /// <summary>Raw Anthropic content array with advisor blocks (server_tool_use, advisor_tool_result) for verbatim round-tripping.</summary>
-    [Experimental(Diagnostics.Experimental)]
+    /// <summary>Provider's completion / response identifier; shared across all chunks of a single API call. Used to group multi-chunk assistant utterances.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    [JsonPropertyName("anthropicAdvisorBlocks")]
-    public JsonElement[]? AnthropicAdvisorBlocks { get; set; }
-
-    /// <summary>Anthropic advisor model ID used for this response, for timeline display on replay.</summary>
-    [Experimental(Diagnostics.Experimental)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    [JsonPropertyName("anthropicAdvisorModel")]
-    public string? AnthropicAdvisorModel { get; set; }
+    [JsonPropertyName("apiCallId")]
+    public string? ApiCallId { get; set; }
 
     /// <summary>The assistant's text response content.</summary>
     [JsonPropertyName("content")]
@@ -2207,6 +2259,11 @@ public sealed partial class AssistantMessageData
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("requestId")]
     public string? RequestId { get; set; }
+
+    /// <summary>Neutral provider-tagged server-side tool-use payload (tool search, advisor) for verbatim round-tripping.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("serverTools")]
+    public AssistantMessageServerTools? ServerTools { get; set; }
 
     /// <summary>Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -2483,6 +2540,11 @@ public sealed partial class ToolExecutionStartData
     [JsonPropertyName("toolCallId")]
     public required string ToolCallId { get; set; }
 
+    /// <summary>Tool definition metadata, present for MCP tools with MCP Apps support.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("toolDescription")]
+    public ToolExecutionStartToolDescription? ToolDescription { get; set; }
+
     /// <summary>Name of the tool being executed.</summary>
     [JsonPropertyName("toolName")]
     public required string ToolName { get; set; }
@@ -2616,7 +2678,7 @@ public sealed partial class SkillInvokedData
     [JsonPropertyName("pluginVersion")]
     public string? PluginVersion { get; set; }
 
-    /// <summary>Source identifier for where the skill was discovered. Known values include: project (workspace skill), inherited (parent-directory skill), personal-copilot (~/.copilot/skills), personal-agents (~/.agents/skills), personal-claude (~/.claude/skills), custom (configured directory), plugin (installed plugin), builtin (bundled runtime skill), and remote (org/enterprise skill).</summary>
+    /// <summary>Source identifier for where the skill was discovered. Known values include: project (workspace skill), inherited (parent-directory skill), personal-copilot (~/.copilot/skills), personal-agents (~/.agents/skills), custom (configured directory), plugin (installed plugin), builtin (bundled runtime skill), and remote (org/enterprise skill).</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("source")]
     public string? Source { get; set; }
@@ -2642,7 +2704,7 @@ public sealed partial class SubagentStartedData
     [JsonPropertyName("agentName")]
     public required string AgentName { get; set; }
 
-    /// <summary>Model the sub-agent will run with, when known at start. Surfaced in the timeline for auto-selected sub-agents (e.g. rubber-duck).</summary>
+    /// <summary>Model the sub-agent will run with, when known at start.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("model")]
     public string? Model { get; set; }
@@ -2710,7 +2772,7 @@ public sealed partial class SubagentFailedData
     [JsonPropertyName("error")]
     public required string Error { get; set; }
 
-    /// <summary>Model used by the sub-agent (if any model calls succeeded before failure).</summary>
+    /// <summary>Model selected for the sub-agent, when known.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("model")]
     public string? Model { get; set; }
@@ -2800,6 +2862,11 @@ public sealed partial class HookProgressData
     /// <summary>Human-readable progress message from the hook process.</summary>
     [JsonPropertyName("message")]
     public required string Message { get; set; }
+
+    /// <summary>When true, this status message replaces the previous temporary one instead of accumulating.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("temporary")]
+    public bool? Temporary { get; set; }
 }
 
 /// <summary>System/developer instruction content with role and optional template metadata.</summary>
@@ -3372,6 +3439,24 @@ public sealed partial class SessionCanvasRegistryChangedData
     public required CanvasRegistryChangedCanvas[] Canvases { get; set; }
 }
 
+/// <summary>Schema for the `CanvasClosedData` type.</summary>
+public sealed partial class SessionCanvasClosedData
+{
+    /// <summary>Provider-local canvas identifier.</summary>
+    [JsonPropertyName("canvasId")]
+    public required string CanvasId { get; set; }
+
+    /// <summary>Owning provider identifier.</summary>
+    [JsonPropertyName("extensionId")]
+    public required string ExtensionId { get; set; }
+
+    /// <summary>Stable caller-supplied identifier of the canvas instance that was closed.</summary>
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Safe for generated string properties: JSON Schema minLength/maxLength map to string length validation, not reflection over trimmed Count members")]
+    [MinLength(1)]
+    [JsonPropertyName("instanceId")]
+    public required string InstanceId { get; set; }
+}
+
 /// <summary>Schema for the `ExtensionsAttachmentsPushedData` type.</summary>
 public sealed partial class SessionExtensionsAttachmentsPushedData
 {
@@ -3885,6 +3970,36 @@ public partial class Attachment
 }
 
 
+/// <summary>Neutral provider-tagged server-side tool-use payload (tool search, advisor) for verbatim round-tripping.</summary>
+/// <remarks>Nested data type for <c>AssistantMessageServerTools</c>.</remarks>
+[Experimental(Diagnostics.Experimental)]
+public sealed partial class AssistantMessageServerTools
+{
+    /// <summary>Gets or sets the <c>advisorModel</c> value.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("advisorModel")]
+    public string? AdvisorModel { get; set; }
+
+    /// <summary>Gets or sets the <c>functionCallNamespaces</c> value.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("functionCallNamespaces")]
+    public IDictionary<string, string>? FunctionCallNamespaces { get; set; }
+
+    /// <summary>Gets or sets the <c>items</c> value.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("items")]
+    public JsonElement[]? Items { get; set; }
+
+    /// <summary>Gets or sets the <c>provider</c> value.</summary>
+    [JsonPropertyName("provider")]
+    public required string Provider { get; set; }
+
+    /// <summary>Gets or sets the <c>rawContentBlocks</c> value.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("rawContentBlocks")]
+    public JsonElement[]? RawContentBlocks { get; set; }
+}
+
 /// <summary>A tool invocation request from the assistant.</summary>
 /// <remarks>Nested data type for <c>AssistantMessageToolRequest</c>.</remarks>
 public sealed partial class AssistantMessageToolRequest
@@ -4006,6 +4121,50 @@ internal sealed partial class AssistantUsageQuotaSnapshot
     [JsonInclude]
     [JsonPropertyName("usedRequests")]
     internal required long UsedRequests { get; set; }
+}
+
+/// <summary>Schema for the `ToolExecutionStartToolDescriptionMetaUI` type.</summary>
+/// <remarks>Nested data type for <c>ToolExecutionStartToolDescriptionMetaUI</c>.</remarks>
+public sealed partial class ToolExecutionStartToolDescriptionMetaUI
+{
+    /// <summary>URI of the UI resource.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("resourceUri")]
+    public string? ResourceUri { get; set; }
+
+    /// <summary>Who can access this tool.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("visibility")]
+    public ToolExecutionStartToolDescriptionMetaUIVisibility[]? Visibility { get; set; }
+}
+
+/// <summary>MCP Apps metadata for UI resource association.</summary>
+/// <remarks>Nested data type for <c>ToolExecutionStartToolDescriptionMeta</c>.</remarks>
+public sealed partial class ToolExecutionStartToolDescriptionMeta
+{
+    /// <summary>Schema for the `ToolExecutionStartToolDescriptionMetaUI` type.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("ui")]
+    public ToolExecutionStartToolDescriptionMetaUI? Ui { get; set; }
+}
+
+/// <summary>Tool definition metadata, present for MCP tools with MCP Apps support.</summary>
+/// <remarks>Nested data type for <c>ToolExecutionStartToolDescription</c>.</remarks>
+public sealed partial class ToolExecutionStartToolDescription
+{
+    /// <summary>MCP Apps metadata for UI resource association.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("_meta")]
+    public ToolExecutionStartToolDescriptionMeta? _meta { get; set; }
+
+    /// <summary>Tool description.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+
+    /// <summary>Tool name.</summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; set; }
 }
 
 /// <summary>Error details when the tool execution failed.</summary>
@@ -4519,6 +4678,11 @@ public sealed partial class HookEndError
     /// <summary>Human-readable error message.</summary>
     [JsonPropertyName("message")]
     public required string Message { get; set; }
+
+    /// <summary>Source label of the hook that errored (e.g. the plugin it was loaded from), when known.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
 
     /// <summary>Error stack trace, when available.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -5852,7 +6016,7 @@ public sealed partial class McpServersLoadedServer
 /// <remarks>Nested data type for <c>ExtensionsLoadedExtension</c>.</remarks>
 public sealed partial class ExtensionsLoadedExtension
 {
-    /// <summary>Source-qualified extension ID (e.g., 'project:my-ext', 'user:auth-helper').</summary>
+    /// <summary>Source-qualified extension ID (e.g., 'project:my-ext', 'user:auth-helper', 'plugin:my-plugin:my-ext').</summary>
     [JsonPropertyName("id")]
     public required string Id { get; set; }
 
@@ -6975,6 +7139,67 @@ public readonly struct AbortReason : IEquatable<AbortReason>
     }
 }
 
+/// <summary>Allowed values for the `ToolExecutionStartToolDescriptionMetaUIVisibility` enumeration.</summary>
+[JsonConverter(typeof(Converter))]
+[DebuggerDisplay("{Value,nq}")]
+public readonly struct ToolExecutionStartToolDescriptionMetaUIVisibility : IEquatable<ToolExecutionStartToolDescriptionMetaUIVisibility>
+{
+    private readonly string? _value;
+
+    /// <summary>Initializes a new instance of the <see cref="ToolExecutionStartToolDescriptionMetaUIVisibility"/> struct.</summary>
+    /// <param name="value">The value to associate with this <see cref="ToolExecutionStartToolDescriptionMetaUIVisibility"/>.</param>
+    [JsonConstructor]
+    public ToolExecutionStartToolDescriptionMetaUIVisibility(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        _value = value;
+    }
+
+    /// <summary>Gets the value associated with this <see cref="ToolExecutionStartToolDescriptionMetaUIVisibility"/>.</summary>
+    public string Value => _value ?? string.Empty;
+
+    /// <summary>Tool is callable by the model (LLM tool surface).</summary>
+    public static ToolExecutionStartToolDescriptionMetaUIVisibility Model { get; } = new("model");
+
+    /// <summary>Tool is callable by the MCP App view (iframe) via session.mcp.apps.callTool.</summary>
+    public static ToolExecutionStartToolDescriptionMetaUIVisibility App { get; } = new("app");
+
+    /// <summary>Returns a value indicating whether two <see cref="ToolExecutionStartToolDescriptionMetaUIVisibility"/> instances are equivalent.</summary>
+    public static bool operator ==(ToolExecutionStartToolDescriptionMetaUIVisibility left, ToolExecutionStartToolDescriptionMetaUIVisibility right) => left.Equals(right);
+
+    /// <summary>Returns a value indicating whether two <see cref="ToolExecutionStartToolDescriptionMetaUIVisibility"/> instances are not equivalent.</summary>
+    public static bool operator !=(ToolExecutionStartToolDescriptionMetaUIVisibility left, ToolExecutionStartToolDescriptionMetaUIVisibility right) => !(left == right);
+
+    /// <inheritdoc />
+    public override bool Equals(object? obj) => obj is ToolExecutionStartToolDescriptionMetaUIVisibility other && Equals(other);
+
+    /// <inheritdoc />
+    public bool Equals(ToolExecutionStartToolDescriptionMetaUIVisibility other) => string.Equals(Value, other.Value, StringComparison.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => StringComparer.OrdinalIgnoreCase.GetHashCode(Value);
+
+    /// <inheritdoc />
+    public override string ToString() => Value;
+
+    /// <summary>Provides a <see cref="JsonConverter{ToolExecutionStartToolDescriptionMetaUIVisibility}"/> for serializing <see cref="ToolExecutionStartToolDescriptionMetaUIVisibility"/> instances.</summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public sealed class Converter : JsonConverter<ToolExecutionStartToolDescriptionMetaUIVisibility>
+    {
+        /// <inheritdoc />
+        public override ToolExecutionStartToolDescriptionMetaUIVisibility Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            return new(GeneratedStringEnumJson.ReadValue(ref reader, typeToConvert));
+        }
+
+        /// <inheritdoc />
+        public override void Write(Utf8JsonWriter writer, ToolExecutionStartToolDescriptionMetaUIVisibility value, JsonSerializerOptions options)
+        {
+            GeneratedStringEnumJson.WriteValue(writer, value.Value, typeof(ToolExecutionStartToolDescriptionMetaUIVisibility));
+        }
+    }
+}
+
 /// <summary>Theme variant this icon is intended for.</summary>
 [JsonConverter(typeof(Converter))]
 [DebuggerDisplay("{Value,nq}")]
@@ -8033,6 +8258,12 @@ public readonly struct ExtensionsLoadedExtensionSource : IEquatable<ExtensionsLo
     /// <summary>Extension discovered from the user's extension directory.</summary>
     public static ExtensionsLoadedExtensionSource User { get; } = new("user");
 
+    /// <summary>Extension contributed by an installed plugin.</summary>
+    public static ExtensionsLoadedExtensionSource Plugin { get; } = new("plugin");
+
+    /// <summary>Extension discovered from the current session's state directory.</summary>
+    public static ExtensionsLoadedExtensionSource Session { get; } = new("session");
+
     /// <summary>Returns a value indicating whether two <see cref="ExtensionsLoadedExtensionSource"/> instances are equivalent.</summary>
     public static bool operator ==(ExtensionsLoadedExtensionSource left, ExtensionsLoadedExtensionSource right) => left.Equals(right);
 
@@ -8210,6 +8441,7 @@ public readonly struct CanvasOpenedAvailability : IEquatable<CanvasOpenedAvailab
 [JsonSerializable(typeof(AssistantMessageDeltaData))]
 [JsonSerializable(typeof(AssistantMessageDeltaEvent))]
 [JsonSerializable(typeof(AssistantMessageEvent))]
+[JsonSerializable(typeof(AssistantMessageServerTools))]
 [JsonSerializable(typeof(AssistantMessageStartData))]
 [JsonSerializable(typeof(AssistantMessageStartEvent))]
 [JsonSerializable(typeof(AssistantMessageToolRequest))]
@@ -8348,6 +8580,8 @@ public readonly struct CanvasOpenedAvailability : IEquatable<CanvasOpenedAvailab
 [JsonSerializable(typeof(SessionAutopilotObjectiveChangedEvent))]
 [JsonSerializable(typeof(SessionBackgroundTasksChangedData))]
 [JsonSerializable(typeof(SessionBackgroundTasksChangedEvent))]
+[JsonSerializable(typeof(SessionCanvasClosedData))]
+[JsonSerializable(typeof(SessionCanvasClosedEvent))]
 [JsonSerializable(typeof(SessionCanvasOpenedData))]
 [JsonSerializable(typeof(SessionCanvasOpenedEvent))]
 [JsonSerializable(typeof(SessionCanvasRegistryChangedData))]
@@ -8407,6 +8641,8 @@ public readonly struct CanvasOpenedAvailability : IEquatable<CanvasOpenedAvailab
 [JsonSerializable(typeof(SessionTaskCompleteEvent))]
 [JsonSerializable(typeof(SessionTitleChangedData))]
 [JsonSerializable(typeof(SessionTitleChangedEvent))]
+[JsonSerializable(typeof(SessionTodosChangedData))]
+[JsonSerializable(typeof(SessionTodosChangedEvent))]
 [JsonSerializable(typeof(SessionToolsUpdatedData))]
 [JsonSerializable(typeof(SessionToolsUpdatedEvent))]
 [JsonSerializable(typeof(SessionTruncationData))]
@@ -8479,6 +8715,9 @@ public readonly struct CanvasOpenedAvailability : IEquatable<CanvasOpenedAvailab
 [JsonSerializable(typeof(ToolExecutionProgressEvent))]
 [JsonSerializable(typeof(ToolExecutionStartData))]
 [JsonSerializable(typeof(ToolExecutionStartEvent))]
+[JsonSerializable(typeof(ToolExecutionStartToolDescription))]
+[JsonSerializable(typeof(ToolExecutionStartToolDescriptionMeta))]
+[JsonSerializable(typeof(ToolExecutionStartToolDescriptionMetaUI))]
 [JsonSerializable(typeof(ToolUserRequestedData))]
 [JsonSerializable(typeof(ToolUserRequestedEvent))]
 [JsonSerializable(typeof(UserInputCompletedData))]
