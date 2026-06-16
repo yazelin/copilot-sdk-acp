@@ -39,6 +39,8 @@ pub enum SessionEventType {
     SessionPermissionsChanged,
     #[serde(rename = "session.plan_changed")]
     SessionPlanChanged,
+    #[serde(rename = "session.todos_changed")]
+    SessionTodosChanged,
     #[serde(rename = "session.workspace_file_changed")]
     SessionWorkspaceFileChanged,
     #[serde(rename = "session.handoff")]
@@ -181,6 +183,8 @@ pub enum SessionEventType {
     SessionCanvasOpened,
     #[serde(rename = "session.canvas.registry_changed")]
     SessionCanvasRegistryChanged,
+    #[serde(rename = "session.canvas.closed")]
+    SessionCanvasClosed,
     #[serde(rename = "session.extensions.attachments_pushed")]
     SessionExtensionsAttachmentsPushed,
     #[serde(rename = "mcp_app.tool_call_complete")]
@@ -227,6 +231,8 @@ pub enum SessionEventData {
     SessionPermissionsChanged(SessionPermissionsChangedData),
     #[serde(rename = "session.plan_changed")]
     SessionPlanChanged(SessionPlanChangedData),
+    #[serde(rename = "session.todos_changed")]
+    SessionTodosChanged(SessionTodosChangedData),
     #[serde(rename = "session.workspace_file_changed")]
     SessionWorkspaceFileChanged(SessionWorkspaceFileChangedData),
     #[serde(rename = "session.handoff")]
@@ -369,6 +375,8 @@ pub enum SessionEventData {
     SessionCanvasOpened(SessionCanvasOpenedData),
     #[serde(rename = "session.canvas.registry_changed")]
     SessionCanvasRegistryChanged(SessionCanvasRegistryChangedData),
+    #[serde(rename = "session.canvas.closed")]
+    SessionCanvasClosed(SessionCanvasClosedData),
     #[serde(rename = "session.extensions.attachments_pushed")]
     SessionExtensionsAttachmentsPushed(SessionExtensionsAttachmentsPushedData),
     #[serde(rename = "mcp_app.tool_call_complete")]
@@ -489,6 +497,9 @@ pub struct SessionResumeData {
     pub continue_pending_work: Option<bool>,
     /// Total number of persisted events in the session at the time of resume
     pub event_count: i64,
+    /// On-disk byte size of the session's persisted events.jsonl file at resume time; omitted when the file does not exist or cannot be stat'd
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events_file_size_bytes: Option<i64>,
     /// Reasoning effort level used for model calls, if applicable (e.g. "none", "low", "medium", "high", "xhigh", "max")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -547,7 +558,7 @@ pub struct SessionErrorData {
     pub url: Option<String>,
 }
 
-/// Session event "session.idle". Payload indicating the session is idle with no background agents in flight
+/// Session event "session.idle". Payload indicating the session is idle with no background agents or attached shell commands in flight
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionIdleData {
@@ -568,18 +579,28 @@ pub struct SessionTitleChangedData {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionScheduleCreatedData {
+    /// Absolute fire time (epoch milliseconds) for a one-shot calendar schedule
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<i64>,
+    /// 5-field cron expression for a recurring calendar schedule, evaluated in `tz`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
     /// Optional user-facing label shown in the timeline instead of the actual prompt (e.g. `/skill-name args` when the prompt is a skill invocation expansion)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_prompt: Option<String>,
     /// Sequential id assigned to the scheduled prompt within the session
     pub id: i64,
-    /// Interval between ticks in milliseconds
-    pub interval_ms: i64,
+    /// Interval between ticks in milliseconds (relative-interval schedules)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<i64>,
     /// Prompt text that gets enqueued on every tick
     pub prompt: String,
     /// Whether the schedule re-arms after each tick (`/every`) or fires once (`/after`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recurring: Option<bool>,
+    /// IANA timezone the `cron` expression is evaluated in
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tz: Option<String>,
 }
 
 /// Session event "session.schedule_cancelled". Scheduled prompt cancelled from the schedule manager dialog
@@ -689,6 +710,11 @@ pub struct SessionPlanChangedData {
     /// The type of operation performed on the plan file
     pub operation: PlanChangedOperation,
 }
+
+/// Session event "session.todos_changed". Signal-only event: the agent's todos or todo_deps table was written to. No payload — clients should call session.plan.readSqlTodosWithDependencies() to fetch the current state. Events arrive in order; clients can debounce on arrival if needed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTodosChangedData {}
 
 /// Session event "session.workspace_file_changed". Workspace file change details including path and operation type
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -882,6 +908,9 @@ pub struct SessionShutdownData {
     /// Error description when shutdownType is "error"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
+    /// On-disk byte size of the session's persisted events.jsonl file at shutdown time; omitted when the file does not exist or cannot be stat'd
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events_file_size_bytes: Option<i64>,
     /// Per-model usage breakdown, keyed by model identifier
     pub model_metrics: HashMap<String, ShutdownModelMetric>,
     /// Unix timestamp (milliseconds) when the session started
@@ -1190,6 +1219,28 @@ pub struct AssistantStreamingDeltaData {
     pub total_response_size_bytes: i64,
 }
 
+/// Neutral provider-tagged server-side tool-use payload (tool search, advisor) for verbatim round-tripping
+///
+/// <div class="warning">
+///
+/// **Experimental.** This type is part of an experimental wire-protocol surface
+/// and may change or be removed in future SDK or CLI releases.
+///
+/// </div>
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantMessageServerTools {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advisor_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_call_namespaces: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Vec<serde_json::Value>>,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_content_blocks: Option<Vec<serde_json::Value>>,
+}
+
 /// A tool invocation request from the assistant
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1222,26 +1273,9 @@ pub struct AssistantMessageToolRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantMessageData {
-    /// Raw Anthropic content array with advisor blocks (server_tool_use, advisor_tool_result) for verbatim round-tripping
-    ///
-    /// <div class="warning">
-    ///
-    /// **Experimental.** This type is part of an experimental wire-protocol surface
-    /// and may change or be removed in future SDK or CLI releases.
-    ///
-    /// </div>
+    /// Provider's completion / response identifier; shared across all chunks of a single API call. Used to group multi-chunk assistant utterances.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub anthropic_advisor_blocks: Option<Vec<serde_json::Value>>,
-    /// Anthropic advisor model ID used for this response, for timeline display on replay
-    ///
-    /// <div class="warning">
-    ///
-    /// **Experimental.** This type is part of an experimental wire-protocol surface
-    /// and may change or be removed in future SDK or CLI releases.
-    ///
-    /// </div>
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anthropic_advisor_model: Option<String>,
+    pub api_call_id: Option<String>,
     /// The assistant's text response content
     pub content: String,
     /// Encrypted reasoning content from OpenAI models. Session-bound and stripped on resume.
@@ -1275,6 +1309,9 @@ pub struct AssistantMessageData {
     /// GitHub request tracing ID (x-github-request-id header) for correlating with server-side logs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<RequestId>,
+    /// Neutral provider-tagged server-side tool-use payload (tool search, advisor) for verbatim round-tripping
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_tools: Option<AssistantMessageServerTools>,
     /// Copilot service request ID (x-copilot-service-request-id header) for CAPI log correlation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_request_id: Option<String>,
@@ -1501,6 +1538,41 @@ pub struct ToolUserRequestedData {
     pub tool_name: String,
 }
 
+/// Schema for the `ToolExecutionStartToolDescriptionMetaUI` type.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolExecutionStartToolDescriptionMetaUI {
+    /// URI of the UI resource
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_uri: Option<String>,
+    /// Who can access this tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Vec<ToolExecutionStartToolDescriptionMetaUIVisibility>>,
+}
+
+/// MCP Apps metadata for UI resource association
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolExecutionStartToolDescriptionMeta {
+    /// Schema for the `ToolExecutionStartToolDescriptionMetaUI` type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<ToolExecutionStartToolDescriptionMetaUI>,
+}
+
+/// Tool definition metadata, present for MCP tools with MCP Apps support
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolExecutionStartToolDescription {
+    /// MCP Apps metadata for UI resource association
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<ToolExecutionStartToolDescriptionMeta>,
+    /// Tool description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Tool name
+    pub name: String,
+}
+
 /// Session event "tool.execution_start". Tool execution startup details including MCP server information when applicable
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1527,6 +1599,9 @@ pub struct ToolExecutionStartData {
     pub parent_tool_call_id: Option<String>,
     /// Unique identifier for this tool call
     pub tool_call_id: String,
+    /// Tool definition metadata, present for MCP tools with MCP Apps support
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_description: Option<ToolExecutionStartToolDescription>,
     /// Name of the tool being executed
     pub tool_name: String,
     /// Identifier for the agent loop turn this tool was invoked in, matching the corresponding assistant.turn_start event
@@ -1907,7 +1982,7 @@ pub struct SkillInvokedData {
     /// Version of the plugin this skill originated from, when applicable
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_version: Option<String>,
-    /// Source identifier for where the skill was discovered. Known values include: project (workspace skill), inherited (parent-directory skill), personal-copilot (~/.copilot/skills), personal-agents (~/.agents/skills), personal-claude (~/.claude/skills), custom (configured directory), plugin (installed plugin), builtin (bundled runtime skill), and remote (org/enterprise skill)
+    /// Source identifier for where the skill was discovered. Known values include: project (workspace skill), inherited (parent-directory skill), personal-copilot (~/.copilot/skills), personal-agents (~/.agents/skills), custom (configured directory), plugin (installed plugin), builtin (bundled runtime skill), and remote (org/enterprise skill)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// What triggered the skill invocation: `user-invoked` (explicit user action, such as via a slash command or UI affordance), `agent-invoked` (agent requested the skill), or `context-load` (loaded as part of another context, such as preloading skills configured on a custom agent or subagent)
@@ -1925,7 +2000,7 @@ pub struct SubagentStartedData {
     pub agent_display_name: String,
     /// Internal name of the sub-agent
     pub agent_name: String,
-    /// Model the sub-agent will run with, when known at start. Surfaced in the timeline for auto-selected sub-agents (e.g. rubber-duck).
+    /// Model the sub-agent will run with, when known at start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Tool call ID of the parent tool invocation that spawned this sub-agent
@@ -1969,7 +2044,7 @@ pub struct SubagentFailedData {
     pub duration_ms: Option<i64>,
     /// Error message describing why the sub-agent failed
     pub error: String,
-    /// Model used by the sub-agent (if any model calls succeeded before failure)
+    /// Model selected for the sub-agent, when known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Tool call ID of the parent tool invocation that spawned this sub-agent
@@ -2018,6 +2093,9 @@ pub struct HookStartData {
 pub struct HookEndError {
     /// Human-readable error message
     pub message: String,
+    /// Source label of the hook that errored (e.g. the plugin it was loaded from), when known
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     /// Error stack trace, when available
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
@@ -2047,6 +2125,9 @@ pub struct HookEndData {
 pub struct HookProgressData {
     /// Human-readable progress message from the hook process
     pub message: String,
+    /// When true, this status message replaces the previous temporary one instead of accumulating
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporary: Option<bool>,
 }
 
 /// Metadata about the prompt template and its construction
@@ -3177,7 +3258,7 @@ pub struct SessionMcpServerStatusChangedData {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionsLoadedExtension {
-    /// Source-qualified extension ID (e.g., 'project:my-ext', 'user:auth-helper')
+    /// Source-qualified extension ID (e.g., 'project:my-ext', 'user:auth-helper', 'plugin:my-plugin:my-ext')
     pub id: String,
     /// Extension name (directory name)
     pub name: String,
@@ -3269,6 +3350,18 @@ pub struct CanvasRegistryChangedCanvas {
 pub struct SessionCanvasRegistryChangedData {
     /// Canvas declarations currently available
     pub canvases: Vec<CanvasRegistryChangedCanvas>,
+}
+
+/// Session event "session.canvas.closed".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCanvasClosedData {
+    /// Provider-local canvas identifier
+    pub canvas_id: String,
+    /// Owning provider identifier
+    pub extension_id: String,
+    /// Stable caller-supplied identifier of the canvas instance that was closed
+    pub instance_id: String,
 }
 
 /// Session event "session.extensions.attachments_pushed".
@@ -3589,6 +3682,21 @@ pub enum AbortReason {
     /// An MCP server delivered a user.abort notification.
     #[serde(rename = "user_abort")]
     UserAbort,
+    /// Unknown variant for forward compatibility.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// Allowed values for the `ToolExecutionStartToolDescriptionMetaUIVisibility` enumeration.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolExecutionStartToolDescriptionMetaUIVisibility {
+    /// Tool is callable by the model (LLM tool surface)
+    #[serde(rename = "model")]
+    Model,
+    /// Tool is callable by the MCP App view (iframe) via session.mcp.apps.callTool
+    #[serde(rename = "app")]
+    App,
     /// Unknown variant for forward compatibility.
     #[default]
     #[serde(other)]
@@ -4338,6 +4446,12 @@ pub enum ExtensionsLoadedExtensionSource {
     /// Extension discovered from the user's extension directory.
     #[serde(rename = "user")]
     User,
+    /// Extension contributed by an installed plugin.
+    #[serde(rename = "plugin")]
+    Plugin,
+    /// Extension discovered from the current session's state directory.
+    #[serde(rename = "session")]
+    Session,
     /// Unknown variant for forward compatibility.
     #[default]
     #[serde(other)]

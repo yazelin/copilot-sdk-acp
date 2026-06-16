@@ -8,9 +8,9 @@
  */
 
 import fs from "fs/promises";
+import type { JSONSchema7 } from "json-schema";
 import path from "path";
 import { fileURLToPath } from "url";
-import type { JSONSchema7 } from "json-schema";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -663,6 +663,8 @@ interface EventVariant {
     className: string;
     dataSchema: JSONSchema7 | null;
     description?: string;
+    stability?: string;
+    deprecated?: boolean;
 }
 
 function extractEventVariants(schema: JSONSchema7): EventVariant[] {
@@ -694,6 +696,8 @@ function extractEventVariants(schema: JSONSchema7): EventVariant[] {
                 className: `${baseName}Event`,
                 dataSchema: dataSchema ?? null,
                 description: resolved.description,
+                stability: (variant as unknown as Record<string, unknown>).stability as string | undefined,
+                deprecated: (variant as unknown as Record<string, unknown>).deprecated === true,
             };
         })
         .filter((v) => !EXCLUDED_EVENT_TYPES.has(v.typeName));
@@ -985,15 +989,22 @@ async function generateEventVariantClass(
     if (variant.description) {
         lines.push(`/**`);
         lines.push(` * ${variant.description}`);
-        lines.push(` *`);
-        lines.push(` * @since 1.0.0`);
-        lines.push(` */`);
     } else {
         lines.push(`/**`);
         lines.push(` * The {@code ${variant.typeName}} session event.`);
+    }
+    if (variant.stability === "experimental") {
         lines.push(` *`);
-        lines.push(` * @since 1.0.0`);
-        lines.push(` */`);
+        lines.push(` * @apiNote This method is experimental and may change in a future version.`);
+    }
+    lines.push(` * @since 1.0.0`);
+    lines.push(` */`);
+    if (variant.deprecated) {
+        lines.push(`@Deprecated`);
+    }
+    if (variant.stability === "experimental") {
+        allImports.add("com.github.copilot.CopilotExperimental");
+        lines.push(`@CopilotExperimental`);
     }
     lines.push(`@JsonIgnoreProperties(ignoreUnknown = true)`);
     lines.push(`@JsonInclude(JsonInclude.Include.NON_NULL)`);
@@ -1197,6 +1208,7 @@ interface RpcMethod {
     params: JSONSchema7 | null;
     result: JSONSchema7 | null;
     stability?: string;
+    deprecated?: boolean;
 }
 
 function isRpcMethod(node: unknown): node is RpcMethod {
@@ -1322,7 +1334,7 @@ async function generateRpcTypes(schemaPath: string): Promise<void> {
                 const paramsClassName = `${className}Params`;
                 if (!generatedClasses.has(paramsClassName)) {
                     generatedClasses.set(paramsClassName, true);
-                    allFiles.push(await generateRpcDataClass(paramsClassName, paramsSchema, packageName, packageDir, method.rpcMethod, "params"));
+                    allFiles.push(await generateRpcDataClass(paramsClassName, paramsSchema, packageName, packageDir, method.rpcMethod, "params", method.stability, method.deprecated === true));
                 }
             }
 
@@ -1336,7 +1348,7 @@ async function generateRpcTypes(schemaPath: string): Promise<void> {
                     const resultClassName = `${className}Result`;
                     if (!generatedClasses.has(resultClassName)) {
                         generatedClasses.set(resultClassName, true);
-                        allFiles.push(await generateRpcDataClass(resultClassName, resultSchema, packageName, packageDir, method.rpcMethod, "result"));
+                        allFiles.push(await generateRpcDataClass(resultClassName, resultSchema, packageName, packageDir, method.rpcMethod, "result", method.stability, method.deprecated === true));
                     }
                 } else if (resultRefName && resultSchema.type === "string" && resultSchema.enum) {
                     // String enum → register for standalone generation
@@ -1373,7 +1385,9 @@ async function generateRpcDataClass(
     packageName: string,
     packageDir: string,
     rpcMethod: string,
-    kind: "params" | "result"
+    kind: "params" | "result",
+    stability?: string,
+    deprecated?: boolean
 ): Promise<string> {
     const nestedTypes = new Map<string, { code: string }>();
     const { code, imports } = generateRpcClass(className, schema, nestedTypes, packageName);
@@ -1394,6 +1408,9 @@ async function generateRpcDataClass(
         "javax.annotation.processing.Generated",
         ...imports,
     ]);
+    if (stability === "experimental") {
+        allImports.add("com.github.copilot.CopilotExperimental");
+    }
     const sortedImports = [...allImports].sort();
     for (const imp of sortedImports) {
         lines.push(`import ${imp};`);
@@ -1403,15 +1420,21 @@ async function generateRpcDataClass(
     if (schema.description) {
         lines.push(`/**`);
         lines.push(` * ${schema.description}`);
-        lines.push(` *`);
-        lines.push(` * @since 1.0.0`);
-        lines.push(` */`);
     } else {
         lines.push(`/**`);
         lines.push(` * ${kind === "params" ? "Request parameters" : "Result"} for the {@code ${rpcMethod}} RPC method.`);
+    }
+    if (stability === "experimental") {
         lines.push(` *`);
-        lines.push(` * @since 1.0.0`);
-        lines.push(` */`);
+        lines.push(` * @apiNote This method is experimental and may change in a future version.`);
+    }
+    lines.push(` * @since 1.0.0`);
+    lines.push(` */`);
+    if (deprecated) {
+        lines.push(`@Deprecated`);
+    }
+    if (stability === "experimental") {
+        lines.push(`@CopilotExperimental`);
     }
     lines.push(GENERATED_ANNOTATION);
     lines.push(code);
@@ -1427,6 +1450,7 @@ async function generateRpcDataClass(
 interface RpcMethodNode {
     rpcMethod: string;
     stability: string;
+    deprecated: boolean;
     params: JSONSchema7 | null;
     result: JSONSchema7 | null;
 }
@@ -1447,6 +1471,7 @@ function buildNamespaceTree(node: Record<string, unknown>): NamespaceTree {
             tree.methods.set(key, {
                 rpcMethod: String(obj.rpcMethod),
                 stability: String(obj.stability ?? "stable"),
+                deprecated: obj.deprecated === true,
                 params: (obj.params as JSONSchema7) ?? null,
                 result: (obj.result as JSONSchema7) ?? null,
             });
@@ -1562,7 +1587,7 @@ function generateApiMethod(
     method: RpcMethodNode,
     isSession: boolean,
     sessionIdExpr: string
-): { lines: string[]; needsMapper: boolean } {
+): { lines: string[]; needsMapper: boolean; needsExperimentalImport: boolean } {
     const resultClass = wrapperResultClassName(method);
     const paramsClass = wrapperParamsClassName(method);
     const hasSessionId = methodHasSessionId(method);
@@ -1588,6 +1613,12 @@ function generateApiMethod(
     }
     lines.push(`     * @since 1.0.0`);
     lines.push(`     */`);
+    if (method.deprecated) {
+        lines.push(`    @Deprecated`);
+    }
+    if (method.stability === "experimental") {
+        lines.push(`    @CopilotExperimental`);
+    }
 
     // Signature
     if (hasExtraParams) {
@@ -1621,7 +1652,7 @@ function generateApiMethod(
     lines.push(`    }`);
     lines.push(``);
 
-    return { lines, needsMapper };
+    return { lines, needsMapper, needsExperimentalImport: method.stability === "experimental" };
 }
 
 /**
@@ -1676,9 +1707,10 @@ async function generateNamespaceApiFile(
         }
         if (paramsClass) allImports.add(`${packageName}.${paramsClass}`);
 
-        const { lines, needsMapper: nm } = generateApiMethod(key, method, isSession, sessionIdExpr);
+        const { lines, needsMapper: nm, needsExperimentalImport } = generateApiMethod(key, method, isSession, sessionIdExpr);
         methodLines.push(...lines);
         if (nm) needsMapper = true;
+        if (needsExperimentalImport) allImports.add("com.github.copilot.CopilotExperimental");
     }
 
     // Build class body
@@ -1801,9 +1833,10 @@ async function generateRpcRootFile(
         }
         if (paramsClass) allImports.add(`${packageName}.${paramsClass}`);
 
-        const { lines, needsMapper: nm } = generateApiMethod(key, method, isSession, sessionIdExpr);
+        const { lines, needsMapper: nm, needsExperimentalImport } = generateApiMethod(key, method, isSession, sessionIdExpr);
         methodLines.push(...lines);
         if (nm) needsMapper = true;
+        if (needsExperimentalImport) allImports.add("com.github.copilot.CopilotExperimental");
     }
 
     // Build file content
@@ -2025,6 +2058,12 @@ async function generateRpcWrappers(schemaPath: string): Promise<void> {
 async function main(): Promise<void> {
     console.log("🚀 Java SDK code generator");
     console.log("============================");
+
+    // Clean the generated output directory to remove orphaned files from previous runs
+    const generatedOutputDir = path.join(REPO_ROOT, "src/generated/java/com/github/copilot/generated");
+    console.log(`🧹 Cleaning output directory: ${generatedOutputDir}`);
+    await fs.rm(generatedOutputDir, { recursive: true, force: true });
+    await fs.mkdir(generatedOutputDir, { recursive: true });
 
     const sessionEventsSchemaPath = await getSessionEventsSchemaPath();
     console.log(`📄 Session events schema: ${sessionEventsSchemaPath}`);
