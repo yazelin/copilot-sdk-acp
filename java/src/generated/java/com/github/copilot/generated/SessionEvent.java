@@ -40,6 +40,7 @@ import javax.annotation.processing.Generated;
     @JsonSubTypes.Type(value = SessionModeChangedEvent.class, name = "session.mode_changed"),
     @JsonSubTypes.Type(value = SessionPermissionsChangedEvent.class, name = "session.permissions_changed"),
     @JsonSubTypes.Type(value = SessionPlanChangedEvent.class, name = "session.plan_changed"),
+    @JsonSubTypes.Type(value = SessionTodosChangedEvent.class, name = "session.todos_changed"),
     @JsonSubTypes.Type(value = SessionWorkspaceFileChangedEvent.class, name = "session.workspace_file_changed"),
     @JsonSubTypes.Type(value = SessionHandoffEvent.class, name = "session.handoff"),
     @JsonSubTypes.Type(value = SessionTruncationEvent.class, name = "session.truncation"),
@@ -111,6 +112,7 @@ import javax.annotation.processing.Generated;
     @JsonSubTypes.Type(value = SessionExtensionsLoadedEvent.class, name = "session.extensions_loaded"),
     @JsonSubTypes.Type(value = SessionCanvasOpenedEvent.class, name = "session.canvas.opened"),
     @JsonSubTypes.Type(value = SessionCanvasRegistryChangedEvent.class, name = "session.canvas.registry_changed"),
+    @JsonSubTypes.Type(value = SessionCanvasClosedEvent.class, name = "session.canvas.closed"),
     @JsonSubTypes.Type(value = SessionExtensionsAttachmentsPushedEvent.class, name = "session.extensions.attachments_pushed"),
     @JsonSubTypes.Type(value = McpAppToolCallCompleteEvent.class, name = "mcp_app.tool_call_complete")
 })
@@ -131,6 +133,7 @@ public abstract sealed class SessionEvent permits
         SessionModeChangedEvent,
         SessionPermissionsChangedEvent,
         SessionPlanChangedEvent,
+        SessionTodosChangedEvent,
         SessionWorkspaceFileChangedEvent,
         SessionHandoffEvent,
         SessionTruncationEvent,
@@ -202,6 +205,7 @@ public abstract sealed class SessionEvent permits
         SessionExtensionsLoadedEvent,
         SessionCanvasOpenedEvent,
         SessionCanvasRegistryChangedEvent,
+        SessionCanvasClosedEvent,
         SessionExtensionsAttachmentsPushedEvent,
         McpAppToolCallCompleteEvent,
         UnknownSessionEvent {

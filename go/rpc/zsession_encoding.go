@@ -263,6 +263,12 @@ func (e *SessionEvent) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		e.Data = &d
+	case SessionEventTypeSessionCanvasClosed:
+		var d SessionCanvasClosedData
+		if err := json.Unmarshal(raw.Data, &d); err != nil {
+			return err
+		}
+		e.Data = &d
 	case SessionEventTypeSessionCanvasOpened:
 		var d SessionCanvasOpenedData
 		if err := json.Unmarshal(raw.Data, &d); err != nil {
@@ -433,6 +439,12 @@ func (e *SessionEvent) UnmarshalJSON(data []byte) error {
 		e.Data = &d
 	case SessionEventTypeSessionTitleChanged:
 		var d SessionTitleChangedData
+		if err := json.Unmarshal(raw.Data, &d); err != nil {
+			return err
+		}
+		e.Data = &d
+	case SessionEventTypeSessionTodosChanged:
+		var d SessionTodosChangedData
 		if err := json.Unmarshal(raw.Data, &d); err != nil {
 			return err
 		}
@@ -832,10 +844,11 @@ func (r ToolExecutionCompleteContentText) MarshalJSON() ([]byte, error) {
 
 func (r *ToolExecutionCompleteResult) UnmarshalJSON(data []byte) error {
 	type rawToolExecutionCompleteResult struct {
-		Content         string                           `json:"content"`
-		Contents        []json.RawMessage                `json:"contents,omitzero"`
-		DetailedContent *string                          `json:"detailedContent,omitempty"`
-		UIResource      *ToolExecutionCompleteUIResource `json:"uiResource,omitempty"`
+		Content           string                           `json:"content"`
+		Contents          []json.RawMessage                `json:"contents,omitzero"`
+		DetailedContent   *string                          `json:"detailedContent,omitempty"`
+		StructuredContent any                              `json:"structuredContent,omitempty"`
+		UIResource        *ToolExecutionCompleteUIResource `json:"uiResource,omitempty"`
 	}
 	var raw rawToolExecutionCompleteResult
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -853,6 +866,7 @@ func (r *ToolExecutionCompleteResult) UnmarshalJSON(data []byte) error {
 		}
 	}
 	r.DetailedContent = raw.DetailedContent
+	r.StructuredContent = raw.StructuredContent
 	r.UIResource = raw.UIResource
 	return nil
 }
