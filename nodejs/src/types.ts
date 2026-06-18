@@ -14,10 +14,17 @@ import type {
     SessionEvent as GeneratedSessionEvent,
 } from "./generated/session-events.js";
 import type { CopilotSession } from "./session.js";
-import type { RemoteSessionMode } from "./generated/rpc.js";
-import type { OpenCanvasInstance } from "./generated/rpc.js";
+import type {
+    ModelBillingTokenPrices,
+    OpenCanvasInstance,
+    RemoteSessionMode,
+} from "./generated/rpc.js";
 import type { ToolSet } from "./toolSet.js";
 export type { RemoteSessionMode } from "./generated/rpc.js";
+export type {
+    ModelBillingTokenPrices,
+    ModelBillingTokenPricesLongContext,
+} from "./generated/rpc.js";
 export type SessionEvent = GeneratedSessionEvent;
 export type { ReasoningSummary } from "./generated/session-events.js";
 export type { SessionFsProvider } from "./sessionFsProvider.js";
@@ -55,6 +62,8 @@ export type TraceContextProvider = () => TraceContext | Promise<TraceContext>;
 export interface TelemetryConfig {
     /** OTLP HTTP endpoint URL for trace/metric export. Sets OTEL_EXPORTER_OTLP_ENDPOINT. */
     otlpEndpoint?: string;
+    /** OTLP HTTP protocol for all signals. Sets OTEL_EXPORTER_OTLP_PROTOCOL. */
+    otlpProtocol?: "http/json" | "http/protobuf";
     /** File path for JSON-lines trace output. Sets COPILOT_OTEL_FILE_EXPORTER_PATH. */
     filePath?: string;
     /** Exporter backend type: "otlp-http" or "file". Sets COPILOT_OTEL_EXPORTER_TYPE. */
@@ -532,6 +541,13 @@ export interface Tool<TArgs = unknown> {
      * When true, the tool can execute without a permission prompt.
      */
     skipPermission?: boolean;
+    /**
+     * Controls whether the tool may be deferred (loaded lazily via tool search)
+     * rather than always pre-loaded. When `"auto"`, the tool can be deferred and
+     * surfaced through tool search. When `"never"`, the tool is always pre-loaded.
+     * Optional; defaults to `"auto"`.
+     */
+    defer?: "auto" | "never";
 }
 
 /**
@@ -546,6 +562,7 @@ export function defineTool<T = unknown>(
         handler?: ToolHandler<T>;
         overridesBuiltInTool?: boolean;
         skipPermission?: boolean;
+        defer?: "auto" | "never";
     }
 ): Tool<T> {
     return { name, ...config };
@@ -1531,6 +1548,17 @@ export interface InfiniteSessionConfig {
 }
 
 /**
+ * Configuration for the memory feature, which lets the agent persist and recall
+ * information across turns.
+ */
+export interface MemoryConfiguration {
+    /**
+     * Whether the memory feature is enabled for this session.
+     */
+    enabled: boolean;
+}
+
+/**
  * Configuration for handling large tool outputs.
  *
  * When a tool produces output exceeding the configured size, the output is
@@ -1948,6 +1976,11 @@ export interface SessionConfigBase {
      * Set to `{ enabled: false }` to disable.
      */
     infiniteSessions?: InfiniteSessionConfig;
+
+    /**
+     * Memory configuration for the session. When omitted, the runtime default applies.
+     */
+    memory?: MemoryConfiguration;
 
     /**
      * GitHub token for per-session authentication.
@@ -2397,7 +2430,10 @@ export interface ModelPolicy {
  * Model billing information
  */
 export interface ModelBilling {
+    /** Billing cost multiplier relative to the base rate */
     multiplier?: number;
+    /** Token-level pricing information for this model */
+    tokenPrices?: ModelBillingTokenPrices;
 }
 
 /**
